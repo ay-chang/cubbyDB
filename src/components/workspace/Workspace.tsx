@@ -1,0 +1,146 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+
+import { useStore } from "../../state/store";
+import { EditorTabs } from "./EditorTabs";
+import { HistoryPanel } from "./HistoryPanel";
+import { ResultsPane } from "./ResultsPane";
+import { SchemaTree } from "./SchemaTree";
+import { SqlEditor } from "./SqlEditor";
+import { TopBar } from "./TopBar";
+import "./workspace.css";
+
+const SIDEBAR_MIN = 200;
+const SIDEBAR_MAX = 360;
+const EDITOR_MIN = 120;
+
+export function Workspace() {
+  const tabs = useStore((s) => s.tabs);
+  const activeTabId = useStore((s) => s.activeTabId);
+  const setTabSql = useStore((s) => s.setTabSql);
+  const runTab = useStore((s) => s.runTab);
+  const historyOpen = useStore((s) => s.historyOpen);
+
+  const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
+
+  useGlobalRunShortcut();
+
+  const [sidebarWidth, setSidebarWidth] = useState(246);
+  const [editorHeight, setEditorHeight] = useState(280);
+  const mainRef = useRef<HTMLDivElement>(null);
+
+  // Sidebar drag (resizable 200–360px, per spec).
+  const startSidebarDrag = useDrag((dx, startWidth) => {
+    setSidebarWidth(clamp(startWidth + dx, SIDEBAR_MIN, SIDEBAR_MAX));
+  }, sidebarWidth);
+
+  // Editor/results horizontal split.
+  const startEditorDrag = useDrag(
+    (_, startHeight, _dx, dy) => {
+      const container = mainRef.current;
+      const maxHeight = container ? container.clientHeight - 160 : 600;
+      setEditorHeight(clamp(startHeight + dy, EDITOR_MIN, maxHeight));
+    },
+    editorHeight,
+  );
+
+  return (
+    <div className="workspace">
+      <TopBar />
+      <div className="workspace__body">
+        <div className="workspace__sidebar" style={{ width: sidebarWidth }}>
+          <SchemaTree />
+        </div>
+        <div
+          className="workspace__resizer workspace__resizer--v"
+          onMouseDown={startSidebarDrag}
+        />
+
+        <div className="workspace__main" ref={mainRef}>
+          {activeTab ? (
+            <>
+              <EditorTabs />
+              {activeTab.kind === "query" && (
+                <>
+                  <div
+                    className="workspace__editor"
+                    style={{ height: editorHeight }}
+                  >
+                    <SqlEditor
+                      value={activeTab.sql}
+                      onChange={(sql) => setTabSql(activeTab.id, sql)}
+                      onRun={() => void runTab(activeTab.id)}
+                    />
+                  </div>
+                  <div
+                    className="workspace__resizer workspace__resizer--h"
+                    onMouseDown={startEditorDrag}
+                  />
+                </>
+              )}
+              <ResultsPane tab={activeTab} />
+            </>
+          ) : (
+            <div className="workspace__empty">
+              <p>No open tabs.</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {historyOpen && <HistoryPanel />}
+    </div>
+  );
+}
+
+function clamp(v: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, v));
+}
+
+/**
+ * Minimal drag helper: returns an onMouseDown that tracks pointer movement and
+ * calls `onMove(dx, startValue, dxRaw, dy)` until the button is released.
+ */
+function useDrag(
+  onMove: (dx: number, startValue: number, dxRaw: number, dy: number) => void,
+  startValue: number,
+) {
+  const onMoveRef = useRef(onMove);
+  onMoveRef.current = onMove;
+  const startValueRef = useRef(startValue);
+  startValueRef.current = startValue;
+
+  return useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const base = startValueRef.current;
+    document.body.style.userSelect = "none";
+
+    const move = (ev: MouseEvent) => {
+      onMoveRef.current(ev.clientX - startX, base, ev.clientX - startX, ev.clientY - startY);
+    };
+    const up = () => {
+      document.body.style.userSelect = "";
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  }, []);
+}
+
+/** Fallback: Cmd/Ctrl+Enter runs the active tab even when the editor is unfocused. */
+function useGlobalRunShortcut() {
+  const runTab = useStore((s) => s.runTab);
+  const activeTabId = useStore((s) => s.activeTabId);
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && activeTabId) {
+        e.preventDefault();
+        void runTab(activeTabId);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [runTab, activeTabId]);
+}

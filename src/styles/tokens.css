@@ -1,0 +1,85 @@
+/*
+ * Design tokens — transcribed directly from the CubbyDB design spec (v1).
+ * Light theme, hairline borders, a single indigo accent reserved for actions
+ * and active state. 4px base unit.
+ */
+
+:root {
+  /* Surfaces */
+  --app-bg: #f7f8f8;
+  --surface: #ffffff;
+  --surface-raised: #fcfcfd; /* top bar, sidebar, zebra rows */
+  --surface-header: #fbfbfc; /* grid header */
+
+  /* Borders / hairlines */
+  --border: #e8eaed;
+  --border-strong: #dcdfe3;
+  --border-faint: #f0f1f3;
+  --border-row: #f3f4f6;
+  --border-cell: #f6f7f8;
+
+  /* Text */
+  --text: #16181d;
+  --text-muted: #5b6069;
+  --text-faint: #8c9198;
+  --text-fainter: #a2a7ae;
+  --text-placeholder: #b0b4ba;
+  --text-ghost: #c7cbd1;
+
+  /* Accent (indigo) */
+  --accent: #5e6ad2;
+  --accent-hover: #5460c6;
+  --accent-tint: #eeeffb;
+  --accent-tint-text: #4a54b8;
+  --accent-glow: rgba(94, 106, 210, 0.12);
+  --accent-glow-soft: rgba(94, 106, 210, 0.08);
+
+  /* Status */
+  --success: #1f9d57;
+  --success-bg: #eaf7ef;
+  --success-text: #157a43;
+  --success-border: #bce3cc;
+
+  --error: #e5484d;
+  --error-text: #b4282c;
+  --error-bg: #fcecec;
+  --error-border: #f3c6c7;
+  --error-mono: #c0555a;
+
+  --amber: #b45309;
+  --amber-bg: #fdf7ec;
+  --amber-border: #f0dfc4;
+  --amber-text: #96591a;
+
+  /* SQL syntax highlighting */
+  --syntax-keyword: var(--accent);
+  --syntax-string: #1f9d57;
+  --syntax-number: #b45309;
+  --syntax-comment: #9aa0a6;
+
+  /* Typography */
+  --font-sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Radius */
+  --radius-sm: 6px;
+  --radius-control: 7px;
+  --radius-input: 7px;
+  --radius-card: 12px;
+
+  /* Fixed heights (px, from spec) */
+  --h-topbar: 42px;
+  --h-tabs: 38px;
+  --h-results-header: 34px;
+  --h-tree-row: 27px;
+  --h-grid-row: 32px;
+  --h-control: 32px;
+  --h-input: 34px;
+
+  /* Motion */
+  --transition: 120ms ease;
+
+  /* Elevation */
+  --shadow-card: 0 12px 40px -18px rgba(20, 24, 40, 0.28);
+  --shadow-button: 0 1px 2px rgba(20, 24, 40, 0.12);
+}

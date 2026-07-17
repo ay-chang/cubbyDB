@@ -1,0 +1,47 @@
+[package]
+name = "cubbydb"
+version = "0.1.0"
+description = "A modern, restrained desktop Postgres client."
+authors = ["CubbyDB contributors"]
+license = "MIT"
+repository = ""
+edition = "2021"
+rust-version = "1.77"
+
+# The library target holds all app logic so it can be unit-tested independently
+# of the Tauri binary entry point.
+[lib]
+name = "cubbydb_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Async runtime for the database driver.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+
+# Postgres driver. `tokio-postgres` is the well-maintained async client. We read
+# result sets with `simple_query`, which returns every value in its canonical
+# text form, so the results grid needs no per-type conversion logic.
+tokio-postgres = { version = "0.7", features = ["runtime"] }
+
+# TLS so we can reach cloud/managed Postgres (RDS, Supabase, etc.). native-tls
+# uses the OS trust store, so there are no extra system dependencies. The driver
+# uses sslmode=prefer semantics: TLS when the server offers it, plaintext when
+# it does not.
+native-tls = "0.2"
+postgres-native-tls = "0.5"
+
+# Trait objects with async methods (the database-driver abstraction).
+async-trait = "0.1"
+
+thiserror = "2"
+
+[features]
+# This feature is used by Tauri's mobile tooling; kept for forward-compat.
+custom-protocol = ["tauri/custom-protocol"]

@@ -1,0 +1,221 @@
+.conn-screen {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 40px;
+  overflow: auto;
+}
+
+.conn-body {
+  display: grid;
+  grid-template-columns: 1fr 300px;
+  min-height: 440px;
+}
+
+/* --- Form --- */
+.conn-form {
+  padding: 36px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+.conn-form__head h3 {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin: 0 0 5px;
+}
+.conn-form__head p {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.conn-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.conn-input {
+  height: var(--h-input);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-input);
+  background: var(--surface);
+  padding: 0 11px;
+  font-size: 13px;
+  color: var(--text);
+  outline: none;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+.conn-input::placeholder {
+  color: var(--text-placeholder);
+}
+.conn-input:focus {
+  border: 1.5px solid var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.conn-input--mono {
+  height: 40px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+.conn-or {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 12px;
+}
+.conn-or > span:first-child,
+.conn-or > span:last-child {
+  height: 1px;
+  background: var(--border);
+}
+.conn-or__label {
+  font-size: 11px;
+  color: var(--text-placeholder);
+}
+
+.conn-row {
+  display: grid;
+  gap: 12px;
+}
+.conn-row--host {
+  grid-template-columns: 1fr 96px;
+}
+.conn-row--pair {
+  grid-template-columns: 1fr 1fr;
+}
+
+.conn-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+/* --- Inline test / connect states --- */
+.conn-state {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 12px;
+  height: var(--h-input);
+  border-radius: var(--radius-control);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.conn-state--testing {
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+}
+.conn-state--ok {
+  border: 1px solid var(--success-border);
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+.conn-state--error {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  height: auto;
+  padding: 9px 12px;
+  border: 1px solid var(--error-border);
+  background: var(--error-bg);
+  color: var(--error-text);
+}
+.conn-state__title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.conn-state__detail {
+  font-size: 11px;
+  padding-left: 22px;
+  opacity: 0.9;
+  word-break: break-word;
+}
+.conn-state__glyph {
+  font-size: 13px;
+}
+
+/* --- Saved list --- */
+.conn-saved {
+  border-left: 1px solid var(--border);
+  background: var(--surface-raised);
+  padding: 20px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.conn-saved__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.conn-saved__empty {
+  font-size: 12px;
+  color: var(--text-faint);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.conn-card {
+  position: relative;
+  text-align: left;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 9px;
+  padding: 11px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+.conn-card:hover {
+  border-color: var(--border-strong);
+}
+.conn-card--active {
+  border: 1px solid var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow-soft);
+}
+.conn-card__name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.conn-card__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-ghost);
+  flex: none;
+}
+.conn-card__dot--live {
+  background: var(--success);
+}
+.conn-card__sub {
+  font-size: 11px;
+  color: var(--text-faint);
+  padding-left: 14px;
+}
+.conn-card__delete {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  color: var(--text-ghost);
+  font-size: 15px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity var(--transition), color var(--transition);
+}
+.conn-card:hover .conn-card__delete {
+  opacity: 1;
+}
+.conn-card__delete:hover {
+  color: var(--error);
+}
