@@ -77,7 +77,10 @@ export function Workspace() {
                   />
                 </>
               )}
-              <ResultsPane tab={activeTab} />
+              {/* Keyed by tab id so switching tabs fully resets the grid's
+                  internal state (sort, selection, column layout) instead of
+                  reusing it with stale state pointed at the wrong result. */}
+              <ResultsPane key={activeTab.id} tab={activeTab} />
             </>
           ) : (
             <div className="workspace__empty">

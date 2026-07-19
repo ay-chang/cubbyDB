@@ -6,8 +6,8 @@ use tauri::State;
 
 use crate::connections::{LastConnection, SavedConnection};
 use crate::db::{
-    driver_for, ConnectionInfo, ConnectionParams, DbError, DbErrorKind, Engine, QueryResult,
-    SchemaNode, DEFAULT_ROW_LIMIT,
+    driver_for, ColumnValue, ConnectionInfo, ConnectionParams, DbError, DbErrorKind, Engine,
+    QueryResult, SchemaNode, DEFAULT_ROW_LIMIT,
 };
 use crate::history::{now_millis, HistoryEntry};
 use crate::state::{ActiveSession, AppState};
@@ -223,6 +223,7 @@ pub async fn select_top_sql(
     table: String,
     filter: Option<String>,
     limit: Option<u32>,
+    offset: Option<u32>,
 ) -> Result<String, DbError> {
     let active = state.active.lock().await;
     let active = active.as_ref().ok_or_else(DbError::not_connected)?;
@@ -231,7 +232,115 @@ pub async fn select_top_sql(
         &table,
         filter.as_deref(),
         limit.unwrap_or(DEFAULT_ROW_LIMIT),
+        offset.unwrap_or(0),
     ))
+}
+
+/// Apply one row's pending edits as a primary-key-scoped `UPDATE`. Called once
+/// per edited row when the grid's "Update" action is committed.
+#[tauri::command]
+pub async fn update_row(
+    state: State<'_, AppState>,
+    schema: String,
+    table: String,
+    primary_key: Vec<ColumnValue>,
+    changes: Vec<ColumnValue>,
+) -> Result<(), DbError> {
+    let mut active = state.active.lock().await;
+    {
+        let session = active.as_ref().ok_or_else(DbError::not_connected)?;
+        match session
+            .session
+            .update_row(&schema, &table, &primary_key, &changes)
+            .await
+        {
+            Err(e) if e.kind == DbErrorKind::Connection => { /* retry below */ }
+            other => return other,
+        }
+    }
+    reconnect_in_place(&mut active).await?;
+    active
+        .as_ref()
+        .ok_or_else(DbError::not_connected)?
+        .session
+        .update_row(&schema, &table, &primary_key, &changes)
+        .await
+}
+
+/// Insert one new row (a committed draft row from the grid).
+#[tauri::command]
+pub async fn insert_row(
+    state: State<'_, AppState>,
+    schema: String,
+    table: String,
+    values: Vec<ColumnValue>,
+) -> Result<(), DbError> {
+    let mut active = state.active.lock().await;
+    {
+        let session = active.as_ref().ok_or_else(DbError::not_connected)?;
+        match session.session.insert_row(&schema, &table, &values).await {
+            Err(e) if e.kind == DbErrorKind::Connection => { /* retry below */ }
+            other => return other,
+        }
+    }
+    reconnect_in_place(&mut active).await?;
+    active
+        .as_ref()
+        .ok_or_else(DbError::not_connected)?
+        .session
+        .insert_row(&schema, &table, &values)
+        .await
+}
+
+/// Delete one row by its primary key (the grid's "Remove row" action).
+#[tauri::command]
+pub async fn delete_row(
+    state: State<'_, AppState>,
+    schema: String,
+    table: String,
+    primary_key: Vec<ColumnValue>,
+) -> Result<(), DbError> {
+    let mut active = state.active.lock().await;
+    {
+        let session = active.as_ref().ok_or_else(DbError::not_connected)?;
+        match session
+            .session
+            .delete_row(&schema, &table, &primary_key)
+            .await
+        {
+            Err(e) if e.kind == DbErrorKind::Connection => { /* retry below */ }
+            other => return other,
+        }
+    }
+    reconnect_in_place(&mut active).await?;
+    active
+        .as_ref()
+        .ok_or_else(DbError::not_connected)?
+        .session
+        .delete_row(&schema, &table, &primary_key)
+        .await
+}
+
+// --- Clipboard --------------------------------------------------------------
+// The results grid copies/pastes through the OS clipboard here rather than the
+// webview's `navigator.clipboard`, which isn't reliably granted inside the
+// Tauri window.
+
+#[tauri::command]
+pub async fn write_clipboard(text: String) -> Result<(), DbError> {
+    let mut clipboard = arboard::Clipboard::new()
+        .map_err(|e| DbError::new(DbErrorKind::Internal, format!("Clipboard unavailable: {e}")))?;
+    clipboard
+        .set_text(text)
+        .map_err(|e| DbError::new(DbErrorKind::Internal, format!("Copy failed: {e}")))
+}
+
+#[tauri::command]
+pub async fn read_clipboard() -> Result<String, DbError> {
+    let mut clipboard = arboard::Clipboard::new()
+        .map_err(|e| DbError::new(DbErrorKind::Internal, format!("Clipboard unavailable: {e}")))?;
+    // An empty clipboard (or non-text content) reads as empty text, not an error.
+    Ok(clipboard.get_text().unwrap_or_default())
 }
 
 #[tauri::command]

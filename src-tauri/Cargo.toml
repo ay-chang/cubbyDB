@@ -40,6 +40,10 @@ postgres-native-tls = "0.5"
 # Trait objects with async methods (the database-driver abstraction).
 async-trait = "0.1"
 
+# System clipboard access for the grid's copy/paste — the webview's own
+# `navigator.clipboard` isn't reliably available inside the Tauri window.
+arboard = "3"
+
 thiserror = "2"
 
 [features]

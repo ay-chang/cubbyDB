@@ -98,6 +98,14 @@ export interface DbError {
   kind: DbErrorKind;
 }
 
+/** One column/value pair: either a row's current value (for a WHERE clause
+ * identifying it) or a new value (for a SET clause changing it). `value` is
+ * `null` for SQL NULL. */
+export interface ColumnValue {
+  column: string;
+  value: string | null;
+}
+
 export interface HistoryEntry {
   sql: string;
   connectionName: string | null;

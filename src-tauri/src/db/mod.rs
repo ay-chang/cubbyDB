@@ -115,6 +115,17 @@ pub struct ForeignKeyRef {
     pub column: String,
 }
 
+/// A single column/value pair used to describe a row edit: which column, and
+/// either its current value (identifying the row, in a `WHERE`) or its new
+/// value (setting it, in a `SET`). `value` is `None` for SQL NULL.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ColumnValue {
+    pub column: String,
+    #[serde(default)]
+    pub value: Option<String>,
+}
+
 /// A column in a result set.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -167,16 +178,53 @@ pub trait DbSession: Send + Sync {
     /// rewrites SQL.
     async fn run_query(&self, sql: &str) -> Result<QueryResult, DbError>;
 
-    /// Build the `SELECT * FROM table [WHERE filter] LIMIT n` used by the table
-    /// browser. `filter` is a user-authored predicate (the WHERE bar), inserted
-    /// verbatim. Centralizing this keeps all generated SQL in the backend.
+    /// Build the `SELECT * FROM table [WHERE filter] LIMIT n [OFFSET m]` used by
+    /// the table browser. `filter` is a user-authored predicate (the WHERE bar),
+    /// inserted verbatim. `offset` paginates (0 for the first page).
+    /// Centralizing this keeps all generated SQL in the backend.
     fn select_top_sql(
         &self,
         schema: &str,
         table: &str,
         filter: Option<&str>,
         limit: u32,
+        offset: u32,
     ) -> String;
+
+    /// Apply an edit to exactly one row via a primary-key-scoped `UPDATE`.
+    /// `primary_key` identifies the row (its *current* values, used in the
+    /// `WHERE`); `changes` are the columns being set. Values are bound as
+    /// query parameters, never interpolated into the SQL text.
+    ///
+    /// Errors if the primary key no longer matches exactly one row (e.g. it
+    /// was changed or deleted elsewhere since the grid was loaded) — an edit
+    /// is never allowed to silently touch zero or more than one row.
+    async fn update_row(
+        &self,
+        schema: &str,
+        table: &str,
+        primary_key: &[ColumnValue],
+        changes: &[ColumnValue],
+    ) -> Result<(), DbError>;
+
+    /// Insert one new row. `values` are the columns the user filled in; any
+    /// column not listed is left to its database default (so an empty draft row
+    /// becomes `INSERT ... DEFAULT VALUES`). A `None` value inserts SQL NULL.
+    async fn insert_row(
+        &self,
+        schema: &str,
+        table: &str,
+        values: &[ColumnValue],
+    ) -> Result<(), DbError>;
+
+    /// Delete exactly one row via a primary-key-scoped `DELETE`. Errors if the
+    /// key no longer matches exactly one row, mirroring [`update_row`].
+    async fn delete_row(
+        &self,
+        schema: &str,
+        table: &str,
+        primary_key: &[ColumnValue],
+    ) -> Result<(), DbError>;
 }
 
 /// The default row cap applied to unbounded SELECT statements.

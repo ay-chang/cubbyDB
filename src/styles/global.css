@@ -54,13 +54,13 @@ input {
   height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background: #dfe1e5;
+  background: var(--scrollbar-thumb);
   border-radius: 6px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #cdd0d6;
+  background: var(--scrollbar-thumb-hover);
   background-clip: content-box;
 }
 ::-webkit-scrollbar-track {

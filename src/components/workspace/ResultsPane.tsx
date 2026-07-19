@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 
+import { copyToClipboard, readClipboard } from "../../api/backend";
 import type { QueryTab } from "../../state/store";
 import { useStore } from "../../state/store";
+import { PAGE_SIZE, tabHasPendingEdits } from "../../state/store";
 import type { ForeignKeyRef, QueryResult } from "../../types";
 import { FilterBar } from "./FilterBar";
+import { PendingEditsBar } from "./PendingEditsBar";
 
 /**
  * The results region beneath the editor. Renders, in order of precedence:
@@ -26,13 +29,18 @@ export function ResultsPane({ tab }: { tab: QueryTab }) {
   // directions (from the schema): outgoing (this cell points at another row) and
   // incoming (other tables point at this row).
   const schema = useStore((s) => s.schema);
+  const schemaTable = useMemo(() => {
+    if (tab.kind !== "table" || !tab.source) return null;
+    return (
+      schema
+        .find((s) => s.name === tab.source!.schema)
+        ?.tables.find((t) => t.name === tab.source!.table) ?? null
+    );
+  }, [schema, tab]);
+
   const navByColumn = useMemo(() => {
-    if (!result || tab.kind !== "table" || !tab.source) return null;
-    const table = schema
-      .find((s) => s.name === tab.source!.schema)
-      ?.tables.find((t) => t.name === tab.source!.table);
-    if (!table) return null;
-    const byName = new Map(table.columns.map((c) => [c.name, c]));
+    if (!result || !schemaTable) return null;
+    const byName = new Map(schemaTable.columns.map((c) => [c.name, c]));
     return result.columns.map((c) => {
       const col = byName.get(c.name);
       return {
@@ -40,19 +48,66 @@ export function ResultsPane({ tab }: { tab: QueryTab }) {
         referencedBy: col?.referencedBy ?? [],
       };
     });
-  }, [result, schema, tab]);
+  }, [result, schemaTable]);
+
+  // Cells are editable only for table tabs backed by a real table (not a
+  // view) with at least one detected primary key — otherwise show why not.
+  const editability = useMemo(() => {
+    if (!schemaTable) return null;
+    const pkNames = new Set(
+      schemaTable.columns.filter((c) => c.isPrimaryKey).map((c) => c.name),
+    );
+    if (schemaTable.kind === "view") {
+      return { editable: false, reason: "View — read-only", pkNames };
+    }
+    if (pkNames.size === 0) {
+      return {
+        editable: false,
+        reason: "No primary key detected — read-only",
+        pkNames,
+      };
+    }
+    return { editable: true, reason: null, pkNames };
+  }, [schemaTable]);
+
+  const pkColIndices = useMemo(() => {
+    if (!result || !editability) return new Set<number>();
+    return new Set(
+      result.columns
+        .map((c, i) => (editability.pkNames.has(c.name) ? i : -1))
+        .filter((i) => i >= 0),
+    );
+  }, [result, editability]);
+
+  // Which result columns map to nullable table columns (for the "Set to NULL"
+  // action — only nullable columns can accept it).
+  const nullableColIndices = useMemo(() => {
+    if (!result || !schemaTable) return new Set<number>();
+    const nullableNames = new Set(
+      schemaTable.columns.filter((c) => c.nullable).map((c) => c.name),
+    );
+    return new Set(
+      result.columns
+        .map((c, i) => (nullableNames.has(c.name) ? i : -1))
+        .filter((i) => i >= 0),
+    );
+  }, [result, schemaTable]);
 
   return (
     <div className="results">
-      <ResultsHeader tab={tab} result={result} />
+      <ResultsHeader tab={tab} result={result} readOnlyReason={editability?.reason ?? null} />
 
       {tab.error ? (
         <ErrorStrip tab={tab} />
       ) : result && result.columns.length > 0 ? (
         <ResultsGrid
+          tab={tab}
           result={result}
           numericCols={numericCols}
           navByColumn={navByColumn}
+          editable={editability?.editable ?? false}
+          pkColIndices={pkColIndices}
+          nullableColIndices={nullableColIndices}
         />
       ) : result ? (
         <div className="results__note">
@@ -63,6 +118,8 @@ export function ResultsPane({ tab }: { tab: QueryTab }) {
           {tab.running ? "Running…" : "Run a query to see results here."}
         </div>
       )}
+
+      {tabHasPendingEdits(tab) && <PendingEditsBar tab={tab} />}
     </div>
   );
 }
@@ -70,9 +127,11 @@ export function ResultsPane({ tab }: { tab: QueryTab }) {
 function ResultsHeader({
   tab,
   result,
+  readOnlyReason,
 }: {
   tab: QueryTab;
   result: QueryResult | null;
+  readOnlyReason: string | null;
 }) {
   return (
     <div
@@ -98,6 +157,11 @@ function ResultsHeader({
         )}
       </div>
       <div className="results__header-right mono">
+        {readOnlyReason && (
+          <span className="results__readonly" title={readOnlyReason}>
+            Read-only
+          </span>
+        )}
         {result && result.columns.length > 0 && (
           <>
             <span className="results__stat">
@@ -163,16 +227,47 @@ function ResultsMenu({ onExportCsv }: { onExportCsv: () => void }) {
 
 type ColNav = { references: ForeignKeyRef[]; referencedBy: ForeignKeyRef[] };
 
+// In-app cell clipboard, so copy/paste can preserve SQL NULL (which the system
+// text clipboard can't represent). `text` is what was also written to the OS
+// clipboard, used to detect whether a paste came from an in-app copy.
+let cellClipboard: { text: string; value: string | null } | null = null;
+
+// In-app whole-row clipboard (aligned to original column order), for copying a
+// row and pasting it over another. Preserves NULLs like the cell clipboard.
+let rowClipboard: { text: string; values: Array<string | null> } | null = null;
+
+/** A selected whole row: an existing result row or a pending draft row. */
+type RowSelection = { kind: "existing" | "new"; index: number };
+
+/** Width of the left row-number / selection gutter. */
+const GUTTER_W = 48;
+
 function ResultsGrid({
+  tab,
   result,
   numericCols,
   navByColumn,
+  editable,
+  pkColIndices,
+  nullableColIndices,
 }: {
+  tab: QueryTab;
   result: QueryResult;
   numericCols: boolean[];
   navByColumn: ColNav[] | null;
+  editable: boolean;
+  pkColIndices: Set<number>;
+  nullableColIndices: Set<number>;
 }) {
   const openTableWithFilter = useStore((s) => s.openTableWithFilter);
+  const setCellEdit = useStore((s) => s.setCellEdit);
+  const setNewCellEdit = useStore((s) => s.setNewCellEdit);
+  const overwriteRow = useStore((s) => s.overwriteRow);
+  const addRow = useStore((s) => s.addRow);
+  const removeNewRow = useStore((s) => s.removeNewRow);
+  const deleteExistingRow = useStore((s) => s.deleteExistingRow);
+  const setTablePage = useStore((s) => s.setTablePage);
+  const isTable = tab.kind === "table";
   // Column layout — a display `order` (permutation of original column indices)
   // and per-column pixel `widths`. Both are shared by the header and every row
   // (so the rules line up), user-adjustable, and restored from a saved layout
@@ -195,6 +290,8 @@ function ResultsGrid({
   const [selected, setSelected] = useState<{ r: number; col: number } | null>(
     null,
   );
+  // Selected whole row (via the gutter), for row copy/paste and remove.
+  const [rowSel, setRowSel] = useState<RowSelection | null>(null);
   // Open FK "jump to referenced row" menu, anchored at the clicked cell.
   const [fkMenu, setFkMenu] = useState<{
     r: number;
@@ -207,13 +304,41 @@ function ResultsGrid({
   const [sort, setSort] = useState<{ col: number; dir: "asc" | "desc" } | null>(
     null,
   );
+  // The cell currently swapped for an inline edit input, if any. `isNew` marks
+  // a draft (not-yet-inserted) row, whose edits go to `setNewCellEdit`.
+  const [editing, setEditing] = useState<{
+    r: number;
+    col: number;
+    draft: string;
+    isNew?: boolean;
+  } | null>(null);
+
+  // Commit the in-progress inline edit to the right place (existing vs draft).
+  const commitEditing = () => {
+    if (!editing) return;
+    if (editing.isNew) {
+      // For a new row, an empty field means "leave to the column default".
+      setNewCellEdit(tab.id, editing.r, editing.col, editing.draft === "" ? null : editing.draft);
+    } else {
+      setCellEdit(tab.id, editing.r, editing.col, editing.draft);
+    }
+    setEditing(null);
+  };
+
+  const selectRow = (sel: RowSelection) => {
+    setRowSel(sel);
+    setSelected(null);
+    setFkMenu(null);
+  };
 
   useEffect(() => {
     setOrder(loadOrder(signature, result.columns));
     setWidths(loadWidths(signature, result, numericCols));
     setSelected(null);
+    setRowSel(null);
     setFkMenu(null);
     setSort(null);
+    setEditing(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [result]);
 
@@ -232,21 +357,109 @@ function ResultsGrid({
     };
   }, [fkMenu]);
 
-  // Cmd/Ctrl+C copies the selected cell's value.
+  // Keyboard copy/paste. With a whole row selected (gutter), Cmd/Ctrl+C copies
+  // the row and Cmd/Ctrl+V pastes it over the selected row; with a single cell
+  // selected, they operate on that cell. NULLs survive via the in-app
+  // clipboards. Skipped while a cell's edit input is focused so native
+  // copy/paste works there.
   useEffect(() => {
-    if (!selected) return;
+    if (!selected && !rowSel) return;
+    const effectiveValue = (r: number, col: number): string | null => {
+      const draftEdit = tab.pendingEdits?.[r]?.[col];
+      return draftEdit !== undefined ? draftEdit : result.rows[r]?.[col] ?? null;
+    };
+    const width = result.columns.length;
+
+    const copyRow = (sel: RowSelection) => {
+      const values =
+        sel.kind === "new"
+          ? (tab.newRows?.[sel.index] ?? Array<string | null>(width).fill(null)).slice()
+          : Array.from({ length: width }, (_, ci) => effectiveValue(sel.index, ci));
+      const text = values.map((v) => v ?? "").join("\t");
+      rowClipboard = { text, values };
+      copyToClipboard(text);
+    };
+
+    const pasteRow = (sel: RowSelection) => {
+      if (!rowClipboard) return;
+      const values = rowClipboard.values;
+      if (sel.kind === "new") {
+        // Fill the draft from the copied row, but skip the primary key so the
+        // inserted row gets its own (typically auto-generated) key rather than
+        // colliding with the row it was copied from.
+        for (let ci = 0; ci < width; ci++) {
+          if (pkColIndices.has(ci)) continue;
+          setNewCellEdit(tab.id, sel.index, ci, values[ci] ?? null);
+        }
+      } else {
+        if (!editable) return;
+        const editableCols = result.columns
+          .map((_, ci) => ci)
+          .filter((ci) => !pkColIndices.has(ci));
+        overwriteRow(tab.id, sel.index, values, editableCols);
+      }
+    };
+
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && (e.key === "c" || e.key === "C")) {
-        const value = result.rows[selected.r]?.[selected.col];
-        void navigator.clipboard.writeText(value ?? "");
+      if (document.activeElement instanceof HTMLInputElement) return;
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod) return;
+      const isCopy = e.key === "c" || e.key === "C";
+      const isPaste = e.key === "v" || e.key === "V";
+      if (!isCopy && !isPaste) return;
+
+      // Whole-row selection takes precedence over a lingering cell selection.
+      if (rowSel) {
+        if (isCopy) copyRow(rowSel);
+        else {
+          e.preventDefault();
+          pasteRow(rowSel);
+        }
+        return;
+      }
+      if (!selected) return;
+
+      if (isCopy) {
+        const value = effectiveValue(selected.r, selected.col);
+        const text = value ?? "";
+        cellClipboard = { text, value };
+        copyToClipboard(text);
+      } else {
+        if (!editable) return;
+        const { r, col } = selected;
+        e.preventDefault();
+        readClipboard()
+          .then((text) => {
+            const value =
+              cellClipboard && cellClipboard.text === text ? cellClipboard.value : text;
+            setCellEdit(tab.id, r, col, value);
+          })
+          .catch(() => {
+            // Backend clipboard read unavailable — fall back to whatever we
+            // last copied in-app.
+            if (cellClipboard) setCellEdit(tab.id, r, col, cellClipboard.value);
+          });
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selected, result]);
+  }, [
+    selected,
+    rowSel,
+    result,
+    tab.pendingEdits,
+    tab.newRows,
+    tab.id,
+    editable,
+    pkColIndices,
+    setCellEdit,
+    setNewCellEdit,
+    overwriteRow,
+  ]);
 
-  const template = order.map((i) => `${widths[i]}px`).join(" ");
-  const totalWidth = order.reduce((sum, i) => sum + widths[i], 0);
+  // A fixed row-number/selection gutter precedes the data columns.
+  const template = `${GUTTER_W}px ` + order.map((i) => `${widths[i]}px`).join(" ");
+  const totalWidth = GUTTER_W + order.reduce((sum, i) => sum + widths[i], 0);
   const gridStyle = { gridTemplateColumns: template, width: totalWidth };
   const dragWidth = drag ? widths[order[drag.fromPos]] : 0;
 
@@ -290,19 +503,26 @@ function ResultsGrid({
   // whether the pointer moves past a small threshold. Anywhere in the header
   // cell works; the drag animates the header row and reorders data on drop.
   const DRAG_THRESHOLD = 5;
+  // How far into a neighboring column the dragged column's leading edge must
+  // travel before it swaps places, as a fraction of the neighbor's width.
+  // Comparing edges (rather than the dragged column's own center) means its
+  // own width no longer adds to the distance required — lower this to make
+  // reordering trigger sooner.
+  const SWAP_TRIGGER = 0.5;
   const onHeaderMouseDown = (pos: number, colIndex: number) => (e: React.MouseEvent) => {
     e.preventDefault();
     const startX = e.clientX;
     const startY = e.clientY;
     let dragging = false;
-    let mids: number[] = [];
+    let starts: number[] = [];
+    let dispWidths: number[] = [];
 
     const beginDrag = () => {
-      const dispWidths = order.map((i) => widths[i]);
-      mids = [];
+      dispWidths = order.map((i) => widths[i]);
+      starts = [];
       let acc = 0;
       for (const w of dispWidths) {
-        mids.push(acc + w / 2);
+        starts.push(acc);
         acc += w;
       }
       dragging = true;
@@ -318,10 +538,24 @@ function ResultsGrid({
         }
         beginDrag();
       }
-      const center = mids[pos] + dx;
+      const draggedWidth = dispWidths[pos];
       let target = pos;
-      while (target < mids.length - 1 && center > mids[target + 1]) target += 1;
-      while (target > 0 && center < mids[target - 1]) target -= 1;
+      // Dragging right: swap once the dragged column's right edge reaches
+      // partway into the next column.
+      while (target < dispWidths.length - 1) {
+        const rightEdge = starts[pos] + draggedWidth + dx;
+        const threshold = starts[target + 1] + dispWidths[target + 1] * SWAP_TRIGGER;
+        if (rightEdge <= threshold) break;
+        target += 1;
+      }
+      // Dragging left: swap once the dragged column's left edge reaches
+      // partway into the previous column.
+      while (target > 0) {
+        const leftEdge = starts[pos] + dx;
+        const threshold = starts[target - 1] + dispWidths[target - 1] * (1 - SWAP_TRIGGER);
+        if (leftEdge >= threshold) break;
+        target -= 1;
+      }
       setDrag({ fromPos: pos, dx, targetPos: target });
     };
     const onUp = () => {
@@ -351,9 +585,12 @@ function ResultsGrid({
   };
 
   // Row indices in display order (sorted client-side when a sort is active).
+  // Guard against a stale sort column left over from a different result (e.g.
+  // switching tabs) — treat an out-of-range column as "no sort" rather than
+  // indexing past the row, which previously crashed the whole render tree.
   const sortedRowIndices = useMemo(() => {
     const indices = result.rows.map((_, i) => i);
-    if (!sort) return indices;
+    if (!sort || sort.col >= result.columns.length) return indices;
     const { col, dir } = sort;
     const numeric = numericCols[col];
     indices.sort((a, b) =>
@@ -381,10 +618,36 @@ function ResultsGrid({
     return {};
   };
 
+  // Pagination (table tabs): a full page implies there may be more rows.
+  const page = tab.page ?? 0;
+  const rowCount = result.rows.length;
+  const canNext = rowCount === PAGE_SIZE;
+  const pagerLabel =
+    rowCount === 0
+      ? `Page ${page + 1} · no rows`
+      : `Rows ${page * PAGE_SIZE + 1}–${page * PAGE_SIZE + rowCount}`;
+
+  const handleAddRow = () => {
+    const index = tab.newRows?.length ?? 0;
+    addRow(tab.id);
+    selectRow({ kind: "new", index });
+  };
+  const handleRemoveRow = () => {
+    if (!rowSel) return;
+    if (rowSel.kind === "new") {
+      removeNewRow(tab.id, rowSel.index);
+      setRowSel(null);
+    } else {
+      void deleteExistingRow(tab.id, rowSel.index);
+    }
+  };
+
   return (
+    <>
     <div className="grid">
       <div className="grid__scroll">
         <div className="grid__head" style={gridStyle}>
+          <div className="grid__gutter grid__gutter--head" />
           {order.map((colIndex, pos) => (
             <div
               key={colIndex}
@@ -392,7 +655,8 @@ function ResultsGrid({
                 "grid__hcell" +
                 (numericCols[colIndex] ? " grid__cell--num" : "") +
                 (drag ? " grid__hcell--sliding" : "") +
-                (drag && drag.fromPos === pos ? " grid__hcell--dragging" : "")
+                (drag && drag.fromPos === pos ? " grid__hcell--dragging" : "") +
+                (selected?.col === colIndex ? " grid__hcell--active" : "")
               }
               style={headerStyle(pos)}
               onMouseDown={onHeaderMouseDown(pos, colIndex)}
@@ -419,24 +683,88 @@ function ResultsGrid({
         )}
         {sortedRowIndices.map((r, displayPos) => {
           const row = result.rows[r];
+          const rowEdits = tab.pendingEdits?.[r];
+          const rowDirty = !!rowEdits && Object.keys(rowEdits).length > 0;
           return (
           <div
             key={r}
             className={
               "grid__row" +
               (displayPos % 2 === 1 ? " grid__row--zebra" : "") +
-              (selected?.r === r ? " grid__row--active" : "")
+              (selected?.r === r ? " grid__row--active" : "") +
+              (rowSel?.kind === "existing" && rowSel.index === r
+                ? " grid__row--rowsel"
+                : "") +
+              (rowDirty ? " grid__row--dirty" : "")
             }
             style={gridStyle}
           >
+            <div
+              className="grid__gutter"
+              title="Click to select the whole row — ⌘/Ctrl+C to copy, ⌘/Ctrl+V to paste onto another row"
+              onClick={() => selectRow({ kind: "existing", index: r })}
+            >
+              {displayPos + 1}
+            </div>
             {order.map((colIndex) => {
-              const value = row[colIndex];
+              const original = row[colIndex];
+              const draftEdit = rowEdits?.[colIndex];
+              const value = draftEdit !== undefined ? draftEdit : original;
+              const isDirty = draftEdit !== undefined;
               const isSelected = selected?.r === r && selected?.col === colIndex;
+              const isPk = pkColIndices.has(colIndex);
+              // Primary-key cells are editable too: an UPDATE keys off the row's
+              // *original* PK (built at commit time), so changing it produces a
+              // valid `SET id = new WHERE id = old`.
+              const isCellEditable = editable;
+              // Exclude `isNew` edits: a draft row shares the same numeric index
+              // as an existing row, so without this an existing row would also
+              // render an edit input for a draft cell — two autofocus inputs
+              // would fight for focus and immediately cancel the edit.
+              const isEditingThis =
+                !editing?.isNew && editing?.r === r && editing?.col === colIndex;
               const nav = navByColumn?.[colIndex];
               const isFk =
                 !!nav &&
-                value !== null &&
+                original !== null &&
                 (nav.references.length > 0 || nav.referencedBy.length > 0);
+              // Right-clickable to set NULL only if the column is editable,
+              // nullable, and not already null.
+              const canSetNull =
+                isCellEditable && nullableColIndices.has(colIndex) && value !== null;
+
+              if (isEditingThis) {
+                return (
+                  <div
+                    key={colIndex}
+                    className={
+                      "grid__cell grid__cell--editing" +
+                      (numericCols[colIndex] ? " grid__cell--num" : "")
+                    }
+                  >
+                    <input
+                      className="grid__cell-input mono"
+                      autoFocus
+                      value={editing.draft}
+                      onFocus={(e) => e.target.select()}
+                      onChange={(e) =>
+                        setEditing({ r, col: colIndex, draft: e.target.value })
+                      }
+                      onBlur={commitEditing}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          commitEditing();
+                        } else if (e.key === "Escape") {
+                          e.preventDefault();
+                          setEditing(null);
+                        }
+                      }}
+                    />
+                  </div>
+                );
+              }
+
               return (
                 <div
                   key={colIndex}
@@ -444,13 +772,31 @@ function ResultsGrid({
                     "grid__cell" +
                     (numericCols[colIndex] ? " grid__cell--num mono" : "") +
                     (value === null ? " grid__cell--null" : "") +
+                    (selected?.col === colIndex ? " grid__cell--col-active" : "") +
                     (isSelected ? " grid__cell--selected" : "") +
-                    (isFk ? " grid__cell--fk" : "")
+                    (isFk ? " grid__cell--fk" : "") +
+                    (isDirty ? " grid__cell--dirty" : "") +
+                    (isPk && editable ? " grid__cell--pk" : "")
                   }
-                  title={isFk ? fkTooltip(nav!) : value ?? "NULL"}
-                  onClick={() => setSelected({ r, col: colIndex })}
+                  title={
+                    isFk
+                      ? fkTooltip(nav!)
+                      : isPk && editable
+                        ? "Primary key — double-click to edit (changes the row's key)"
+                        : value ?? "NULL"
+                  }
+                  onClick={() => {
+                    // A single click just highlights the cell — it's then
+                    // available to copy with ⌘/Ctrl+C (double-click to edit).
+                    setSelected({ r, col: colIndex });
+                    setRowSel(null);
+                  }}
+                  onDoubleClick={() => {
+                    if (!isCellEditable) return;
+                    setEditing({ r, col: colIndex, draft: value ?? "" });
+                  }}
                   onContextMenu={(e) => {
-                    if (!isFk) return;
+                    if (!isFk && !canSetNull) return;
                     e.preventDefault();
                     setSelected({ r, col: colIndex });
                     setFkMenu({ r, col: colIndex, x: e.clientX, y: e.clientY });
@@ -463,22 +809,113 @@ function ResultsGrid({
           </div>
           );
         })}
+        {isTable &&
+          (tab.newRows ?? []).map((draft, ni) => (
+            <div
+              key={`new-${ni}`}
+              className={
+                "grid__row grid__row--new" +
+                (rowSel?.kind === "new" && rowSel.index === ni
+                  ? " grid__row--rowsel"
+                  : "")
+              }
+              style={gridStyle}
+            >
+              <div
+                className="grid__gutter grid__gutter--new"
+                title="New row — commit with Update to insert it"
+                onClick={() => selectRow({ kind: "new", index: ni })}
+              >
+                +
+              </div>
+              {order.map((colIndex) => {
+                const value = draft[colIndex];
+                const isEditingThis =
+                  editing?.isNew && editing.r === ni && editing.col === colIndex;
+                if (isEditingThis) {
+                  return (
+                    <div
+                      key={colIndex}
+                      className={
+                        "grid__cell grid__cell--editing" +
+                        (numericCols[colIndex] ? " grid__cell--num" : "")
+                      }
+                    >
+                      <input
+                        className="grid__cell-input mono"
+                        autoFocus
+                        value={editing.draft}
+                        onFocus={(e) => e.target.select()}
+                        onChange={(e) =>
+                          setEditing({
+                            r: ni,
+                            col: colIndex,
+                            draft: e.target.value,
+                            isNew: true,
+                          })
+                        }
+                        onBlur={commitEditing}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            commitEditing();
+                          } else if (e.key === "Escape") {
+                            e.preventDefault();
+                            setEditing(null);
+                          }
+                        }}
+                      />
+                    </div>
+                  );
+                }
+                return (
+                  <div
+                    key={colIndex}
+                    className={
+                      "grid__cell grid__cell--newcell" +
+                      (numericCols[colIndex] ? " grid__cell--num mono" : "") +
+                      (value === null ? " grid__cell--null" : "")
+                    }
+                    title={value ?? "Click to edit (empty leaves the column default)"}
+                    // A single click on a draft cell starts editing right away —
+                    // no double-click needed. (Select the whole row via its gutter.)
+                    onClick={() =>
+                      setEditing({ r: ni, col: colIndex, draft: value ?? "", isNew: true })
+                    }
+                  >
+                    {value === null ? "default" : value}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
       </div>
 
       {fkMenu &&
         (() => {
-          const nav = navByColumn?.[fkMenu.col];
-          const value = result.rows[fkMenu.r]?.[fkMenu.col];
-          if (!nav || value == null) return null;
-          if (nav.references.length === 0 && nav.referencedBy.length === 0) {
-            return null;
-          }
+          const col = fkMenu.col;
+          const nav = navByColumn?.[col];
+          const draftEdit = tab.pendingEdits?.[fkMenu.r]?.[col];
+          const value =
+            draftEdit !== undefined ? draftEdit : result.rows[fkMenu.r]?.[col] ?? null;
+          const hasFk =
+            !!nav &&
+            value !== null &&
+            (nav.references.length > 0 || nav.referencedBy.length > 0);
+          const canSetNull =
+            editable &&
+            !pkColIndices.has(col) &&
+            nullableColIndices.has(col) &&
+            value !== null;
+          if (!hasFk && !canSetNull) return null;
+
+          const literal = (value ?? "").replace(/'/g, "''");
           const openRef = (ref: ForeignKeyRef) => {
             setFkMenu(null);
             void openTableWithFilter(
               ref.schema,
               ref.table,
-              `${ref.column} = '${value.replace(/'/g, "''")}'`,
+              `${ref.column} = '${literal}'`,
             );
           };
           const item = (ref: ForeignKeyRef, key: string) => (
@@ -499,22 +936,84 @@ function ResultsGrid({
               style={{ left: fkMenu.x, top: fkMenu.y }}
               onClick={(e) => e.stopPropagation()}
             >
-              {nav.references.length > 0 && (
+              {hasFk && nav!.references.length > 0 && (
                 <>
                   <div className="context-menu__label">Jump to referenced row</div>
-                  {nav.references.map((ref, i) => item(ref, `out-${i}`))}
+                  {nav!.references.map((ref, i) => item(ref, `out-${i}`))}
                 </>
               )}
-              {nav.referencedBy.length > 0 && (
+              {hasFk && nav!.referencedBy.length > 0 && (
                 <>
                   <div className="context-menu__label">Rows referencing this</div>
-                  {nav.referencedBy.map((ref, i) => item(ref, `in-${i}`))}
+                  {nav!.referencedBy.map((ref, i) => item(ref, `in-${i}`))}
+                </>
+              )}
+              {canSetNull && (
+                <>
+                  {hasFk && <div className="context-menu__sep" />}
+                  <button
+                    className="context-menu__item"
+                    onClick={() => {
+                      setFkMenu(null);
+                      setCellEdit(tab.id, fkMenu.r, col, null);
+                    }}
+                  >
+                    Set to <span className="mono">NULL</span>
+                  </button>
                 </>
               )}
             </div>
           );
         })()}
     </div>
+
+    {isTable && (
+      <div className="table-toolbar">
+        <div className="table-toolbar__group">
+          <button
+            className="table-toolbar__btn"
+            disabled={page === 0 || tab.running}
+            onClick={() => void setTablePage(tab.id, page - 1)}
+            title="Previous page"
+          >
+            ‹ Prev
+          </button>
+          <span className="table-toolbar__info mono">{pagerLabel}</span>
+          <button
+            className="table-toolbar__btn"
+            disabled={!canNext || tab.running}
+            onClick={() => void setTablePage(tab.id, page + 1)}
+            title="Next page"
+          >
+            Next ›
+          </button>
+        </div>
+        {editable && (
+          <div className="table-toolbar__group">
+            <button
+              className="table-toolbar__btn"
+              onClick={handleAddRow}
+              title="Add a new row (inserted on Update)"
+            >
+              ＋ Add row
+            </button>
+            <button
+              className="table-toolbar__btn table-toolbar__btn--danger"
+              disabled={!rowSel}
+              onClick={handleRemoveRow}
+              title={
+                rowSel
+                  ? "Remove the selected row"
+                  : "Select a row (click its number) to remove it"
+              }
+            >
+              － Remove row
+            </button>
+          </div>
+        )}
+      </div>
+    )}
+    </>
   );
 }
 
@@ -553,7 +1052,7 @@ function ErrorStrip({ tab }: { tab: QueryTab }) {
         <div className="error-strip__actions">
           <button
             className="error-strip__btn"
-            onClick={() => void navigator.clipboard.writeText(err.message)}
+            onClick={() => copyToClipboard(err.message)}
           >
             Copy
           </button>
@@ -647,16 +1146,23 @@ function loadWidths(
   return result.columns.map((c, i) => saved.widths[c.name] ?? def[i]);
 }
 
-/** Compare two cell values for sorting. NULLs always sort last. */
+/**
+ * Compare two cell values for sorting. NULLs always sort last. Treats anything
+ * that isn't actually a string as null-like rather than throwing — a second
+ * independent guard (alongside the range check at the call site) against a
+ * stale sort column ever crashing the render.
+ */
 function compareCells(
   a: string | null,
   b: string | null,
   numeric: boolean,
   dir: "asc" | "desc",
 ): number {
-  if (a === null && b === null) return 0;
-  if (a === null) return 1;
-  if (b === null) return -1;
+  const aOk = typeof a === "string";
+  const bOk = typeof b === "string";
+  if (!aOk && !bOk) return 0;
+  if (!aOk) return 1;
+  if (!bOk) return -1;
   const r = numeric ? parseFloat(a) - parseFloat(b) : a.localeCompare(b);
   return dir === "asc" ? r : -r;
 }

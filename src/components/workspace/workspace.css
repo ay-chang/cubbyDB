@@ -47,7 +47,7 @@
   gap: 7px;
   padding: 3px 9px;
   border-radius: var(--radius-sm);
-  background: #f2f3f5;
+  background: var(--pill-bg);
 }
 .conn-pill__dot {
   width: 6px;
@@ -81,6 +81,14 @@
   background: var(--accent-tint);
   color: var(--accent-tint-text);
 }
+/* Square icon-only variant (settings gear). */
+.topbar__btn--icon {
+  width: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
 
 /* --- Body / panes --- */
 .workspace__body {
@@ -92,7 +100,7 @@
   flex: none;
   border-right: 1px solid var(--border-strong);
   /* A distinctly grayer panel so it reads as separate from the white results. */
-  background: #eef0f3;
+  background: var(--sidebar-bg);
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -198,7 +206,7 @@
   user-select: none;
 }
 .tree__row:hover {
-  background: #e2e5ea;
+  background: var(--tree-hover);
 }
 .tree__row--schema {
   font-weight: 500;
@@ -322,6 +330,14 @@
   background: var(--accent);
   color: #fff;
 }
+.context-menu__item:hover .mono {
+  color: #fff;
+}
+.context-menu__sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
 .context-menu__item--fk {
   display: flex;
   align-items: center;
@@ -351,6 +367,7 @@
   overflow-y: hidden;
 }
 .tab {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -361,6 +378,17 @@
   margin-bottom: -1px;
   white-space: nowrap;
   cursor: default;
+  user-select: none;
+}
+/* Non-dragged tabs ease into their new spot; the dragged one follows the
+   pointer (its transition is disabled inline). */
+.tab--sliding {
+  transition: transform 160ms ease;
+}
+.tab--dragging {
+  background: var(--surface);
+  box-shadow: 0 4px 14px -6px rgba(20, 24, 40, 0.3);
+  cursor: grabbing;
 }
 .tab--active {
   color: var(--text);
@@ -453,6 +481,16 @@
   font-size: 11px;
   color: var(--text-faint);
 }
+.results__readonly {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+  border: 1px solid var(--border);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
 .results__stat {
   display: flex;
   align-items: center;
@@ -539,13 +577,20 @@
   color: var(--accent);
   letter-spacing: 0.06em;
 }
-.filter-bar__input {
+.filter-bar__input-wrap {
+  position: relative;
   flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+.filter-bar__input {
+  width: 100%;
   height: 28px;
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
   background: var(--surface);
-  padding: 0 10px;
+  padding: 0 26px 0 10px;
   font-size: 12.5px;
   color: var(--text);
   outline: none;
@@ -558,13 +603,23 @@
   border: 1.5px solid var(--accent);
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
+/* The X sits inside the input, on its right edge. */
 .filter-bar__clear {
-  font-size: 11.5px;
+  position: absolute;
+  right: 6px;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 1;
   color: var(--text-faint);
-  padding: 0 4px;
 }
 .filter-bar__clear:hover {
   color: var(--error);
+  background: var(--border-faint);
 }
 .filter-bar__apply {
   height: 28px;
@@ -588,6 +643,86 @@
 .filter-bar__kbd {
   font-size: 10px;
   opacity: 0.7;
+}
+
+/* --- Pending-edits footer bar (Discard / Update), below the results grid --- */
+.pending-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 42px;
+  padding: 0 14px;
+  border-top: 1px solid var(--amber-border);
+  background: var(--amber-bg);
+}
+.pending-bar__count {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--amber-text);
+  white-space: nowrap;
+}
+.pending-bar__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--amber);
+  flex: none;
+}
+.pending-bar__error {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--error-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pending-bar__actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+.pending-bar__discard {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--amber-border);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+.pending-bar__discard:not(:disabled):hover {
+  color: var(--error);
+  border-color: var(--error-border);
+}
+.pending-bar__commit {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: var(--radius-control);
+  background: var(--amber);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pending-bar__commit:not(:disabled):hover {
+  background: #9c4708;
+}
+.pending-bar__discard:disabled,
+.pending-bar__commit:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.pending-bar__kbd {
+  font-size: 10px;
+  opacity: 0.85;
 }
 
 /* --- Results grid --- */
@@ -669,16 +804,36 @@
   border-bottom: 1px solid var(--border-row);
   font-size: 12.5px;
   color: var(--text);
+  transition: background var(--transition);
+}
+/* Hovering a row's gutter previews it as selectable — makes it obvious you can
+   click the number to highlight (and then copy) the whole row. */
+.grid__row:has(> .grid__gutter:hover) {
+  background: var(--border-faint);
 }
 .grid__row--zebra {
   background: var(--surface-raised);
 }
-/* Slight highlight on the row containing the selected cell. */
+/* Crosshair highlight for the selected cell: its row and its column both get a
+   slight tint, the header of its column stands out, and the cell itself (the
+   intersection) gets the stronger ring below. */
 .grid__row--active,
 .grid__row--active.grid__row--zebra {
   background: var(--accent-glow-soft);
 }
+.grid__cell--col-active {
+  background: var(--accent-glow-soft);
+}
+.grid__hcell--active {
+  background: var(--accent-glow);
+  color: var(--accent);
+}
+/* A row with unsaved edits carries a 2px amber spine down its left edge. */
+.grid__row--dirty {
+  box-shadow: inset 2px 0 0 var(--amber);
+}
 .grid__cell {
+  position: relative;
   display: flex;
   align-items: center;
   padding: 0 12px;
@@ -700,6 +855,45 @@
 .grid__cell--fk:hover {
   color: var(--accent);
 }
+/* An edited-but-uncommitted cell. */
+.grid__cell--dirty {
+  background: var(--amber-bg);
+}
+.grid__cell--dirty::after {
+  content: "";
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--amber);
+}
+/* A primary-key cell in an editable table — read-only (identifies the row).
+   No `cursor: not-allowed` here: PK cells are commonly FK targets, and that
+   cursor would otherwise clobber the foreign-key `context-menu` affordance. */
+.grid__cell--pk {
+  color: var(--text-muted);
+}
+/* A cell swapped for its inline edit input. */
+.grid__cell--editing {
+  padding: 3px;
+}
+.grid__cell-input {
+  width: 100%;
+  height: 100%;
+  border: 1.5px solid var(--accent);
+  border-radius: 5px;
+  box-shadow: 0 0 0 3px var(--accent-glow);
+  background: var(--surface);
+  padding: 0 8px;
+  font-size: 12.5px;
+  color: var(--text);
+  outline: none;
+}
+.grid__cell--editing.grid__cell--num .grid__cell-input {
+  text-align: right;
+}
 .grid__cell--num,
 .grid__hcell.grid__cell--num {
   justify-content: flex-end;
@@ -709,6 +903,108 @@
 .grid__cell--null {
   color: var(--text-ghost);
   font-style: italic;
+}
+
+/* --- Row-number / selection gutter (sticky to the left edge) --- */
+.grid__gutter {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-fainter);
+  background: var(--surface-header);
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--transition), color var(--transition);
+}
+.grid__gutter:hover {
+  color: var(--accent);
+  background: var(--accent-tint);
+}
+.grid__gutter--head {
+  z-index: 2;
+  cursor: default;
+}
+/* The header gutter isn't a select handle — keep it inert. */
+.grid__gutter--head:hover {
+  color: var(--text-fainter);
+  background: var(--surface-header);
+}
+.grid__gutter--new {
+  color: var(--amber-text);
+  background: var(--amber-bg);
+  font-size: 14px;
+  font-weight: 600;
+}
+/* A whole-row selection: tint the row and highlight its gutter. */
+.grid__row--rowsel,
+.grid__row--rowsel.grid__row--zebra {
+  background: var(--accent-glow-soft);
+}
+.grid__row--rowsel .grid__gutter {
+  background: var(--accent-tint);
+  color: var(--accent-tint-text);
+}
+/* Draft (uncommitted, to-be-inserted) rows. */
+.grid__row--new {
+  background: var(--amber-bg);
+}
+.grid__cell--newcell {
+  cursor: pointer;
+}
+
+/* --- Table toolbar (pagination + add/remove row), below the grid --- */
+.table-toolbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 38px;
+  padding: 0 12px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-raised);
+}
+.table-toolbar__group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.table-toolbar__info {
+  font-size: 11px;
+  color: var(--text-faint);
+  padding: 0 4px;
+  white-space: nowrap;
+}
+.table-toolbar__btn {
+  height: 26px;
+  padding: 0 11px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  transition: color var(--transition), border-color var(--transition),
+    background var(--transition);
+}
+.table-toolbar__btn:not(:disabled):hover {
+  color: var(--text);
+  border-color: var(--text-ghost);
+}
+.table-toolbar__btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.table-toolbar__btn--danger:not(:disabled):hover {
+  color: var(--error);
+  border-color: var(--error-border);
 }
 
 /* --- Inline error strip --- */
@@ -757,7 +1053,7 @@
   color: var(--error-text);
 }
 .error-strip__btn:hover {
-  background: #fff;
+  background: var(--surface);
   border-color: var(--error);
 }
 

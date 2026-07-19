@@ -39,6 +39,11 @@ pub fn run() {
             commands::fetch_schema,
             commands::run_query,
             commands::select_top_sql,
+            commands::update_row,
+            commands::insert_row,
+            commands::delete_row,
+            commands::write_clipboard,
+            commands::read_clipboard,
             commands::query_history,
             commands::clear_query_history,
         ])

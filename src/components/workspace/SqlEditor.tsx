@@ -47,6 +47,11 @@ export function SqlEditor(props: {
         value={props.value}
         onChange={props.onChange}
         extensions={extensions}
+        // "none" disables the library's built-in light theme, which would
+        // otherwise paint a white background over our token-driven theme.
+        // `cubbyEditorTheme` supplies every color via CSS variables, so the
+        // editor follows light/dark automatically.
+        theme="none"
         basicSetup={{
           lineNumbers: true,
           foldGutter: false,

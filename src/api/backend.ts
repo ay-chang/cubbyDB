@@ -9,6 +9,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type {
+  ColumnValue,
   ConnectionInfo,
   ConnectionParams,
   CurrentConnection,
@@ -73,13 +74,76 @@ export function selectTopSql(
   table: string,
   filter?: string | null,
   limit?: number,
+  offset?: number,
 ): Promise<string> {
   return invoke("select_top_sql", {
     schema,
     table,
     filter: filter ?? null,
     limit: limit ?? null,
+    offset: offset ?? null,
   });
+}
+
+export function updateRow(
+  schema: string,
+  table: string,
+  primaryKey: ColumnValue[],
+  changes: ColumnValue[],
+): Promise<void> {
+  return invoke("update_row", { schema, table, primaryKey, changes });
+}
+
+export function insertRow(
+  schema: string,
+  table: string,
+  values: ColumnValue[],
+): Promise<void> {
+  return invoke("insert_row", { schema, table, values });
+}
+
+export function deleteRow(
+  schema: string,
+  table: string,
+  primaryKey: ColumnValue[],
+): Promise<void> {
+  return invoke("delete_row", { schema, table, primaryKey });
+}
+
+/** Copy text to the OS clipboard (via the backend — see the Rust command). */
+export function writeClipboard(text: string): Promise<void> {
+  return invoke("write_clipboard", { text });
+}
+
+/** Read text from the OS clipboard. */
+export function readClipboard(): Promise<string> {
+  return invoke("read_clipboard");
+}
+
+/**
+ * Copy text to the clipboard as reliably as possible from the Tauri webview.
+ * Runs a synchronous, user-gesture-based `execCommand("copy")` (which works
+ * inside WKWebView with no backend at all — so it survives a not-yet-restarted
+ * dev build) AND fires the backend command as a second, best-effort path.
+ * Call it synchronously from within a user gesture (e.g. a keydown handler).
+ */
+export function copyToClipboard(text: string): void {
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.top = "-9999px";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, text.length);
+    document.execCommand("copy");
+    document.body.removeChild(ta);
+  } catch {
+    // execCommand unavailable — the backend path below is the fallback.
+  }
+  void writeClipboard(text).catch(() => {});
 }
 
 export function queryHistory(limit?: number): Promise<HistoryEntry[]> {

@@ -5,6 +5,8 @@
  */
 
 :root {
+  color-scheme: light;
+
   /* Surfaces */
   --app-bg: #f7f8f8;
   --surface: #ffffff;
@@ -17,6 +19,16 @@
   --border-faint: #f0f1f3;
   --border-row: #f3f4f6;
   --border-cell: #f6f7f8;
+
+  /* Incidental surfaces (connection pill, sidebar, tree hover, scrollbar) */
+  --pill-bg: #f2f3f5;
+  --sidebar-bg: #eef0f3;
+  --tree-hover: #e2e5ea;
+  --scrollbar-thumb: #dfe1e5;
+  --scrollbar-thumb-hover: #cdd0d6;
+  /* Text painted on top of the accent/amber fills (selected rows, primary
+     buttons) — white in light mode, tuned per-theme in dark. */
+  --on-accent: #ffffff;
 
   /* Text */
   --text: #16181d;
@@ -82,4 +94,78 @@
   /* Elevation */
   --shadow-card: 0 12px 40px -18px rgba(20, 24, 40, 0.28);
   --shadow-button: 0 1px 2px rgba(20, 24, 40, 0.12);
+}
+
+/*
+ * Dark theme — the same token contract with a dark, low-contrast palette in the
+ * same indigo family. Applied by setting `data-theme="dark"` on <html>. Only
+ * colors and elevation change; sizing/typography/radius tokens are inherited
+ * from :root above.
+ */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Surfaces */
+  --app-bg: #0c0d0f;
+  --surface: #141518;
+  --surface-raised: #191a1e;
+  --surface-header: #17181b;
+
+  /* Borders / hairlines */
+  --border: #26282d;
+  --border-strong: #33363c;
+  --border-faint: #202227;
+  --border-row: #1e2024;
+  --border-cell: #1b1d21;
+
+  /* Incidental surfaces */
+  --pill-bg: #202227;
+  --sidebar-bg: #101114;
+  --tree-hover: #23262b;
+  --scrollbar-thumb: #33363c;
+  --scrollbar-thumb-hover: #414550;
+  --on-accent: #ffffff;
+
+  /* Text */
+  --text: #e6e8eb;
+  --text-muted: #a0a5ad;
+  --text-faint: #767c85;
+  --text-fainter: #626771;
+  --text-placeholder: #565b64;
+  --text-ghost: #454a52;
+
+  /* Accent (indigo) — nudged brighter to hold up on dark surfaces */
+  --accent: #6e79db;
+  --accent-hover: #808ae2;
+  --accent-tint: #21243a;
+  --accent-tint-text: #a7aef0;
+  --accent-glow: rgba(110, 121, 219, 0.22);
+  --accent-glow-soft: rgba(110, 121, 219, 0.12);
+
+  /* Status */
+  --success: #35b972;
+  --success-bg: #10271b;
+  --success-text: #52c98a;
+  --success-border: #1f3f2c;
+
+  --error: #ef575c;
+  --error-text: #f4787c;
+  --error-bg: #2a1517;
+  --error-border: #4a2427;
+  --error-mono: #e0888c;
+
+  --amber: #cf8324;
+  --amber-bg: #2a1f0e;
+  --amber-border: #493819;
+  --amber-text: #e0a34f;
+
+  /* SQL syntax highlighting */
+  --syntax-keyword: var(--accent);
+  --syntax-string: #52c98a;
+  --syntax-number: #e0a34f;
+  --syntax-comment: #6b7178;
+
+  /* Elevation — deeper, darker shadows read better on a dark canvas */
+  --shadow-card: 0 12px 40px -18px rgba(0, 0, 0, 0.6);
+  --shadow-button: 0 1px 2px rgba(0, 0, 0, 0.4);
 }

@@ -25,26 +25,32 @@ export function FilterBar({ tab }: { tab: QueryTab }) {
   return (
     <div className="filter-bar">
       <span className="filter-bar__kw mono">WHERE</span>
-      <input
-        className="filter-bar__input mono"
-        value={draft}
-        placeholder="id = '1234'"
-        onChange={(e) => setDraft(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            apply();
-          }
-        }}
-        spellCheck={false}
-        autoCapitalize="off"
-        autoCorrect="off"
-      />
-      {(tab.filter || draft) && (
-        <button className="filter-bar__clear" onClick={clear} title="Clear filter">
-          Clear
-        </button>
-      )}
+      <div className="filter-bar__input-wrap">
+        <input
+          className="filter-bar__input mono"
+          value={draft}
+          placeholder="id = '1234'"
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              apply();
+            }
+          }}
+          spellCheck={false}
+          autoCapitalize="off"
+          autoCorrect="off"
+        />
+        {(tab.filter || draft) && (
+          <button
+            className="filter-bar__clear"
+            onClick={clear}
+            title="Clear filter"
+          >
+            ×
+          </button>
+        )}
+      </div>
       <button
         className="filter-bar__apply"
         onClick={apply}

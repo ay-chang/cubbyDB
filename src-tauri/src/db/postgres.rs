@@ -12,8 +12,9 @@ use tokio_postgres::error::ErrorPosition;
 use tokio_postgres::{Config, SimpleQueryMessage};
 
 use super::{
-    ColumnNode, ConnectionInfo, ConnectionParams, DatabaseDriver, DbError, DbErrorKind, DbSession,
-    Engine, ForeignKeyRef, QueryResult, ResultColumn, SchemaNode, TableKind, TableNode,
+    ColumnNode, ColumnValue, ConnectionInfo, ConnectionParams, DatabaseDriver, DbError,
+    DbErrorKind, DbSession, Engine, ForeignKeyRef, QueryResult, ResultColumn, SchemaNode,
+    TableKind, TableNode,
 };
 
 /// Stateless factory for Postgres sessions.
@@ -227,6 +228,7 @@ impl DbSession for PostgresSession {
         table: &str,
         filter: Option<&str>,
         limit: u32,
+        offset: u32,
     ) -> String {
         let mut sql = format!(
             "SELECT * FROM {}.{}",
@@ -240,8 +242,186 @@ impl DbSession for PostgresSession {
                 sql.push_str(f);
             }
         }
-        sql.push_str(&format!("\nLIMIT {limit};"));
+        sql.push_str(&format!("\nLIMIT {limit}"));
+        if offset > 0 {
+            sql.push_str(&format!(" OFFSET {offset}"));
+        }
+        sql.push(';');
         sql
+    }
+
+    async fn update_row(
+        &self,
+        schema: &str,
+        table: &str,
+        primary_key: &[ColumnValue],
+        changes: &[ColumnValue],
+    ) -> Result<(), DbError> {
+        if changes.is_empty() {
+            return Ok(());
+        }
+        if primary_key.is_empty() {
+            // The frontend gates editing on a detected primary key, so this
+            // should be unreachable — but never build an unscoped UPDATE.
+            return Err(DbError::new(
+                DbErrorKind::Internal,
+                "Cannot update a row without a primary key.",
+            ));
+        }
+
+        // Values are embedded as quoted SQL literals (via `quote_literal`),
+        // not bind parameters. This looks unusual, but typed bind parameters
+        // don't actually work here: whatever type is declared for `$N` — even
+        // Postgres's own UNKNOWN pseudo-type via `prepare_typed` — gets
+        // resolved to a concrete type by the server during DESCRIBE (e.g.
+        // int4 for `id = $1`), and tokio-postgres's client-side `ToSql` then
+        // rejects our generic `String` values against that resolved type
+        // before the query is even sent. A literal, by contrast, is coerced
+        // by context the same way `id = '1'` already works for the WHERE
+        // filter bar — uniformly, for any column type. Identifiers go through
+        // `quote_ident`; values go through `quote_literal`; nothing is ever
+        // interpolated unescaped.
+        let mut sql = format!("UPDATE {}.{} SET ", quote_ident(schema), quote_ident(table));
+
+        for (i, change) in changes.iter().enumerate() {
+            if i > 0 {
+                sql.push_str(", ");
+            }
+            // `None` means SQL NULL — a bare keyword, never a quoted 'NULL'
+            // string, so a column can actually be nulled rather than set to
+            // the literal text "NULL".
+            match &change.value {
+                Some(v) => sql.push_str(&format!(
+                    "{} = {}",
+                    quote_ident(&change.column),
+                    quote_literal(v)
+                )),
+                None => sql.push_str(&format!("{} = NULL", quote_ident(&change.column))),
+            }
+        }
+
+        sql.push_str(" WHERE ");
+        for (i, key) in primary_key.iter().enumerate() {
+            if i > 0 {
+                sql.push_str(" AND ");
+            }
+            match &key.value {
+                Some(v) => sql.push_str(&format!(
+                    "{} = {}",
+                    quote_ident(&key.column),
+                    quote_literal(v)
+                )),
+                // `= NULL` never matches in SQL; a NULL key must use `IS NULL`.
+                None => sql.push_str(&format!("{} IS NULL", quote_ident(&key.column))),
+            }
+        }
+
+        let affected = self.client.execute(&sql, &[]).await.map_err(map_query_err)?;
+
+        if affected == 0 {
+            return Err(DbError::new(
+                DbErrorKind::Query,
+                "No matching row found — it may have been changed or deleted elsewhere since this table was loaded. Refresh and try again.",
+            ));
+        }
+        if affected > 1 {
+            // Should be impossible with a genuine primary key; refuse rather
+            // than silently apply the edit to more than the intended row.
+            return Err(DbError::new(
+                DbErrorKind::Internal,
+                format!(
+                    "Update matched {affected} rows instead of 1 — refusing to apply. This table's primary key may not be unique."
+                ),
+            ));
+        }
+
+        Ok(())
+    }
+
+    async fn insert_row(
+        &self,
+        schema: &str,
+        table: &str,
+        values: &[ColumnValue],
+    ) -> Result<(), DbError> {
+        // Values are embedded as quoted SQL literals for the same reason as
+        // `update_row` — see the long note there. Identifiers go through
+        // `quote_ident`, values through `quote_literal`; NULL is a bare keyword.
+        let target = format!("{}.{}", quote_ident(schema), quote_ident(table));
+
+        let sql = if values.is_empty() {
+            // A blank draft row — let every column take its database default.
+            format!("INSERT INTO {target} DEFAULT VALUES")
+        } else {
+            let mut cols = String::new();
+            let mut vals = String::new();
+            for (i, v) in values.iter().enumerate() {
+                if i > 0 {
+                    cols.push_str(", ");
+                    vals.push_str(", ");
+                }
+                cols.push_str(&quote_ident(&v.column));
+                match &v.value {
+                    Some(val) => vals.push_str(&quote_literal(val)),
+                    None => vals.push_str("NULL"),
+                }
+            }
+            format!("INSERT INTO {target} ({cols}) VALUES ({vals})")
+        };
+
+        self.client.execute(&sql, &[]).await.map_err(map_query_err)?;
+        Ok(())
+    }
+
+    async fn delete_row(
+        &self,
+        schema: &str,
+        table: &str,
+        primary_key: &[ColumnValue],
+    ) -> Result<(), DbError> {
+        if primary_key.is_empty() {
+            // Gated on a detected primary key in the frontend; never build an
+            // unscoped DELETE that would wipe the whole table.
+            return Err(DbError::new(
+                DbErrorKind::Internal,
+                "Cannot delete a row without a primary key.",
+            ));
+        }
+
+        let mut sql = format!("DELETE FROM {}.{} WHERE ", quote_ident(schema), quote_ident(table));
+        for (i, key) in primary_key.iter().enumerate() {
+            if i > 0 {
+                sql.push_str(" AND ");
+            }
+            match &key.value {
+                Some(v) => sql.push_str(&format!(
+                    "{} = {}",
+                    quote_ident(&key.column),
+                    quote_literal(v)
+                )),
+                // `= NULL` never matches in SQL; a NULL key must use `IS NULL`.
+                None => sql.push_str(&format!("{} IS NULL", quote_ident(&key.column))),
+            }
+        }
+
+        let affected = self.client.execute(&sql, &[]).await.map_err(map_query_err)?;
+
+        if affected == 0 {
+            return Err(DbError::new(
+                DbErrorKind::Query,
+                "No matching row found — it may have already been deleted elsewhere. Refresh and try again.",
+            ));
+        }
+        if affected > 1 {
+            return Err(DbError::new(
+                DbErrorKind::Internal,
+                format!(
+                    "Delete matched {affected} rows instead of 1 — refusing. This table's primary key may not be unique."
+                ),
+            ));
+        }
+
+        Ok(())
     }
 }
 
@@ -381,6 +561,14 @@ fn quote_ident(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
+/// Quote a value as a SQL string literal, doubling embedded single quotes —
+/// the standard SQL escaping rule (matches Postgres's own `quote_literal()`
+/// SQL function). Assumes `standard_conforming_strings`, Postgres's default
+/// since 9.1, so backslashes need no special handling.
+fn quote_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
 /// Map a connection-time Postgres error, preserving SQLSTATE when present.
 fn map_conn_err(e: tokio_postgres::Error) -> DbError {
     let mut err = map_db_error(e, DbErrorKind::Connection);
@@ -415,7 +603,19 @@ fn map_db_error(e: tokio_postgres::Error, kind: DbErrorKind) -> DbError {
         } else {
             kind
         };
-        DbError::new(kind, e.to_string())
+        // Some of tokio-postgres's own errors (e.g. parameter encoding
+        // failures) only put a generic summary in `Display` and leave the
+        // actual reason in the `source()` chain — surface that too, rather
+        // than showing the user an uninformative "error serializing
+        // parameter 1" with no explanation of what was actually wrong.
+        let mut message = e.to_string();
+        let mut source = std::error::Error::source(&e);
+        while let Some(err) = source {
+            message.push_str(": ");
+            message.push_str(&err.to_string());
+            source = err.source();
+        }
+        DbError::new(kind, message)
     }
 }
 
@@ -594,5 +794,193 @@ mod tests {
         );
         assert_eq!(empty.columns[0].name, "n");
         eprintln!("zero-row columns ok: {:?}", empty.columns);
+
+        // update_row: a scratch table (a real, normally-schemaed table — not
+        // TEMP, since `pg_temp` is a query-time alias that doesn't literally
+        // match the catalog's per-session temp namespace name) exercises the
+        // real parameterized UPDATE: a numeric primary key (proving the
+        // `$N::type` cast fix, since a bare `String` param can't satisfy
+        // int4), a value containing a single quote (the classic
+        // injection/escaping footgun), and the zero-match error path.
+        session
+            .run_query("DROP TABLE IF EXISTS cubbydb_edit_test")
+            .await
+            .expect("drop any leftover scratch table");
+        session
+            .run_query("CREATE TABLE cubbydb_edit_test (id int PRIMARY KEY, note text)")
+            .await
+            .expect("create scratch table");
+        session
+            .run_query("INSERT INTO cubbydb_edit_test (id, note) VALUES (1, 'original')")
+            .await
+            .expect("seed row");
+
+        use super::super::ColumnValue;
+        let pk = |v: &str| ColumnValue {
+            column: "id".into(),
+            value: Some(v.into()),
+        };
+        session
+            .update_row(
+                "public",
+                "cubbydb_edit_test",
+                &[pk("1")],
+                &[ColumnValue {
+                    column: "note".into(),
+                    value: Some("O'Brien's edit".into()),
+                }],
+            )
+            .await
+            .expect("update_row with a numeric PK and a quote in the value");
+
+        let check = session
+            .run_query("SELECT note FROM cubbydb_edit_test WHERE id = 1")
+            .await
+            .expect("read back");
+        assert_eq!(check.rows[0][0].as_deref(), Some("O'Brien's edit"));
+        eprintln!("update_row round-trip ok: {:?}", check.rows[0][0]);
+
+        // Setting a column to NULL: `value: None` must produce a real NULL,
+        // not the literal string "NULL".
+        session
+            .update_row(
+                "public",
+                "cubbydb_edit_test",
+                &[pk("1")],
+                &[ColumnValue {
+                    column: "note".into(),
+                    value: None,
+                }],
+            )
+            .await
+            .expect("update_row setting a column to NULL");
+        let nulled = session
+            .run_query("SELECT note, note IS NULL AS is_null FROM cubbydb_edit_test WHERE id = 1")
+            .await
+            .expect("read back nulled column");
+        assert_eq!(nulled.rows[0][0], None, "expected an actual SQL NULL");
+        assert_eq!(nulled.rows[0][1].as_deref(), Some("t"));
+        eprintln!("update_row NULL ok: {:?}", nulled.rows[0][0]);
+
+        // Updating a primary key that doesn't exist must error, not silently
+        // no-op or touch the wrong row.
+        let no_match = session
+            .update_row(
+                "public",
+                "cubbydb_edit_test",
+                &[pk("999")],
+                &[ColumnValue {
+                    column: "note".into(),
+                    value: Some("should not apply".into()),
+                }],
+            )
+            .await
+            .expect_err("expected an error for a non-matching primary key");
+        eprintln!("zero-match update_row error path ok: {}", no_match.message);
+
+        // --- Pagination: select_top_sql builds LIMIT/OFFSET correctly ---
+        let p0 = session.select_top_sql("public", "cubbydb_edit_test", None, 500, 0);
+        assert!(p0.contains("LIMIT 500"));
+        assert!(!p0.contains("OFFSET"), "page 0 must not add an OFFSET");
+        let p1 = session.select_top_sql("public", "cubbydb_edit_test", None, 500, 500);
+        assert!(p1.contains("LIMIT 500 OFFSET 500"));
+        eprintln!("pagination SQL ok: {p1:?}");
+
+        // If the seeded `widgets` table (1200 rows) is present, page through it.
+        if let Ok(page0) = session
+            .run_query(&session.select_top_sql("public", "widgets", None, 500, 0))
+            .await
+        {
+            assert_eq!(page0.rows.len(), 500, "first page should be full");
+            let page2 = session
+                .run_query(&session.select_top_sql("public", "widgets", None, 500, 1000))
+                .await
+                .expect("third page");
+            assert_eq!(page2.rows.len(), 200, "last page should hold the remainder");
+            eprintln!(
+                "widgets pagination ok: {} + {} rows",
+                page0.rows.len(),
+                page2.rows.len()
+            );
+        }
+
+        // --- insert_row / delete_row ---
+        session
+            .run_query("DROP TABLE IF EXISTS cubbydb_rowops_test")
+            .await
+            .expect("drop leftover rowops table");
+        session
+            .run_query(
+                "CREATE TABLE cubbydb_rowops_test (id serial PRIMARY KEY, note text, qty int DEFAULT 7)",
+            )
+            .await
+            .expect("create rowops table");
+
+        // A blank draft row becomes INSERT ... DEFAULT VALUES.
+        session
+            .insert_row("public", "cubbydb_rowops_test", &[])
+            .await
+            .expect("insert DEFAULT VALUES");
+        // An explicit row: a quote in the value, and an explicit NULL column.
+        session
+            .insert_row(
+                "public",
+                "cubbydb_rowops_test",
+                &[
+                    ColumnValue { column: "note".into(), value: Some("O'Hara".into()) },
+                    ColumnValue { column: "qty".into(), value: None },
+                ],
+            )
+            .await
+            .expect("insert explicit row");
+        let after_insert = session
+            .run_query("SELECT id, note, qty FROM cubbydb_rowops_test ORDER BY id")
+            .await
+            .expect("read inserted rows");
+        assert_eq!(after_insert.rows.len(), 2);
+        // Row 1 took the qty default (7) and a NULL note.
+        assert_eq!(after_insert.rows[0][2].as_deref(), Some("7"));
+        assert_eq!(after_insert.rows[0][1], None);
+        // Row 2 kept its quoted note and an explicit NULL qty.
+        assert_eq!(after_insert.rows[1][1].as_deref(), Some("O'Hara"));
+        assert_eq!(after_insert.rows[1][2], None);
+        eprintln!("insert_row ok: {:?}", after_insert.rows);
+
+        // delete_row removes exactly the keyed row.
+        let first_id = after_insert.rows[0][0].clone().expect("serial id");
+        session
+            .delete_row(
+                "public",
+                "cubbydb_rowops_test",
+                &[ColumnValue { column: "id".into(), value: Some(first_id) }],
+            )
+            .await
+            .expect("delete_row");
+        let after_delete = session
+            .run_query("SELECT count(*) FROM cubbydb_rowops_test")
+            .await
+            .expect("count after delete");
+        assert_eq!(after_delete.rows[0][0].as_deref(), Some("1"));
+
+        // Deleting a non-existent key errors rather than silently no-oping.
+        let del_err = session
+            .delete_row(
+                "public",
+                "cubbydb_rowops_test",
+                &[ColumnValue { column: "id".into(), value: Some("999999".into()) }],
+            )
+            .await
+            .expect_err("expected an error deleting a missing row");
+        eprintln!("delete_row ok; missing-row error path: {}", del_err.message);
+
+        session
+            .run_query("DROP TABLE cubbydb_rowops_test")
+            .await
+            .expect("clean up rowops table");
+
+        session
+            .run_query("DROP TABLE cubbydb_edit_test")
+            .await
+            .expect("clean up scratch table");
     }
 }

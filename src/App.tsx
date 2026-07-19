@@ -1,5 +1,8 @@
 import { useEffect } from "react";
 
+import { ConfirmDialog } from "./components/common/ConfirmDialog";
+import { ErrorBoundary } from "./components/common/ErrorBoundary";
+import { SettingsDialog } from "./components/common/SettingsDialog";
 import { Spinner } from "./components/common/Spinner";
 import { ConnectionScreen } from "./components/connection/ConnectionScreen";
 import { Workspace } from "./components/workspace/Workspace";
@@ -28,5 +31,17 @@ export function App() {
     );
   }
 
-  return view === "connection" ? <ConnectionScreen /> : <Workspace />;
+  return (
+    <>
+      {view === "connection" ? (
+        <ConnectionScreen />
+      ) : (
+        <ErrorBoundary>
+          <Workspace />
+        </ErrorBoundary>
+      )}
+      <ConfirmDialog />
+      <SettingsDialog />
+    </>
+  );
 }
