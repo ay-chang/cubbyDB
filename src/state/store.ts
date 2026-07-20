@@ -156,10 +156,14 @@ interface AppStore {
   ) => void;
   discardEdits: (tabId: string) => void;
   commitEdits: (tabId: string) => Promise<void>;
+  /** Dismiss the last insert/update/delete error shown for a tab. */
+  clearUpdateError: (tabId: string) => void;
 
   // --- row insert / delete / paste (table tabs) ---
   /** Append a blank draft row to be inserted on commit. */
   addRow: (tabId: string) => void;
+  /** Append several pre-filled draft rows at once (e.g. pasting duplicates). */
+  addRows: (tabId: string, rows: Array<Array<string | null>>) => void;
   /** Edit a cell of a not-yet-committed draft row. */
   setNewCellEdit: (
     tabId: string,
@@ -171,6 +175,8 @@ interface AppStore {
   removeNewRow: (tabId: string, newRowIndex: number) => void;
   /** Delete an existing row from the database (confirmed), by row index. */
   deleteExistingRow: (tabId: string, rowIndex: number) => Promise<void>;
+  /** Delete several existing rows with a single confirmation. */
+  deleteExistingRows: (tabId: string, rowIndices: number[]) => Promise<void>;
   /** Overwrite an existing row's editable cells with pasted values. */
   overwriteRow: (
     tabId: string,
@@ -734,6 +740,14 @@ export const useStore = create<AppStore>((set, get) => {
       }));
     },
 
+    clearUpdateError(tabId) {
+      set((s) => ({
+        tabs: s.tabs.map((t) =>
+          t.id === tabId ? { ...t, updateError: null } : t,
+        ),
+      }));
+    },
+
     async commitEdits(tabId) {
       const tab = get().tabs.find((t) => t.id === tabId);
       if (!tab || !tab.result || !tab.source || !tabHasPendingEdits(tab)) return;
@@ -854,6 +868,21 @@ export const useStore = create<AppStore>((set, get) => {
       }));
     },
 
+    addRows(tabId, rows) {
+      set((s) => ({
+        tabs: s.tabs.map((t) => {
+          if (t.id !== tabId || !t.result || rows.length === 0) return t;
+          const width = t.result.columns.length;
+          const drafts = rows.map((r) => {
+            const row = Array<string | null>(width).fill(null);
+            for (let ci = 0; ci < width; ci++) row[ci] = r[ci] ?? null;
+            return row;
+          });
+          return { ...t, newRows: [...(t.newRows ?? []), ...drafts] };
+        }),
+      }));
+    },
+
     setNewCellEdit(tabId, newRowIndex, colIndex, value) {
       set((s) => ({
         tabs: s.tabs.map((t) => {
@@ -933,6 +962,71 @@ export const useStore = create<AppStore>((set, get) => {
         set((s) => ({
           tabs: s.tabs.map((t) => (t.id === tabId ? { ...t, updateError: dbError } : t)),
         }));
+      }
+    },
+
+    async deleteExistingRows(tabId, rowIndices) {
+      const tab = get().tabs.find((t) => t.id === tabId);
+      if (!tab || !tab.result || !tab.source || rowIndices.length === 0) return;
+
+      const schemaTable = get()
+        .schema.find((s) => s.name === tab.source!.schema)
+        ?.tables.find((t) => t.name === tab.source!.table);
+      const pkCols = schemaTable?.columns.filter((c) => c.isPrimaryKey).map((c) => c.name) ?? [];
+      if (pkCols.length === 0) return;
+
+      const n = rowIndices.length;
+      const ok = await requestConfirm(
+        n === 1
+          ? "Delete this row? This permanently removes it from the database."
+          : `Delete ${n} rows? This permanently removes them from the database.`,
+        "Delete",
+      );
+      if (!ok) return;
+
+      // Delete from the highest index down so each removal doesn't shift the
+      // indices of rows we haven't handled yet. Stop at the first failure and
+      // surface it (rows already deleted stay deleted).
+      const sorted = [...new Set(rowIndices)].sort((a, b) => b - a);
+      for (const rowIndex of sorted) {
+        const fresh = get().tabs.find((t) => t.id === tabId);
+        const row = fresh?.result?.rows[rowIndex];
+        if (!fresh || !fresh.result || !row) continue;
+
+        const primaryKey: ColumnValue[] = pkCols.map((pkCol) => {
+          const ci = fresh.result!.columns.findIndex((c) => c.name === pkCol);
+          return { column: pkCol, value: row[ci] ?? null };
+        });
+
+        try {
+          await api.deleteRow(tab.source.schema, tab.source.table, primaryKey);
+          set((s) => ({
+            tabs: s.tabs.map((t) => {
+              if (t.id !== tabId || !t.result) return t;
+              const rows = t.result.rows.filter((_, i) => i !== rowIndex);
+              const pendingEdits: Record<number, Record<number, string | null>> = {};
+              for (const [k, v] of Object.entries(t.pendingEdits ?? {})) {
+                const ri = Number(k);
+                if (ri === rowIndex) continue;
+                pendingEdits[ri > rowIndex ? ri - 1 : ri] = v;
+              }
+              return {
+                ...t,
+                result: { ...t.result, rows, rowCount: Math.max(0, t.result.rowCount - 1) },
+                pendingEdits,
+                updateError: null,
+              };
+            }),
+          }));
+        } catch (err) {
+          const dbError: DbError = isDbError(err)
+            ? err
+            : { message: errorMessage(err), code: null, hint: null, position: null, kind: "internal" };
+          set((s) => ({
+            tabs: s.tabs.map((t) => (t.id === tabId ? { ...t, updateError: dbError } : t)),
+          }));
+          return;
+        }
       }
     },
 

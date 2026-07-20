@@ -645,6 +645,56 @@
   opacity: 0.7;
 }
 
+/* --- Mutation error banner (failed insert/update/delete) --- */
+.mutation-error {
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px 10px 14px;
+  border-top: 1px solid var(--error-border);
+  background: var(--error-bg);
+}
+.mutation-error__glyph {
+  color: var(--error);
+  font-size: 12px;
+  line-height: 1.5;
+  flex: none;
+}
+.mutation-error__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.mutation-error__message {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--error-text);
+  word-break: break-word;
+}
+.mutation-error__detail {
+  font-size: 11px;
+  color: var(--error-mono);
+  word-break: break-word;
+}
+.mutation-error__close {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--error-text);
+}
+.mutation-error__close:hover {
+  background: var(--error-border);
+}
+
 /* --- Pending-edits footer bar (Discard / Update), below the results grid --- */
 .pending-bar {
   flex: none;
@@ -671,15 +721,6 @@
   border-radius: 50%;
   background: var(--amber);
   flex: none;
-}
-.pending-bar__error {
-  flex: 1;
-  min-width: 0;
-  font-size: 11px;
-  color: var(--error-text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .pending-bar__actions {
   margin-left: auto;
@@ -727,10 +768,64 @@
 
 /* --- Results grid --- */
 .grid {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow: hidden;
   background: var(--surface);
+}
+/* Copy diagnostics toast (bottom-right of the grid). */
+.copy-status {
+  position: absolute;
+  bottom: 14px;
+  right: 18px;
+  z-index: 6;
+  min-width: 200px;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 12px;
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  border: 1px solid var(--success-border);
+  box-shadow: var(--shadow-card);
+  pointer-events: none;
+  animation: copy-status-in 120ms ease;
+}
+.copy-status--fail {
+  border-color: var(--error-border);
+}
+.copy-status__head {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--success-text);
+}
+.copy-status--fail .copy-status__head {
+  color: var(--error-text);
+}
+.copy-status__value {
+  font-size: 11.5px;
+  color: var(--text);
+  word-break: break-all;
+  white-space: pre-wrap;
+  max-height: 60px;
+  overflow: hidden;
+}
+.copy-status__methods {
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+.copy-status__error {
+  font-size: 10.5px;
+  color: var(--error-text);
+  word-break: break-all;
+}
+@keyframes copy-status-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
 }
 .grid__scroll {
   height: 100%;

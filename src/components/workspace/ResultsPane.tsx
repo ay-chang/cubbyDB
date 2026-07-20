@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import type { CopyResult } from "../../api/backend";
 import { copyToClipboard, readClipboard } from "../../api/backend";
 import type { QueryTab } from "../../state/store";
 import { useStore } from "../../state/store";
@@ -119,6 +120,7 @@ export function ResultsPane({ tab }: { tab: QueryTab }) {
         </div>
       )}
 
+      {tab.updateError && <MutationErrorBar tab={tab} />}
       {tabHasPendingEdits(tab) && <PendingEditsBar tab={tab} />}
     </div>
   );
@@ -232,9 +234,10 @@ type ColNav = { references: ForeignKeyRef[]; referencedBy: ForeignKeyRef[] };
 // clipboard, used to detect whether a paste came from an in-app copy.
 let cellClipboard: { text: string; value: string | null } | null = null;
 
-// In-app whole-row clipboard (aligned to original column order), for copying a
-// row and pasting it over another. Preserves NULLs like the cell clipboard.
-let rowClipboard: { text: string; values: Array<string | null> } | null = null;
+// In-app whole-row clipboard: one or more rows, each aligned to original column
+// order, for copying rows and pasting them over another row or as duplicates.
+// Preserves NULLs like the cell clipboard.
+let rowClipboard: Array<Array<string | null>> | null = null;
 
 /** A selected whole row: an existing result row or a pending draft row. */
 type RowSelection = { kind: "existing" | "new"; index: number };
@@ -264,8 +267,9 @@ function ResultsGrid({
   const setNewCellEdit = useStore((s) => s.setNewCellEdit);
   const overwriteRow = useStore((s) => s.overwriteRow);
   const addRow = useStore((s) => s.addRow);
+  const addRows = useStore((s) => s.addRows);
   const removeNewRow = useStore((s) => s.removeNewRow);
-  const deleteExistingRow = useStore((s) => s.deleteExistingRow);
+  const deleteExistingRows = useStore((s) => s.deleteExistingRows);
   const setTablePage = useStore((s) => s.setTablePage);
   const isTable = tab.kind === "table";
   // Column layout — a display `order` (permutation of original column indices)
@@ -290,8 +294,10 @@ function ResultsGrid({
   const [selected, setSelected] = useState<{ r: number; col: number } | null>(
     null,
   );
-  // Selected whole row (via the gutter), for row copy/paste and remove.
-  const [rowSel, setRowSel] = useState<RowSelection | null>(null);
+  // Selected whole rows (via the gutter), for row copy/paste and remove. Holds
+  // one or more rows; `rowAnchorRef` is the pivot for shift-click ranges.
+  const [rowSel, setRowSel] = useState<RowSelection[]>([]);
+  const rowAnchorRef = useRef<RowSelection | null>(null);
   // Open FK "jump to referenced row" menu, anchored at the clicked cell.
   const [fkMenu, setFkMenu] = useState<{
     r: number;
@@ -325,17 +331,80 @@ function ResultsGrid({
     setEditing(null);
   };
 
+  const isRowSelected = (kind: "existing" | "new", index: number) =>
+    rowSel.some((s) => s.kind === kind && s.index === index);
+
+  /** Select a single row (replacing any existing selection). */
   const selectRow = (sel: RowSelection) => {
-    setRowSel(sel);
+    setRowSel([sel]);
+    rowAnchorRef.current = sel;
     setSelected(null);
     setFkMenu(null);
   };
+
+  /**
+   * Gutter click with modifiers: plain = select just this row, ⌘/Ctrl+click =
+   * toggle it in/out of the selection, Shift+click = select the range from the
+   * anchor (existing rows only, in display order).
+   */
+  const selectRowFromGutter = (
+    e: React.MouseEvent,
+    kind: "existing" | "new",
+    index: number,
+  ) => {
+    const sel: RowSelection = { kind, index };
+    const anchor = rowAnchorRef.current;
+    if (e.shiftKey && anchor && anchor.kind === "existing" && kind === "existing") {
+      const aPos = sortedRowIndices.indexOf(anchor.index);
+      const cPos = sortedRowIndices.indexOf(index);
+      if (aPos >= 0 && cPos >= 0) {
+        const [lo, hi] = aPos <= cPos ? [aPos, cPos] : [cPos, aPos];
+        setRowSel(
+          sortedRowIndices
+            .slice(lo, hi + 1)
+            .map((ri) => ({ kind: "existing" as const, index: ri })),
+        );
+      } else {
+        setRowSel([sel]);
+        rowAnchorRef.current = sel;
+      }
+    } else if (e.metaKey || e.ctrlKey) {
+      setRowSel((prev) =>
+        prev.some((s) => s.kind === kind && s.index === index)
+          ? prev.filter((s) => !(s.kind === kind && s.index === index))
+          : [...prev, sel],
+      );
+      rowAnchorRef.current = sel;
+    } else {
+      setRowSel([sel]);
+      rowAnchorRef.current = sel;
+    }
+    setSelected(null);
+    setFkMenu(null);
+  };
+
+  // On-screen copy diagnostics: shows the value and which clipboard method
+  // worked/failed for a few seconds after each copy.
+  const [copyStatus, setCopyStatus] = useState<CopyResult | null>(null);
+  const copyStatusTimer = useRef<number | null>(null);
+  const showCopyStatus = useCallback((res: CopyResult) => {
+    setCopyStatus(res);
+    if (copyStatusTimer.current) window.clearTimeout(copyStatusTimer.current);
+    copyStatusTimer.current = window.setTimeout(() => setCopyStatus(null), 4500);
+  }, []);
+  useEffect(
+    () => () => {
+      if (copyStatusTimer.current) window.clearTimeout(copyStatusTimer.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     setOrder(loadOrder(signature, result.columns));
     setWidths(loadWidths(signature, result, numericCols));
     setSelected(null);
-    setRowSel(null);
+    setRowSel([]);
+    rowAnchorRef.current = null;
     setFkMenu(null);
     setSort(null);
     setEditing(null);
@@ -363,41 +432,48 @@ function ResultsGrid({
   // clipboards. Skipped while a cell's edit input is focused so native
   // copy/paste works there.
   useEffect(() => {
-    if (!selected && !rowSel) return;
+    if (!selected && rowSel.length === 0) return;
     const effectiveValue = (r: number, col: number): string | null => {
       const draftEdit = tab.pendingEdits?.[r]?.[col];
       return draftEdit !== undefined ? draftEdit : result.rows[r]?.[col] ?? null;
     };
     const width = result.columns.length;
 
-    const copyRow = (sel: RowSelection) => {
-      const values =
-        sel.kind === "new"
-          ? (tab.newRows?.[sel.index] ?? Array<string | null>(width).fill(null)).slice()
-          : Array.from({ length: width }, (_, ci) => effectiveValue(sel.index, ci));
-      const text = values.map((v) => v ?? "").join("\t");
-      rowClipboard = { text, values };
-      copyToClipboard(text);
+    const rowValues = (sel: RowSelection): Array<string | null> =>
+      sel.kind === "new"
+        ? (tab.newRows?.[sel.index] ?? Array<string | null>(width).fill(null)).slice()
+        : Array.from({ length: width }, (_, ci) => effectiveValue(sel.index, ci));
+
+    const copyRows = (sels: RowSelection[]) => {
+      const rows = sels.map(rowValues);
+      rowClipboard = rows;
+      // Tab-separated columns, newline-separated rows — pastes cleanly into
+      // spreadsheets too.
+      const text = rows.map((r) => r.map((v) => v ?? "").join("\t")).join("\n");
+      void copyToClipboard(text).then(showCopyStatus);
     };
 
-    const pasteRow = (sel: RowSelection) => {
-      if (!rowClipboard) return;
-      const values = rowClipboard.values;
-      if (sel.kind === "new") {
-        // Fill the draft from the copied row, but skip the primary key so the
-        // inserted row gets its own (typically auto-generated) key rather than
-        // colliding with the row it was copied from.
-        for (let ci = 0; ci < width; ci++) {
-          if (pkColIndices.has(ci)) continue;
-          setNewCellEdit(tab.id, sel.index, ci, values[ci] ?? null);
+    const pasteRows = (sels: RowSelection[]) => {
+      if (!rowClipboard || rowClipboard.length === 0) return;
+      const clip = rowClipboard;
+      const target = sels.length === 1 ? sels[0] : null;
+      // Paste every column verbatim, including the primary key. Conflicts (e.g.
+      // duplicate key) surface on save with the reason.
+      if (clip.length === 1 && target) {
+        const values = clip[0];
+        if (target.kind === "new") {
+          for (let ci = 0; ci < width; ci++) {
+            setNewCellEdit(tab.id, target.index, ci, values[ci] ?? null);
+          }
+        } else {
+          if (!editable) return;
+          overwriteRow(tab.id, target.index, values, result.columns.map((_, ci) => ci));
         }
-      } else {
-        if (!editable) return;
-        const editableCols = result.columns
-          .map((_, ci) => ci)
-          .filter((ci) => !pkColIndices.has(ci));
-        overwriteRow(tab.id, sel.index, values, editableCols);
+        return;
       }
+      // Multiple copied rows (or no single-row target): append them as new draft
+      // rows — the "duplicate these rows" flow.
+      addRows(tab.id, clip);
     };
 
     const onKey = (e: KeyboardEvent) => {
@@ -409,21 +485,24 @@ function ResultsGrid({
       if (!isCopy && !isPaste) return;
 
       // Whole-row selection takes precedence over a lingering cell selection.
-      if (rowSel) {
-        if (isCopy) copyRow(rowSel);
-        else {
-          e.preventDefault();
-          pasteRow(rowSel);
-        }
+      if (rowSel.length > 0) {
+        // preventDefault so the browser's own ⌘C doesn't fire a second copy
+        // event that would overwrite the clipboard with an empty selection.
+        e.preventDefault();
+        if (isCopy) copyRows(rowSel);
+        else pasteRows(rowSel);
         return;
       }
       if (!selected) return;
 
       if (isCopy) {
+        // preventDefault so the browser's own ⌘C doesn't fire a second copy
+        // event that would overwrite what we just wrote.
+        e.preventDefault();
         const value = effectiveValue(selected.r, selected.col);
         const text = value ?? "";
         cellClipboard = { text, value };
-        copyToClipboard(text);
+        void copyToClipboard(text).then(showCopyStatus);
       } else {
         if (!editable) return;
         const { r, col } = selected;
@@ -455,6 +534,8 @@ function ResultsGrid({
     setCellEdit,
     setNewCellEdit,
     overwriteRow,
+    addRows,
+    showCopyStatus,
   ]);
 
   // A fixed row-number/selection gutter precedes the data columns.
@@ -633,13 +714,22 @@ function ResultsGrid({
     selectRow({ kind: "new", index });
   };
   const handleRemoveRow = () => {
-    if (!rowSel) return;
-    if (rowSel.kind === "new") {
-      removeNewRow(tab.id, rowSel.index);
-      setRowSel(null);
-    } else {
-      void deleteExistingRow(tab.id, rowSel.index);
-    }
+    if (rowSel.length === 0) return;
+    // Discard any selected draft rows locally (highest index first so earlier
+    // ones don't shift), then delete the selected existing rows with one confirm.
+    const newIdxs = rowSel
+      .filter((s) => s.kind === "new")
+      .map((s) => s.index)
+      .sort((a, b) => b - a);
+    for (const idx of newIdxs) removeNewRow(tab.id, idx);
+
+    const existingIdxs = rowSel
+      .filter((s) => s.kind === "existing")
+      .map((s) => s.index);
+    if (existingIdxs.length > 0) void deleteExistingRows(tab.id, existingIdxs);
+
+    setRowSel([]);
+    rowAnchorRef.current = null;
   };
 
   return (
@@ -692,17 +782,15 @@ function ResultsGrid({
               "grid__row" +
               (displayPos % 2 === 1 ? " grid__row--zebra" : "") +
               (selected?.r === r ? " grid__row--active" : "") +
-              (rowSel?.kind === "existing" && rowSel.index === r
-                ? " grid__row--rowsel"
-                : "") +
+              (isRowSelected("existing", r) ? " grid__row--rowsel" : "") +
               (rowDirty ? " grid__row--dirty" : "")
             }
             style={gridStyle}
           >
             <div
               className="grid__gutter"
-              title="Click to select the whole row — ⌘/Ctrl+C to copy, ⌘/Ctrl+V to paste onto another row"
-              onClick={() => selectRow({ kind: "existing", index: r })}
+              title="Click to select the row · Shift-click for a range · ⌘/Ctrl-click to add · ⌘C copies, ⌘V pastes/duplicates"
+              onClick={(e) => selectRowFromGutter(e, "existing", r)}
             >
               {displayPos + 1}
             </div>
@@ -789,7 +877,7 @@ function ResultsGrid({
                     // A single click just highlights the cell — it's then
                     // available to copy with ⌘/Ctrl+C (double-click to edit).
                     setSelected({ r, col: colIndex });
-                    setRowSel(null);
+                    setRowSel([]);
                   }}
                   onDoubleClick={() => {
                     if (!isCellEditable) return;
@@ -815,16 +903,14 @@ function ResultsGrid({
               key={`new-${ni}`}
               className={
                 "grid__row grid__row--new" +
-                (rowSel?.kind === "new" && rowSel.index === ni
-                  ? " grid__row--rowsel"
-                  : "")
+                (isRowSelected("new", ni) ? " grid__row--rowsel" : "")
               }
               style={gridStyle}
             >
               <div
                 className="grid__gutter grid__gutter--new"
                 title="New row — commit with Update to insert it"
-                onClick={() => selectRow({ kind: "new", index: ni })}
+                onClick={(e) => selectRowFromGutter(e, "new", ni)}
               >
                 +
               </div>
@@ -965,6 +1051,29 @@ function ResultsGrid({
             </div>
           );
         })()}
+
+      {copyStatus && (
+        <div
+          className={
+            "copy-status" + (copyStatus.ok ? "" : " copy-status--fail")
+          }
+        >
+          <div className="copy-status__head">
+            {copyStatus.ok ? "Copied ✓" : "Copy FAILED ✗"}
+          </div>
+          <div className="copy-status__value mono">
+            {copyStatus.text === "" ? "(empty)" : copyStatus.text}
+          </div>
+          <div className="copy-status__methods mono">
+            {`exec:${copyStatus.execOk ? "✓" : "✗"}  nav:${
+              copyStatus.navOk ? "✓" : "✗"
+            }  backend:${copyStatus.backendOk ? "✓" : "✗"}`}
+          </div>
+          {copyStatus.error && (
+            <div className="copy-status__error mono">{copyStatus.error}</div>
+          )}
+        </div>
+      )}
     </div>
 
     {isTable && (
@@ -999,15 +1108,15 @@ function ResultsGrid({
             </button>
             <button
               className="table-toolbar__btn table-toolbar__btn--danger"
-              disabled={!rowSel}
+              disabled={rowSel.length === 0}
               onClick={handleRemoveRow}
               title={
-                rowSel
-                  ? "Remove the selected row"
+                rowSel.length > 0
+                  ? `Remove the selected row${rowSel.length > 1 ? "s" : ""}`
                   : "Select a row (click its number) to remove it"
               }
             >
-              － Remove row
+              － Remove {rowSel.length > 1 ? `${rowSel.length} rows` : "row"}
             </button>
           </div>
         )}
@@ -1028,6 +1137,38 @@ function fkTooltip(nav: ColNav): string {
     parts.push(`Referenced by ${n} ${n === 1 ? "table" : "columns"}`);
   }
   return parts.join(" · ") + " — right-click to navigate";
+}
+
+/**
+ * A dismissible footer banner explaining why the last insert/update/delete
+ * failed (duplicate key, foreign-key constraint, etc.). Shown for delete errors
+ * even when there are no pending edits, and above the pending bar on a failed
+ * commit. Unlike the old truncated inline error, the full message wraps here.
+ */
+function MutationErrorBar({ tab }: { tab: QueryTab }) {
+  const clearUpdateError = useStore((s) => s.clearUpdateError);
+  const err = tab.updateError!;
+  const detail = [err.code ? `ERROR ${err.code}` : null, err.hint ?? null]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <div className="mutation-error">
+      <span className="mutation-error__glyph">✕</span>
+      <div className="mutation-error__body">
+        <span className="mutation-error__message">{err.message}</span>
+        {detail && <span className="mutation-error__detail mono">{detail}</span>}
+      </div>
+      <button
+        className="mutation-error__close"
+        onClick={() => clearUpdateError(tab.id)}
+        title="Dismiss"
+        aria-label="Dismiss error"
+      >
+        ×
+      </button>
+    </div>
+  );
 }
 
 /** Inline, calm error strip anchored where results would appear (per spec). */
@@ -1052,7 +1193,7 @@ function ErrorStrip({ tab }: { tab: QueryTab }) {
         <div className="error-strip__actions">
           <button
             className="error-strip__btn"
-            onClick={() => copyToClipboard(err.message)}
+            onClick={() => void copyToClipboard(err.message)}
           >
             Copy
           </button>

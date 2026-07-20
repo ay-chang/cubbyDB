@@ -120,30 +120,94 @@ export function readClipboard(): Promise<string> {
   return invoke("read_clipboard");
 }
 
+/** Per-method outcome of a copy attempt, for on-screen diagnostics. */
+export interface CopyResult {
+  text: string;
+  /** Any method wrote the text successfully. */
+  ok: boolean;
+  execOk: boolean;
+  navOk: boolean;
+  backendOk: boolean;
+  /** First error message from the async methods, if any failed. */
+  error: string | null;
+}
+
 /**
- * Copy text to the clipboard as reliably as possible from the Tauri webview.
- * Runs a synchronous, user-gesture-based `execCommand("copy")` (which works
- * inside WKWebView with no backend at all — so it survives a not-yet-restarted
- * dev build) AND fires the backend command as a second, best-effort path.
- * Call it synchronously from within a user gesture (e.g. a keydown handler).
+ * Copy text to the clipboard as reliably as possible from the Tauri webview,
+ * trying every available method (they all write the same text, so redundancy is
+ * harmless). Call it synchronously from within a user gesture (e.g. a keydown
+ * handler) so the `execCommand` path keeps its user activation.
+ *
+ *   1. `execCommand("copy")` — synchronous, no backend needed.
+ *   2. `navigator.clipboard.writeText` — the standard async API.
+ *   3. the backend `write_clipboard` command — needs the app rebuilt.
+ *
+ * Resolves with which methods worked, so callers can show a status.
  */
-export function copyToClipboard(text: string): void {
+export function copyToClipboard(text: string): Promise<CopyResult> {
+  // Intercept the synchronous `copy` event that `execCommand("copy")` fires and
+  // write the value with `clipboardData.setData()`. Unlike "select an off-screen
+  // textarea and let WebKit read it" (which WKWebView reports as succeeding while
+  // copying nothing), setting the data explicitly inside the copy event IS
+  // honored by WebKit — it's the same path a manual ⌘C takes. A momentarily
+  // selected textarea guarantees `execCommand` actually fires the event.
+  let execOk = false;
   try {
+    const active = document.activeElement as HTMLElement | null;
     const ta = document.createElement("textarea");
     ta.value = text;
     ta.setAttribute("readonly", "");
-    ta.style.position = "fixed";
-    ta.style.top = "-9999px";
-    ta.style.opacity = "0";
+    ta.style.contain = "strict";
+    ta.style.position = "absolute";
+    ta.style.left = "-9999px";
+    ta.style.top = `${window.scrollY}px`;
+    ta.style.fontSize = "12pt";
     document.body.appendChild(ta);
     ta.select();
     ta.setSelectionRange(0, text.length);
+
+    const onCopy = (e: ClipboardEvent) => {
+      e.clipboardData?.setData("text/plain", text);
+      e.preventDefault();
+      execOk = true;
+    };
+    document.addEventListener("copy", onCopy, true);
     document.execCommand("copy");
+    document.removeEventListener("copy", onCopy, true);
+
     document.body.removeChild(ta);
-  } catch {
-    // execCommand unavailable — the backend path below is the fallback.
+    if (active && typeof active.focus === "function") active.focus();
+  } catch (e) {
+    console.warn("[clipboard] copy-event write failed:", e);
   }
-  void writeClipboard(text).catch(() => {});
+
+  let error: string | null = null;
+
+  const navPromise: Promise<boolean> = navigator?.clipboard?.writeText
+    ? navigator.clipboard
+        .writeText(text)
+        .then(() => true)
+        .catch((e) => {
+          error = error ?? `navigator: ${errorMessage(e)}`;
+          return false;
+        })
+    : Promise.resolve(false);
+
+  const backendPromise: Promise<boolean> = writeClipboard(text)
+    .then(() => true)
+    .catch((e) => {
+      error = error ?? `backend: ${errorMessage(e)}`;
+      return false;
+    });
+
+  return Promise.all([navPromise, backendPromise]).then(([navOk, backendOk]) => ({
+    text,
+    ok: execOk || navOk || backendOk,
+    execOk,
+    navOk,
+    backendOk,
+    error,
+  }));
 }
 
 export function queryHistory(limit?: number): Promise<HistoryEntry[]> {

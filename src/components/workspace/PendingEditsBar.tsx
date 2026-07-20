@@ -65,11 +65,6 @@ export function PendingEditsBar({ tab }: { tab: QueryTab }) {
         <span className="pending-bar__dot" />
         {summary} unsaved
       </span>
-      {tab.updateError && (
-        <span className="pending-bar__error mono" title={tab.updateError.message}>
-          {tab.updateError.message}
-        </span>
-      )}
       <div className="pending-bar__actions">
         <button
           className="pending-bar__discard"
