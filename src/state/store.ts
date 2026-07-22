@@ -11,8 +11,8 @@ import { create } from "zustand";
 
 import * as api from "../api/backend";
 import type {
+  ActiveConnectionInfo,
   ColumnValue,
-  CurrentConnection,
   DbError,
   HistoryEntry,
   LastConnection,
@@ -23,10 +23,12 @@ import type {
 import { errorMessage, isDbError } from "../api/backend";
 
 /**
- * A tab is either a `query` tab (SQL editor + results) or a `table` tab
- * (results only — opened by clicking a table in the tree, no editor).
+ * A tab is a `query` tab (SQL editor + results), a `table` tab (results
+ * only — opened by clicking a table in the tree, no editor), or a
+ * `structure` tab (a read-only columns/indexes/constraints view for one
+ * table, opened via the schema tree's context menu).
  */
-export type TabKind = "query" | "table";
+export type TabKind = "query" | "table" | "structure";
 
 /** One open tab and its most recent execution. */
 export interface QueryTab {
@@ -79,10 +81,114 @@ export function tabHasPendingEdits(tab: QueryTab): boolean {
   return tabHasCellEdits(tab) || (tab.newRows?.length ?? 0) > 0;
 }
 
+/**
+ * One live database connection's whole workspace — its tabs, schema tree,
+ * and identity. Several can exist at once (the "connection switcher"); only
+ * one is visible at a time, chosen by `AppStore.activeConnectionId`, but
+ * every slot's session stays open on the backend regardless of which is
+ * visible.
+ */
+export interface ConnectionSlot {
+  sessionId: string;
+  current: ActiveConnectionInfo;
+  schema: SchemaNode[];
+  schemaLoading: boolean;
+  schemaError: string | null;
+  tabs: QueryTab[];
+  activeTabId: string | null;
+}
+
 type View = "connection" | "workspace";
 
 /** The active color theme. Persisted across launches. */
 export type Theme = "light" | "dark";
+
+/** The results-grid data font. Persisted across launches. */
+export type TableFont = "sans" | "mono" | "serif" | "system";
+
+/** CSS font-family stacks for each `TableFont` option. */
+export const TABLE_FONT_STACKS: Record<TableFont, string> = {
+  sans: "var(--font-sans)",
+  mono: "var(--font-mono)",
+  serif: '"Iowan Old Style", Georgia, Cambria, "Times New Roman", Times, serif',
+  system:
+    '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+};
+
+/** The results-grid data font size, in px. Persisted across launches. */
+export type TableFontSize = number;
+
+/** Selectable font sizes (px) offered in the Settings dropdown. */
+export const TABLE_FONT_SIZE_OPTIONS: number[] = [
+  10, 10.5, 11, 11.5, 12, 12.5, 13, 13.5, 14, 15, 16, 17, 18,
+];
+
+/** The longstanding default — existing users see no visual change. */
+export const DEFAULT_TABLE_FONT_SIZE: TableFontSize = 12.5;
+
+/** The SQL editor's font size, in px. Persisted across launches. */
+export type EditorFontSize = number;
+
+/** Selectable editor font sizes (px) offered in the Settings dropdown. */
+export const EDITOR_FONT_SIZE_OPTIONS: number[] = [
+  10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22,
+];
+
+/** The longstanding default — existing users see no visual change. */
+export const DEFAULT_EDITOR_FONT_SIZE: EditorFontSize = 13;
+
+/** The SQL editor's default font — unlike the table (which defaults to sans),
+ *  the editor defaults to the classic code font, matching longstanding
+ *  behavior. Reuses `TableFont`/`TABLE_FONT_STACKS`: same 4 named stacks, just
+ *  applied through a different CSS variable. */
+export const DEFAULT_EDITOR_FONT: TableFont = "mono";
+
+/** The results-grid row height, in px. Persisted across launches. */
+export type TableRowHeight = number;
+
+/** Selectable row heights (px) offered in the Settings dropdown, with a
+ *  density label for each. */
+export const TABLE_ROW_HEIGHT_OPTIONS: { px: number; label: string }[] = [
+  { px: 26, label: "Compact" },
+  { px: 28, label: "Cozy" },
+  { px: 32, label: "Comfortable" },
+  { px: 36, label: "Relaxed" },
+  { px: 40, label: "Spacious" },
+  { px: 44, label: "Extra spacious" },
+];
+
+/** The longstanding default — existing users see no visual change. */
+export const DEFAULT_TABLE_ROW_HEIGHT: TableRowHeight = 32;
+
+/** How a SQL NULL renders in the results grid. Persisted across launches. */
+export type NullDisplay = "text" | "dash" | "blank";
+
+/** Display label for each `NullDisplay` option, in both the Settings dropdown
+ *  and the grid cell itself. */
+export const NULL_DISPLAY_LABELS: Record<NullDisplay, string> = {
+  text: "NULL",
+  dash: "—",
+  blank: "",
+};
+
+/** A single-character field/value separator, used for CSV export and for
+ *  copying rows to the clipboard. Persisted across launches. */
+export type Delimiter = "," | "\t" | ";";
+
+/** Display label for each `Delimiter` option in the Settings dropdowns. */
+export const DELIMITER_LABELS: Record<Delimiter, string> = {
+  ",": "Comma (,)",
+  "\t": "Tab",
+  ";": "Semicolon (;)",
+};
+
+/** `Delimiter` options in a stable, explicit display order. */
+export const DELIMITER_OPTIONS: Delimiter[] = [",", "\t", ";"];
+
+/** How many entries the History panel fetches/shows. This is a *display*
+ *  limit only — it does not change the backend's on-disk retention cap. */
+export const HISTORY_LIMIT_OPTIONS: number[] = [50, 100, 200, 500, 1000];
+export const DEFAULT_HISTORY_LIMIT = 200;
 
 interface ConfirmDialogState {
   message: string;
@@ -101,14 +207,11 @@ interface AppStore {
   reconnectError: string | null;
 
   savedConnections: SavedConnection[];
-  current: CurrentConnection | null;
 
-  schema: SchemaNode[];
-  schemaLoading: boolean;
-  schemaError: string | null;
-
-  tabs: QueryTab[];
-  activeTabId: string | null;
+  /** Every live connection's workspace, keyed by session id. */
+  connections: Record<string, ConnectionSlot>;
+  /** Which connection's workspace is currently visible. */
+  activeConnectionId: string | null;
 
   history: HistoryEntry[];
   historyOpen: boolean;
@@ -118,16 +221,58 @@ interface AppStore {
 
   /** Active color theme, applied to the document root. */
   theme: Theme;
+  /** Results-grid data font, applied to the document root. */
+  tableFont: TableFont;
+  /** Results-grid data font size, applied to the document root. */
+  tableFontSize: TableFontSize;
+  /** Results-grid row height, applied to the document root. */
+  tableRowHeight: TableRowHeight;
+  /** Whether alternating results-grid rows are tinted. */
+  tableZebra: boolean;
+  /** Whether the results grid shows row/cell divider lines. */
+  tableCellBorders: boolean;
+  /** Whether long cell text wraps instead of truncating with an ellipsis. */
+  tableWrapText: boolean;
+  /** How SQL NULL renders in results-grid cells. */
+  nullDisplay: NullDisplay;
+  /** SQL editor font, applied to the document root. */
+  editorFont: TableFont;
+  /** SQL editor font size, applied to the document root. */
+  editorFontSize: EditorFontSize;
+  /** Whether long lines wrap in the SQL editor instead of scrolling. */
+  editorLineWrap: boolean;
+  /** Whether the top bar hides the connection's Postgres-version subtext. */
+  compactTopBar: boolean;
+  /** Whether previously open tabs are restored on launch. */
+  restoreTabsOnLaunch: boolean;
+  /** Placeholder SQL for new query tabs. */
+  starterSql: string;
+  /** Whether the schema tree refreshes automatically after connecting. */
+  autoRefreshSchema: boolean;
+  /** How many entries the History panel fetches/shows. */
+  historyLimit: number;
+  /** Field separator used for CSV export. */
+  csvDelimiter: Delimiter;
+  /** Field separator used when copying rows to the clipboard. */
+  rowCopyDelimiter: Delimiter;
   /** True while the settings modal is open. */
   settingsOpen: boolean;
 
   // --- lifecycle ---
   initialize: () => Promise<void>;
   loadSavedConnections: () => Promise<void>;
+  /** Open a new connection and add it as a slot — never replaces an
+   *  existing one, so connecting to a second database leaves the first
+   *  live. Becomes the active (visible) slot. */
   connectTo: (
     connection: Pick<SavedConnection, "params" | "name"> & { id?: string },
   ) => Promise<void>;
-  disconnect: () => Promise<void>;
+  /** Close one connection (defaults to the active one). If others remain
+   *  open, the view stays on the workspace, switched to one of them. */
+  disconnect: (sessionId?: string) => Promise<void>;
+  /** Switch which already-open connection's workspace is visible. No
+   *  backend call — every open connection stays live regardless. */
+  switchConnection: (sessionId: string) => void;
 
   // --- schema ---
   refreshSchema: () => Promise<void>;
@@ -138,8 +283,23 @@ interface AppStore {
   setActiveTab: (id: string) => void;
   reorderTab: (fromIndex: number, toIndex: number) => void;
   setTabSql: (id: string, sql: string) => void;
-  runTab: (id: string) => Promise<void>;
+  /** Run a tab's query. `sqlOverride`, if given, is sent to the backend
+   *  instead of the tab's own `sql` (e.g. just the statement under the
+   *  cursor, or a selection) — the tab's editor buffer is never changed by
+   *  this, only what gets executed and logged to history. */
+  runTab: (id: string, sqlOverride?: string) => Promise<void>;
+  /** Ask the server to interrupt whatever's running on the active
+   *  connection (one query executing at a time per connection) — whichever
+   *  tab's `runTab` call is actually in flight there will see the resulting
+   *  "canceling statement due to user request" error through its normal
+   *  error handling; no tab-specific bookkeeping needed here. A background
+   *  (non-visible) connection's query isn't affected. */
+  cancelQuery: () => void;
   openSelectTop: (schema: string, table: string) => Promise<void>;
+  /** Open (or focus) a read-only "structure" tab for a table — columns,
+   *  indexes, and check constraints. No query is run; `TableStructurePane`
+   *  fetches its own data once the tab is open. */
+  openTableStructure: (schema: string, table: string) => Promise<void>;
   setTableFilter: (id: string, filter: string) => Promise<void>;
   openTableWithFilter: (
     schema: string,
@@ -158,6 +318,10 @@ interface AppStore {
   commitEdits: (tabId: string) => Promise<void>;
   /** Dismiss the last insert/update/delete error shown for a tab. */
   clearUpdateError: (tabId: string) => void;
+  /** Show an error in the same banner as a failed insert/update/delete — used
+   *  for things that aren't a database error but belong in the same "why
+   *  didn't my last data change work" slot (e.g. a malformed CSV import). */
+  setUpdateError: (tabId: string, error: DbError) => void;
 
   // --- row insert / delete / paste (table tabs) ---
   /** Append a blank draft row to be inserted on commit. */
@@ -197,6 +361,23 @@ interface AppStore {
   // --- appearance / settings ---
   setTheme: (theme: Theme) => void;
   toggleTheme: () => void;
+  setTableFont: (font: TableFont) => void;
+  setTableFontSize: (size: TableFontSize) => void;
+  setTableRowHeight: (height: TableRowHeight) => void;
+  setTableZebra: (enabled: boolean) => void;
+  setTableCellBorders: (enabled: boolean) => void;
+  setTableWrapText: (enabled: boolean) => void;
+  setNullDisplay: (display: NullDisplay) => void;
+  setEditorFont: (font: TableFont) => void;
+  setEditorFontSize: (size: EditorFontSize) => void;
+  setEditorLineWrap: (enabled: boolean) => void;
+  setCompactTopBar: (enabled: boolean) => void;
+  setRestoreTabsOnLaunch: (enabled: boolean) => void;
+  setStarterSql: (sql: string) => void;
+  setAutoRefreshSchema: (enabled: boolean) => void;
+  setHistoryLimit: (limit: number) => void;
+  setCsvDelimiter: (delimiter: Delimiter) => void;
+  setRowCopyDelimiter: (delimiter: Delimiter) => void;
   openSettings: () => void;
   closeSettings: () => void;
 }
@@ -207,7 +388,10 @@ function nextTabId(): string {
   return `tab-${tabCounter}`;
 }
 
-const STARTER_SQL = "-- Write SQL here, then press Cmd/Ctrl+Enter to run.\nSELECT 1;\n";
+/** The default new-query-tab placeholder — user-editable in Settings >
+ *  General. */
+export const DEFAULT_STARTER_SQL =
+  "-- Write SQL here, then press Cmd/Ctrl+Enter to run.\nSELECT 1;\n";
 
 function makeTab(opts?: {
   title?: string;
@@ -221,7 +405,7 @@ function makeTab(opts?: {
     id: nextTabId(),
     kind: opts?.kind ?? "query",
     title: opts?.title ?? "untitled.sql",
-    sql: opts?.sql ?? STARTER_SQL,
+    sql: opts?.sql ?? DEFAULT_STARTER_SQL,
     result: null,
     error: null,
     running: false,
@@ -234,6 +418,23 @@ function makeTab(opts?: {
 
 const TABS_KEY = "cubbydb:openTabs";
 const THEME_KEY = "cubbydb:theme";
+const TABLE_FONT_KEY = "cubbydb:tableFont";
+const TABLE_FONT_SIZE_KEY = "cubbydb:tableFontSize";
+const TABLE_ROW_HEIGHT_KEY = "cubbydb:tableRowHeight";
+const TABLE_ZEBRA_KEY = "cubbydb:tableZebra";
+const TABLE_CELL_BORDERS_KEY = "cubbydb:tableCellBorders";
+const TABLE_WRAP_TEXT_KEY = "cubbydb:tableWrapText";
+const NULL_DISPLAY_KEY = "cubbydb:nullDisplay";
+const EDITOR_FONT_KEY = "cubbydb:editorFont";
+const EDITOR_FONT_SIZE_KEY = "cubbydb:editorFontSize";
+const EDITOR_LINE_WRAP_KEY = "cubbydb:editorLineWrap";
+const COMPACT_TOP_BAR_KEY = "cubbydb:compactTopBar";
+const RESTORE_TABS_KEY = "cubbydb:restoreTabsOnLaunch";
+const STARTER_SQL_KEY = "cubbydb:starterSql";
+const AUTO_REFRESH_SCHEMA_KEY = "cubbydb:autoRefreshSchema";
+const HISTORY_LIMIT_KEY = "cubbydb:historyLimit";
+const CSV_DELIMITER_KEY = "cubbydb:csvDelimiter";
+const ROW_COPY_DELIMITER_KEY = "cubbydb:rowCopyDelimiter";
 
 /** Read the saved theme, defaulting to light. */
 function loadTheme(): Theme {
@@ -258,9 +459,380 @@ function applyTheme(theme: Theme) {
   }
 }
 
-// Apply the persisted theme as early as possible (on module load) so there's no
-// flash of the wrong theme before the store mounts.
+/** Read the saved table font, defaulting to the app's sans stack. */
+function loadTableFont(): TableFont {
+  try {
+    const saved = localStorage.getItem(TABLE_FONT_KEY);
+    return saved && saved in TABLE_FONT_STACKS ? (saved as TableFont) : "sans";
+  } catch {
+    return "sans";
+  }
+}
+
+/** Reflect the table font onto the `--table-font` CSS variable and persist it. */
+function applyTableFont(font: TableFont) {
+  try {
+    document.documentElement.style.setProperty("--table-font", TABLE_FONT_STACKS[font]);
+  } catch {
+    // No document (e.g. non-DOM context) — non-fatal.
+  }
+  try {
+    localStorage.setItem(TABLE_FONT_KEY, font);
+  } catch {
+    // Storage unavailable — non-fatal.
+  }
+}
+
+/** Read the saved table font size (px), defaulting to the standard size. */
+function loadTableFontSize(): TableFontSize {
+  try {
+    const saved = parseFloat(localStorage.getItem(TABLE_FONT_SIZE_KEY) ?? "");
+    return Number.isFinite(saved) ? saved : DEFAULT_TABLE_FONT_SIZE;
+  } catch {
+    return DEFAULT_TABLE_FONT_SIZE;
+  }
+}
+
+/** Reflect the table font size onto the `--table-font-size` CSS variable and
+ *  persist it. */
+function applyTableFontSize(size: TableFontSize) {
+  try {
+    document.documentElement.style.setProperty("--table-font-size", `${size}px`);
+  } catch {
+    // No document (e.g. non-DOM context) — non-fatal.
+  }
+  try {
+    localStorage.setItem(TABLE_FONT_SIZE_KEY, String(size));
+  } catch {
+    // Storage unavailable — non-fatal.
+  }
+}
+
+/** Read the saved row height (px), defaulting to the standard height. */
+function loadTableRowHeight(): TableRowHeight {
+  try {
+    const saved = parseFloat(localStorage.getItem(TABLE_ROW_HEIGHT_KEY) ?? "");
+    return Number.isFinite(saved) ? saved : DEFAULT_TABLE_ROW_HEIGHT;
+  } catch {
+    return DEFAULT_TABLE_ROW_HEIGHT;
+  }
+}
+
+/** Reflect the row height onto the `--h-grid-row` CSS variable and persist it. */
+function applyTableRowHeight(height: TableRowHeight) {
+  try {
+    document.documentElement.style.setProperty("--h-grid-row", `${height}px`);
+  } catch {
+    // No document (e.g. non-DOM context) — non-fatal.
+  }
+  try {
+    localStorage.setItem(TABLE_ROW_HEIGHT_KEY, String(height));
+  } catch {
+    // Storage unavailable — non-fatal.
+  }
+}
+
+/** Read the saved zebra-striping preference, defaulting to on. */
+function loadTableZebra(): boolean {
+  try {
+    return localStorage.getItem(TABLE_ZEBRA_KEY) !== "false";
+  } catch {
+    return true;
+  }
+}
+
+/** Reflect zebra striping onto the `--table-zebra` CSS variable and persist
+ *  it. Off swaps the stripe color for the base row background, so alternating
+ *  rows blend in rather than needing the row markup itself to change. */
+function applyTableZebra(enabled: boolean) {
+  try {
+    document.documentElement.style.setProperty(
+      "--table-zebra",
+      enabled ? "var(--surface-raised)" : "var(--surface)",
+    );
+  } catch {
+    // No document (e.g. non-DOM context) — non-fatal.
+  }
+  try {
+    localStorage.setItem(TABLE_ZEBRA_KEY, String(enabled));
+  } catch {
+    // Storage unavailable — non-fatal.
+  }
+}
+
+/** Read the saved gridlines preference, defaulting to on. */
+function loadTableCellBorders(): boolean {
+  try {
+    return localStorage.getItem(TABLE_CELL_BORDERS_KEY) !== "false";
+  } catch {
+    return true;
+  }
+}
+
+/** Reflect gridlines onto the `--table-border-row`/`--table-border-cell` CSS
+ *  variables and persist it. Off makes both transparent. */
+function applyTableCellBorders(enabled: boolean) {
+  try {
+    document.documentElement.style.setProperty(
+      "--table-border-row",
+      enabled ? "var(--border-row)" : "transparent",
+    );
+    document.documentElement.style.setProperty(
+      "--table-border-cell",
+      enabled ? "var(--border-cell)" : "transparent",
+    );
+  } catch {
+    // No document (e.g. non-DOM context) — non-fatal.
+  }
+  try {
+    localStorage.setItem(TABLE_CELL_BORDERS_KEY, String(enabled));
+  } catch {
+    // Storage unavailable — non-fatal.
+  }
+}
+
+/** Read the saved wrap-text preference, defaulting to off (truncate). */
+function loadTableWrapText(): boolean {
+  try {
+    return localStorage.getItem(TABLE_WRAP_TEXT_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+/** Reflect wrap-text onto the `--table-white-space`/`--table-cell-overflow`
+ *  CSS variables and persist it. Wrapping also switches overflow to visible so
+ *  the row (a CSS grid track with no fixed height) can grow to fit. */
+function applyTableWrapText(enabled: boolean) {
+  try {
+    document.documentElement.style.setProperty(
+      "--table-white-space",
+      enabled ? "normal" : "nowrap",
+    );
+    document.documentElement.style.setProperty(
+      "--table-cell-overflow",
+      enabled ? "visible" : "hidden",
+    );
+  } catch {
+    // No document (e.g. non-DOM context) — non-fatal.
+  }
+  try {
+    localStorage.setItem(TABLE_WRAP_TEXT_KEY, String(enabled));
+  } catch {
+    // Storage unavailable — non-fatal.
+  }
+}
+
+/** Read the saved NULL display style, defaulting to the literal "NULL" text. */
+function loadNullDisplay(): NullDisplay {
+  try {
+    const saved = localStorage.getItem(NULL_DISPLAY_KEY);
+    return saved && saved in NULL_DISPLAY_LABELS ? (saved as NullDisplay) : "text";
+  } catch {
+    return "text";
+  }
+}
+
+/** Persist the NULL display style. Purely a store value read directly by the
+ *  grid's render logic — no CSS variable involved. */
+function saveNullDisplay(display: NullDisplay) {
+  try {
+    localStorage.setItem(NULL_DISPLAY_KEY, display);
+  } catch {
+    // Storage unavailable — non-fatal.
+  }
+}
+
+/** Read the saved editor font, defaulting to the classic code (mono) stack. */
+function loadEditorFont(): TableFont {
+  try {
+    const saved = localStorage.getItem(EDITOR_FONT_KEY);
+    return saved && saved in TABLE_FONT_STACKS
+      ? (saved as TableFont)
+      : DEFAULT_EDITOR_FONT;
+  } catch {
+    return DEFAULT_EDITOR_FONT;
+  }
+}
+
+/** Reflect the editor font onto the `--editor-font` CSS variable and persist
+ *  it. */
+function applyEditorFont(font: TableFont) {
+  try {
+    document.documentElement.style.setProperty("--editor-font", TABLE_FONT_STACKS[font]);
+  } catch {
+    // No document (e.g. non-DOM context) — non-fatal.
+  }
+  try {
+    localStorage.setItem(EDITOR_FONT_KEY, font);
+  } catch {
+    // Storage unavailable — non-fatal.
+  }
+}
+
+/** Read the saved editor font size (px), defaulting to the standard size. */
+function loadEditorFontSize(): EditorFontSize {
+  try {
+    const saved = parseFloat(localStorage.getItem(EDITOR_FONT_SIZE_KEY) ?? "");
+    return Number.isFinite(saved) ? saved : DEFAULT_EDITOR_FONT_SIZE;
+  } catch {
+    return DEFAULT_EDITOR_FONT_SIZE;
+  }
+}
+
+/** Reflect the editor font size onto the `--editor-font-size` CSS variable and
+ *  persist it. */
+function applyEditorFontSize(size: EditorFontSize) {
+  try {
+    document.documentElement.style.setProperty("--editor-font-size", `${size}px`);
+  } catch {
+    // No document (e.g. non-DOM context) — non-fatal.
+  }
+  try {
+    localStorage.setItem(EDITOR_FONT_SIZE_KEY, String(size));
+  } catch {
+    // Storage unavailable — non-fatal.
+  }
+}
+
+/** Read the saved editor line-wrap preference, defaulting to off (scroll). */
+function loadEditorLineWrap(): boolean {
+  try {
+    return localStorage.getItem(EDITOR_LINE_WRAP_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+/** Persist the editor line-wrap preference. Consumed directly by `SqlEditor`
+ *  (it swaps in the CodeMirror `lineWrapping` extension) — no CSS involved. */
+function saveEditorLineWrap(enabled: boolean) {
+  try {
+    localStorage.setItem(EDITOR_LINE_WRAP_KEY, String(enabled));
+  } catch {
+    // Storage unavailable — non-fatal.
+  }
+}
+
+/** Read the saved compact-top-bar preference, defaulting to off. */
+function loadCompactTopBar(): boolean {
+  try {
+    return localStorage.getItem(COMPACT_TOP_BAR_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+/** Persist the compact-top-bar preference. Consumed directly by `TopBar` — no
+ *  CSS involved. */
+function saveCompactTopBar(enabled: boolean) {
+  try {
+    localStorage.setItem(COMPACT_TOP_BAR_KEY, String(enabled));
+  } catch {
+    // Storage unavailable — non-fatal.
+  }
+}
+
+/** Read the saved restore-tabs-on-launch preference, defaulting to on. */
+function loadRestoreTabsOnLaunch(): boolean {
+  try {
+    return localStorage.getItem(RESTORE_TABS_KEY) !== "false";
+  } catch {
+    return true;
+  }
+}
+
+function saveRestoreTabsOnLaunch(enabled: boolean) {
+  try {
+    localStorage.setItem(RESTORE_TABS_KEY, String(enabled));
+  } catch {
+    // Storage unavailable — non-fatal.
+  }
+}
+
+/** Read the saved starter-SQL template, defaulting to the built-in one. */
+function loadStarterSql(): string {
+  try {
+    return localStorage.getItem(STARTER_SQL_KEY) ?? DEFAULT_STARTER_SQL;
+  } catch {
+    return DEFAULT_STARTER_SQL;
+  }
+}
+
+function saveStarterSql(sql: string) {
+  try {
+    localStorage.setItem(STARTER_SQL_KEY, sql);
+  } catch {
+    // Storage unavailable — non-fatal.
+  }
+}
+
+/** Read the saved auto-refresh-schema preference, defaulting to on. */
+function loadAutoRefreshSchema(): boolean {
+  try {
+    return localStorage.getItem(AUTO_REFRESH_SCHEMA_KEY) !== "false";
+  } catch {
+    return true;
+  }
+}
+
+function saveAutoRefreshSchema(enabled: boolean) {
+  try {
+    localStorage.setItem(AUTO_REFRESH_SCHEMA_KEY, String(enabled));
+  } catch {
+    // Storage unavailable — non-fatal.
+  }
+}
+
+/** Read the saved History-panel fetch limit, defaulting to 200. */
+function loadHistoryLimit(): number {
+  try {
+    const saved = parseInt(localStorage.getItem(HISTORY_LIMIT_KEY) ?? "", 10);
+    return Number.isFinite(saved) && saved > 0 ? saved : DEFAULT_HISTORY_LIMIT;
+  } catch {
+    return DEFAULT_HISTORY_LIMIT;
+  }
+}
+
+function saveHistoryLimit(limit: number) {
+  try {
+    localStorage.setItem(HISTORY_LIMIT_KEY, String(limit));
+  } catch {
+    // Storage unavailable — non-fatal.
+  }
+}
+
+/** Read a saved delimiter preference from the given key, falling back to
+ *  `fallback` if unset or invalid. */
+function loadDelimiter(key: string, fallback: Delimiter): Delimiter {
+  try {
+    const saved = localStorage.getItem(key);
+    return saved && saved in DELIMITER_LABELS ? (saved as Delimiter) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function saveDelimiter(key: string, delimiter: Delimiter) {
+  try {
+    localStorage.setItem(key, delimiter);
+  } catch {
+    // Storage unavailable — non-fatal.
+  }
+}
+
+// Apply the persisted theme/table font/font size/row height/zebra/borders/wrap
+// /editor font/editor size as early as possible (on module load) so there's no
+// flash of the wrong appearance before the store mounts.
 applyTheme(loadTheme());
+applyTableFont(loadTableFont());
+applyTableFontSize(loadTableFontSize());
+applyTableRowHeight(loadTableRowHeight());
+applyTableZebra(loadTableZebra());
+applyTableCellBorders(loadTableCellBorders());
+applyTableWrapText(loadTableWrapText());
+applyEditorFont(loadEditorFont());
+applyEditorFontSize(loadEditorFontSize());
 
 // Guards against React StrictMode invoking initialize() twice on mount, which
 // would open two connections and leave one orphaned.
@@ -268,12 +840,53 @@ let didInitialize = false;
 
 /** Build a table-browser query for a given page (backend owns the SQL). */
 function tableSql(
+  sessionId: string,
   schema: string,
   table: string,
   filter: string | null,
   page: number,
 ): Promise<string> {
-  return api.selectTopSql(schema, table, filter, PAGE_SIZE, page * PAGE_SIZE);
+  return api.selectTopSql(sessionId, schema, table, filter, PAGE_SIZE, page * PAGE_SIZE);
+}
+
+/** Locate which connection owns a given tab id (tabs are only ever looked up
+ *  by id from components, never by connection, so most tab actions address
+ *  their target this way rather than assuming "the active connection" —
+ *  correct even if the user switches connections while e.g. a query is
+ *  still running in a background one). */
+function findTabOwner(
+  connections: Record<string, ConnectionSlot>,
+  tabId: string,
+): { connectionId: string; slot: ConnectionSlot; tab: QueryTab } | null {
+  for (const connectionId of Object.keys(connections)) {
+    const slot = connections[connectionId];
+    const tab = slot.tabs.find((t) => t.id === tabId);
+    if (tab) return { connectionId, slot, tab };
+  }
+  return null;
+}
+
+/** Shallow-patch one connection slot, leaving the map untouched if that
+ *  connection no longer exists (e.g. it was disconnected mid-flight). */
+function patchSlot(
+  connections: Record<string, ConnectionSlot>,
+  connectionId: string,
+  patch: Partial<ConnectionSlot> | ((slot: ConnectionSlot) => Partial<ConnectionSlot>),
+): Record<string, ConnectionSlot> {
+  const slot = connections[connectionId];
+  if (!slot) return connections;
+  const p = typeof patch === "function" ? patch(slot) : patch;
+  return { ...connections, [connectionId]: { ...slot, ...p } };
+}
+
+/** Patch one connection slot's `tabs` array specifically — the overwhelming
+ *  majority of tab actions only ever touch this one field. */
+function mapSlotTabs(
+  connections: Record<string, ConnectionSlot>,
+  connectionId: string,
+  mapper: (tabs: QueryTab[]) => QueryTab[],
+): Record<string, ConnectionSlot> {
+  return patchSlot(connections, connectionId, (slot) => ({ tabs: mapper(slot.tabs) }));
 }
 
 /** Persist just enough to restore the open tabs (not their results). */
@@ -350,11 +963,17 @@ export const useStore = create<AppStore>((set, get) => {
   }
 
   /**
-   * Change the active tab, first confirming if the current tab has unsaved
-   * cell edits. Returns whether the switch actually happened.
+   * Change a connection's active tab, first confirming if its current tab
+   * has unsaved cell edits. Returns whether the switch actually happened.
+   * Takes an explicit `connectionId` (rather than assuming "the active
+   * connection") so callers that already resolved a specific slot — e.g. via
+   * `findTabOwner` — stay correct even if the visible connection changes
+   * mid-await.
    */
-  async function switchActiveTab(newId: string): Promise<boolean> {
-    const current = get().tabs.find((t) => t.id === get().activeTabId);
+  async function switchActiveTab(connectionId: string, newId: string): Promise<boolean> {
+    const slot = get().connections[connectionId];
+    if (!slot) return false;
+    const current = slot.tabs.find((t) => t.id === slot.activeTabId);
     if (current && current.id !== newId && tabHasPendingEdits(current)) {
       const ok = await requestConfirm(
         `"${current.title}" has unsaved changes. Leave without saving?`,
@@ -364,12 +983,14 @@ export const useStore = create<AppStore>((set, get) => {
       // Confirming "Leave" means abandoning the edits — clear them so the tab
       // is clean if the user comes back, rather than silently retaining them.
       set((s) => ({
-        tabs: s.tabs.map((t) =>
-          t.id === current.id ? { ...t, pendingEdits: {}, updateError: null } : t,
+        connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+          tabs.map((t) =>
+            t.id === current.id ? { ...t, pendingEdits: {}, updateError: null } : t,
+          ),
         ),
       }));
     }
-    set({ activeTabId: newId });
+    set((s) => ({ connections: patchSlot(s.connections, connectionId, { activeTabId: newId }) }));
     return true;
   }
 
@@ -379,16 +1000,29 @@ export const useStore = create<AppStore>((set, get) => {
     lastConnection: null,
     reconnectError: null,
     savedConnections: [],
-    current: null,
-    schema: [],
-    schemaLoading: false,
-    schemaError: null,
-    tabs: [],
-    activeTabId: null,
+    connections: {},
+    activeConnectionId: null,
     history: [],
     historyOpen: false,
     confirmDialog: null,
     theme: loadTheme(),
+    tableFont: loadTableFont(),
+    tableFontSize: loadTableFontSize(),
+    tableRowHeight: loadTableRowHeight(),
+    tableZebra: loadTableZebra(),
+    tableCellBorders: loadTableCellBorders(),
+    tableWrapText: loadTableWrapText(),
+    nullDisplay: loadNullDisplay(),
+    editorFont: loadEditorFont(),
+    editorFontSize: loadEditorFontSize(),
+    editorLineWrap: loadEditorLineWrap(),
+    compactTopBar: loadCompactTopBar(),
+    restoreTabsOnLaunch: loadRestoreTabsOnLaunch(),
+    starterSql: loadStarterSql(),
+    autoRefreshSchema: loadAutoRefreshSchema(),
+    historyLimit: loadHistoryLimit(),
+    csvDelimiter: loadDelimiter(CSV_DELIMITER_KEY, ","),
+    rowCopyDelimiter: loadDelimiter(ROW_COPY_DELIMITER_KEY, "\t"),
     settingsOpen: false,
 
     async initialize() {
@@ -396,12 +1030,6 @@ export const useStore = create<AppStore>((set, get) => {
       didInitialize = true;
 
       await get().loadSavedConnections();
-
-      // Restore the tabs that were open last time (without their stale results).
-      const restored = loadPersistedTabs();
-      if (restored) {
-        set({ tabs: restored.tabs, activeTabId: restored.activeTabId });
-      }
 
       // Try to reconnect to the last-used database so the user doesn't have to
       // re-enter it every launch. Remember its params either way, to prefill the
@@ -421,6 +1049,32 @@ export const useStore = create<AppStore>((set, get) => {
 
       try {
         await get().connectTo({ params: last.params, name: last.name });
+
+        // Restore the tabs that were open last time (without their stale
+        // results), unless the user has opted out. Only this one
+        // auto-restored connection gets its tabs restored — connections
+        // added manually during a session always start with one blank tab
+        // and don't persist across a restart.
+        const connectionId = get().activeConnectionId;
+        if (connectionId && get().restoreTabsOnLaunch) {
+          const restored = loadPersistedTabs();
+          if (restored) {
+            set((s) => ({
+              connections: patchSlot(s.connections, connectionId, {
+                tabs: restored.tabs,
+                activeTabId: restored.activeTabId,
+              }),
+            }));
+            // Re-populate restored table tabs (they hold their select-top SQL
+            // but no results yet), one at a time. Query tabs keep their SQL
+            // and wait for the user to run.
+            for (const tab of get().connections[connectionId]?.tabs ?? []) {
+              if (tab.kind === "table" && !tab.result && !tab.error && !tab.running) {
+                await get().runTab(tab.id);
+              }
+            }
+          }
+        }
       } catch (err) {
         // Auto-reconnect failed (server down, creds changed, ...). Fall back to
         // the connect screen, pre-filled, with the reason shown.
@@ -442,80 +1096,112 @@ export const useStore = create<AppStore>((set, get) => {
     },
 
     async connectTo(connection) {
-      await api.connect(connection.params, connection.name, connection.id ?? null);
-      const current = await api.currentConnection();
-
-      // Ensure there's at least one editor tab to land in.
-      const tabs = get().tabs.length > 0 ? get().tabs : [makeTab()];
-      set({
-        current,
+      const info = await api.connect(connection.params, connection.name, connection.id ?? null);
+      const tab = makeTab({ sql: get().starterSql });
+      const slot: ConnectionSlot = {
+        sessionId: info.sessionId,
+        current: info,
+        schema: [],
+        schemaLoading: false,
+        schemaError: null,
+        tabs: [tab],
+        activeTabId: tab.id,
+      };
+      set((s) => ({
         view: "workspace",
-        tabs,
-        activeTabId: get().activeTabId ?? tabs[0].id,
-      });
+        connections: { ...s.connections, [info.sessionId]: slot },
+        activeConnectionId: info.sessionId,
+      }));
 
-      await get().refreshSchema();
-
-      // Re-populate any restored table tabs (they hold their select-top SQL but
-      // no results yet), one at a time. Query tabs keep their SQL and wait for
-      // the user to run.
-      for (const tab of get().tabs) {
-        if (tab.kind === "table" && !tab.result && !tab.error && !tab.running) {
-          await get().runTab(tab.id);
-        }
-      }
+      if (get().autoRefreshSchema) await get().refreshSchema();
     },
 
-    async disconnect() {
+    async disconnect(sessionId) {
+      const id = sessionId ?? get().activeConnectionId;
+      if (!id) return;
       try {
-        await api.disconnect();
+        await api.disconnect(id);
       } finally {
-        set({
-          view: "connection",
-          current: null,
-          schema: [],
-          schemaError: null,
-          tabs: [],
-          activeTabId: null,
-          historyOpen: false,
+        set((s) => {
+          const connections = { ...s.connections };
+          delete connections[id];
+          const remainingIds = Object.keys(connections);
+          const activeConnectionId =
+            s.activeConnectionId === id
+              ? (remainingIds[0] ?? null)
+              : s.activeConnectionId;
+          return {
+            connections,
+            activeConnectionId,
+            view: remainingIds.length > 0 ? "workspace" : "connection",
+            historyOpen: remainingIds.length > 0 ? s.historyOpen : false,
+          };
         });
       }
     },
 
+    switchConnection(sessionId) {
+      if (!get().connections[sessionId]) return;
+      set({ activeConnectionId: sessionId });
+    },
+
     async refreshSchema() {
-      set({ schemaLoading: true, schemaError: null });
+      const connectionId = get().activeConnectionId;
+      if (!connectionId) return;
+      set((s) => ({
+        connections: patchSlot(s.connections, connectionId, {
+          schemaLoading: true,
+          schemaError: null,
+        }),
+      }));
       try {
-        const schema = await api.fetchSchema();
-        set({ schema, schemaLoading: false });
+        const slot = get().connections[connectionId];
+        if (!slot) return;
+        const schema = await api.fetchSchema(slot.sessionId);
+        set((s) => ({
+          connections: patchSlot(s.connections, connectionId, { schema, schemaLoading: false }),
+        }));
       } catch (err) {
-        set({ schemaLoading: false, schemaError: errorMessage(err) });
+        set((s) => ({
+          connections: patchSlot(s.connections, connectionId, {
+            schemaLoading: false,
+            schemaError: errorMessage(err),
+          }),
+        }));
       }
     },
 
     async newTab(opts) {
-      const tab = makeTab(opts);
-      set((s) => ({ tabs: [...s.tabs, tab] }));
-      await switchActiveTab(tab.id);
+      const connectionId = get().activeConnectionId;
+      if (!connectionId) return "";
+      const tab = makeTab({ ...opts, sql: opts?.sql ?? get().starterSql });
+      set((s) => ({ connections: mapSlotTabs(s.connections, connectionId, (tabs) => [...tabs, tab]) }));
+      await switchActiveTab(connectionId, tab.id);
       return tab.id;
     },
 
     closeTab(id) {
+      const owner = findTabOwner(get().connections, id);
+      if (!owner) return;
+      const { connectionId, tab } = owner;
+
       const doClose = () => {
-        set((s) => {
-          const idx = s.tabs.findIndex((t) => t.id === id);
-          if (idx === -1) return s;
-          const tabs = s.tabs.filter((t) => t.id !== id);
-          let activeTabId = s.activeTabId;
-          if (activeTabId === id) {
-            const neighbor = tabs[idx] ?? tabs[idx - 1] ?? null;
-            activeTabId = neighbor ? neighbor.id : null;
-          }
-          return { tabs, activeTabId };
-        });
+        set((s) => ({
+          connections: patchSlot(s.connections, connectionId, (slot) => {
+            const idx = slot.tabs.findIndex((t) => t.id === id);
+            if (idx === -1) return {};
+            const tabs = slot.tabs.filter((t) => t.id !== id);
+            let activeTabId = slot.activeTabId;
+            if (activeTabId === id) {
+              const neighbor = tabs[idx] ?? tabs[idx - 1] ?? null;
+              activeTabId = neighbor ? neighbor.id : null;
+            }
+            return { tabs, activeTabId };
+          }),
+        }));
       };
 
-      const tab = get().tabs.find((t) => t.id === id);
-      if (tab && tabHasPendingEdits(tab)) {
+      if (tabHasPendingEdits(tab)) {
         void requestConfirm(
           `"${tab.title}" has unsaved changes. Close without saving?`,
           "Close",
@@ -528,37 +1214,52 @@ export const useStore = create<AppStore>((set, get) => {
     },
 
     setActiveTab(id) {
-      if (id === get().activeTabId) return;
-      void switchActiveTab(id);
+      const owner = findTabOwner(get().connections, id);
+      if (!owner || id === owner.slot.activeTabId) return;
+      void switchActiveTab(owner.connectionId, id);
     },
 
     reorderTab(fromIndex, toIndex) {
       set((s) => {
-        if (
-          fromIndex === toIndex ||
-          fromIndex < 0 ||
-          toIndex < 0 ||
-          fromIndex >= s.tabs.length ||
-          toIndex >= s.tabs.length
-        ) {
-          return s;
-        }
-        const tabs = [...s.tabs];
-        const [moved] = tabs.splice(fromIndex, 1);
-        tabs.splice(toIndex, 0, moved);
-        return { tabs };
+        const connectionId = s.activeConnectionId;
+        if (!connectionId) return s;
+        return {
+          connections: patchSlot(s.connections, connectionId, (slot) => {
+            if (
+              fromIndex === toIndex ||
+              fromIndex < 0 ||
+              toIndex < 0 ||
+              fromIndex >= slot.tabs.length ||
+              toIndex >= slot.tabs.length
+            ) {
+              return {};
+            }
+            const tabs = [...slot.tabs];
+            const [moved] = tabs.splice(fromIndex, 1);
+            tabs.splice(toIndex, 0, moved);
+            return { tabs };
+          }),
+        };
       });
     },
 
     setTabSql(id, sql) {
-      set((s) => ({
-        tabs: s.tabs.map((t) => (t.id === id ? { ...t, sql } : t)),
-      }));
+      set((s) => {
+        const owner = findTabOwner(s.connections, id);
+        if (!owner) return s;
+        return {
+          connections: mapSlotTabs(s.connections, owner.connectionId, (tabs) =>
+            tabs.map((t) => (t.id === id ? { ...t, sql } : t)),
+          ),
+        };
+      });
     },
 
-    async runTab(id) {
-      const tab = get().tabs.find((t) => t.id === id);
-      if (!tab || tab.running) return;
+    async runTab(id, sqlOverride) {
+      const owner = findTabOwner(get().connections, id);
+      if (!owner || owner.tab.running) return;
+      const { connectionId, tab } = owner;
+      const sqlToRun = sqlOverride ?? tab.sql;
 
       if (tabHasPendingEdits(tab)) {
         const ok = await requestConfirm(
@@ -569,27 +1270,36 @@ export const useStore = create<AppStore>((set, get) => {
       }
 
       set((s) => ({
-        tabs: s.tabs.map((t) =>
-          t.id === id
-            ? {
-                ...t,
-                running: true,
-                error: null,
-                updateError: null,
-                pendingEdits: {},
-                newRows: [],
-              }
-            : t,
+        connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+          tabs.map((t) =>
+            t.id === id
+              ? {
+                  ...t,
+                  running: true,
+                  error: null,
+                  updateError: null,
+                  pendingEdits: {},
+                  newRows: [],
+                }
+              : t,
+          ),
         ),
       }));
 
+      // Re-resolve the slot after marking running — it's still there unless
+      // this connection was disconnected in the meantime.
+      const slot = get().connections[connectionId];
+      if (!slot) return;
+
       try {
-        const result = await api.runQuery(tab.sql);
+        const result = await api.runQuery(slot.sessionId, sqlToRun);
         set((s) => ({
-          tabs: s.tabs.map((t) =>
-            t.id === id
-              ? { ...t, running: false, hasRun: true, result, error: null }
-              : t,
+          connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+            tabs.map((t) =>
+              t.id === id
+                ? { ...t, running: false, hasRun: true, result, error: null }
+                : t,
+            ),
           ),
         }));
       } catch (err) {
@@ -597,10 +1307,12 @@ export const useStore = create<AppStore>((set, get) => {
           ? err
           : { message: errorMessage(err), code: null, hint: null, position: null, kind: "internal" };
         set((s) => ({
-          tabs: s.tabs.map((t) =>
-            t.id === id
-              ? { ...t, running: false, hasRun: true, error: dbError }
-              : t,
+          connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+            tabs.map((t) =>
+              t.id === id
+                ? { ...t, running: false, hasRun: true, error: dbError }
+                : t,
+            ),
           ),
         }));
       } finally {
@@ -609,20 +1321,34 @@ export const useStore = create<AppStore>((set, get) => {
       }
     },
 
+    cancelQuery() {
+      const connectionId = get().activeConnectionId;
+      const slot = connectionId ? get().connections[connectionId] : null;
+      if (!slot) return;
+      void api.cancelQuery(slot.sessionId).catch((err) => {
+        console.error("failed to cancel query:", errorMessage(err));
+      });
+    },
+
     async openSelectTop(schema, table) {
+      const connectionId = get().activeConnectionId;
+      if (!connectionId) return;
+      const slot = get().connections[connectionId];
+      if (!slot) return;
+
       // If this table is already open, just focus its tab.
-      const existing = get().tabs.find(
+      const existing = slot.tabs.find(
         (t) =>
           t.kind === "table" &&
           t.source?.schema === schema &&
           t.source?.table === table,
       );
       if (existing) {
-        await switchActiveTab(existing.id);
+        await switchActiveTab(connectionId, existing.id);
         return;
       }
 
-      const sql = await tableSql(schema, table, null, 0);
+      const sql = await tableSql(slot.sessionId, schema, table, null, 0);
       const tab = makeTab({
         kind: "table",
         title: table,
@@ -630,42 +1356,86 @@ export const useStore = create<AppStore>((set, get) => {
         source: { schema, table },
         page: 0,
       });
-      set((s) => ({ tabs: [...s.tabs, tab] }));
-      const switched = await switchActiveTab(tab.id);
+      set((s) => ({ connections: mapSlotTabs(s.connections, connectionId, (tabs) => [...tabs, tab]) }));
+      const switched = await switchActiveTab(connectionId, tab.id);
       if (!switched) {
         // The user chose to stay on the current (dirty) tab — remove the tab
         // we speculatively created rather than leaving an unopened orphan.
-        set((s) => ({ tabs: s.tabs.filter((t) => t.id !== tab.id) }));
+        set((s) => ({
+          connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+            tabs.filter((t) => t.id !== tab.id),
+          ),
+        }));
         return;
       }
       await get().runTab(tab.id);
     },
 
+    async openTableStructure(schema, table) {
+      const connectionId = get().activeConnectionId;
+      if (!connectionId) return;
+      const slot = get().connections[connectionId];
+      if (!slot) return;
+
+      const existing = slot.tabs.find(
+        (t) =>
+          t.kind === "structure" &&
+          t.source?.schema === schema &&
+          t.source?.table === table,
+      );
+      if (existing) {
+        await switchActiveTab(connectionId, existing.id);
+        return;
+      }
+
+      const tab = makeTab({
+        kind: "structure",
+        title: `${table} (structure)`,
+        source: { schema, table },
+      });
+      set((s) => ({ connections: mapSlotTabs(s.connections, connectionId, (tabs) => [...tabs, tab]) }));
+      const switched = await switchActiveTab(connectionId, tab.id);
+      if (!switched) {
+        set((s) => ({
+          connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+            tabs.filter((t) => t.id !== tab.id),
+          ),
+        }));
+      }
+    },
+
     async openTableWithFilter(schema, table, filter) {
       // Used by FK navigation: open (or focus) the referenced table showing only
       // the matching row. Backend builds the SQL from the filter predicate.
-      const existing = get().tabs.find(
+      const connectionId = get().activeConnectionId;
+      if (!connectionId) return;
+      const slot = get().connections[connectionId];
+      if (!slot) return;
+
+      const existing = slot.tabs.find(
         (t) =>
           t.kind === "table" &&
           t.source?.schema === schema &&
           t.source?.table === table,
       );
       if (existing) {
-        const switched = await switchActiveTab(existing.id);
+        const switched = await switchActiveTab(connectionId, existing.id);
         if (!switched) return;
-        const sql = await tableSql(schema, table, filter.trim() || null, 0);
+        const sql = await tableSql(slot.sessionId, schema, table, filter.trim() || null, 0);
         set((s) => ({
-          tabs: s.tabs.map((t) =>
-            t.id === existing.id
-              ? { ...t, sql, filter: filter.trim() || undefined, page: 0 }
-              : t,
+          connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+            tabs.map((t) =>
+              t.id === existing.id
+                ? { ...t, sql, filter: filter.trim() || undefined, page: 0 }
+                : t,
+            ),
           ),
         }));
         await get().runTab(existing.id);
         return;
       }
 
-      const sql = await tableSql(schema, table, filter.trim() || null, 0);
+      const sql = await tableSql(slot.sessionId, schema, table, filter.trim() || null, 0);
       const tab = makeTab({
         kind: "table",
         title: table,
@@ -674,86 +1444,125 @@ export const useStore = create<AppStore>((set, get) => {
         filter: filter.trim() || undefined,
         page: 0,
       });
-      set((s) => ({ tabs: [...s.tabs, tab] }));
-      const switched = await switchActiveTab(tab.id);
+      set((s) => ({ connections: mapSlotTabs(s.connections, connectionId, (tabs) => [...tabs, tab]) }));
+      const switched = await switchActiveTab(connectionId, tab.id);
       if (!switched) {
-        set((s) => ({ tabs: s.tabs.filter((t) => t.id !== tab.id) }));
+        set((s) => ({
+          connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+            tabs.filter((t) => t.id !== tab.id),
+          ),
+        }));
         return;
       }
       await get().runTab(tab.id);
     },
 
     async setTableFilter(id, filter) {
-      const tab = get().tabs.find((t) => t.id === id);
-      if (!tab || !tab.source) return;
+      const owner = findTabOwner(get().connections, id);
+      if (!owner) return;
+      const { connectionId, slot, tab } = owner;
+      if (!tab.source) return;
       // Regenerate the table query with the WHERE predicate in the backend.
       // Changing the filter resets to the first page. `runTab` itself guards
       // against discarding unsaved edits.
       const sql = await tableSql(
+        slot.sessionId,
         tab.source.schema,
         tab.source.table,
         filter.trim() || null,
         0,
       );
       set((s) => ({
-        tabs: s.tabs.map((t) =>
-          t.id === id
-            ? { ...t, sql, filter: filter.trim() || undefined, page: 0 }
-            : t,
+        connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+          tabs.map((t) =>
+            t.id === id
+              ? { ...t, sql, filter: filter.trim() || undefined, page: 0 }
+              : t,
+          ),
         ),
       }));
       await get().runTab(id);
     },
 
     setCellEdit(tabId, rowIndex, colIndex, value) {
-      set((s) => ({
-        tabs: s.tabs.map((t) => {
-          if (t.id !== tabId || !t.result) return t;
-          // Compare against the real original (which may be null) — coercing
-          // null to "" here would wrongly mark a null->null edit as dirty and
-          // fail to detect a genuine null<->text change.
-          const original = t.result.rows[rowIndex]?.[colIndex] ?? null;
-          const rowEdits = { ...(t.pendingEdits?.[rowIndex] ?? {}) };
-          if (value === original) {
-            delete rowEdits[colIndex];
-          } else {
-            rowEdits[colIndex] = value;
-          }
-          const pendingEdits = { ...t.pendingEdits };
-          if (Object.keys(rowEdits).length > 0) {
-            pendingEdits[rowIndex] = rowEdits;
-          } else {
-            delete pendingEdits[rowIndex];
-          }
-          return { ...t, pendingEdits };
-        }),
-      }));
+      set((s) => {
+        const owner = findTabOwner(s.connections, tabId);
+        if (!owner) return s;
+        return {
+          connections: mapSlotTabs(s.connections, owner.connectionId, (tabs) =>
+            tabs.map((t) => {
+              if (t.id !== tabId || !t.result) return t;
+              // Compare against the real original (which may be null) — coercing
+              // null to "" here would wrongly mark a null->null edit as dirty and
+              // fail to detect a genuine null<->text change.
+              const original = t.result.rows[rowIndex]?.[colIndex] ?? null;
+              const rowEdits = { ...(t.pendingEdits?.[rowIndex] ?? {}) };
+              if (value === original) {
+                delete rowEdits[colIndex];
+              } else {
+                rowEdits[colIndex] = value;
+              }
+              const pendingEdits = { ...t.pendingEdits };
+              if (Object.keys(rowEdits).length > 0) {
+                pendingEdits[rowIndex] = rowEdits;
+              } else {
+                delete pendingEdits[rowIndex];
+              }
+              return { ...t, pendingEdits };
+            }),
+          ),
+        };
+      });
     },
 
     discardEdits(tabId) {
-      set((s) => ({
-        tabs: s.tabs.map((t) =>
-          t.id === tabId
-            ? { ...t, pendingEdits: {}, newRows: [], updateError: null }
-            : t,
-        ),
-      }));
+      set((s) => {
+        const owner = findTabOwner(s.connections, tabId);
+        if (!owner) return s;
+        return {
+          connections: mapSlotTabs(s.connections, owner.connectionId, (tabs) =>
+            tabs.map((t) =>
+              t.id === tabId
+                ? { ...t, pendingEdits: {}, newRows: [], updateError: null }
+                : t,
+            ),
+          ),
+        };
+      });
     },
 
     clearUpdateError(tabId) {
-      set((s) => ({
-        tabs: s.tabs.map((t) =>
-          t.id === tabId ? { ...t, updateError: null } : t,
-        ),
-      }));
+      set((s) => {
+        const owner = findTabOwner(s.connections, tabId);
+        if (!owner) return s;
+        return {
+          connections: mapSlotTabs(s.connections, owner.connectionId, (tabs) =>
+            tabs.map((t) => (t.id === tabId ? { ...t, updateError: null } : t)),
+          ),
+        };
+      });
+    },
+
+    setUpdateError(tabId, error) {
+      set((s) => {
+        const owner = findTabOwner(s.connections, tabId);
+        if (!owner) return s;
+        return {
+          connections: mapSlotTabs(s.connections, owner.connectionId, (tabs) =>
+            tabs.map((t) => (t.id === tabId ? { ...t, updateError: error } : t)),
+          ),
+        };
+      });
     },
 
     async commitEdits(tabId) {
-      const tab = get().tabs.find((t) => t.id === tabId);
-      if (!tab || !tab.result || !tab.source || !tabHasPendingEdits(tab)) return;
+      const owner = findTabOwner(get().connections, tabId);
+      if (!owner) return;
+      const { connectionId, slot, tab } = owner;
+      if (!tab.result || !tab.source || !tabHasPendingEdits(tab)) return;
 
-      const schemaTable = get()
-        .schema.find((s) => s.name === tab.source!.schema)
+      const schemaTable = slot.schema
+        .find((s) => s.name === tab.source!.schema)
         ?.tables.find((t) => t.name === tab.source!.table);
       const pkCols = schemaTable?.columns.filter((c) => c.isPrimaryKey).map((c) => c.name) ?? [];
       if (pkCols.length === 0) return; // editing is gated on a detected primary key
@@ -763,7 +1572,7 @@ export const useStore = create<AppStore>((set, get) => {
       for (const rowIndex of rowIndices) {
         // Re-read fresh each iteration: prior rows in this loop have already
         // patched `result`/`pendingEdits` in place.
-        const current = get().tabs.find((t) => t.id === tabId);
+        const current = get().connections[connectionId]?.tabs.find((t) => t.id === tabId);
         if (!current || !current.result || !current.pendingEdits) break;
         const rowEdits = current.pendingEdits[rowIndex];
         const colIndices = Object.keys(rowEdits ?? {}).map(Number);
@@ -779,27 +1588,29 @@ export const useStore = create<AppStore>((set, get) => {
         }));
 
         try {
-          await api.updateRow(tab.source.schema, tab.source.table, primaryKey, changes);
+          await api.updateRow(slot.sessionId, tab.source.schema, tab.source.table, primaryKey, changes);
           // Apply the change locally so the grid reflects the saved values
           // without a full re-fetch.
           set((s) => ({
-            tabs: s.tabs.map((t) => {
-              if (t.id !== tabId || !t.result) return t;
-              const newRows = t.result.rows.map((row, ri) => {
-                if (ri !== rowIndex) return row;
-                const newRow = [...row];
-                for (const ci of colIndices) newRow[ci] = rowEdits[ci];
-                return newRow;
-              });
-              const restEdits = { ...t.pendingEdits };
-              delete restEdits[rowIndex];
-              return {
-                ...t,
-                result: { ...t.result, rows: newRows },
-                pendingEdits: restEdits,
-                updateError: null,
-              };
-            }),
+            connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+              tabs.map((t) => {
+                if (t.id !== tabId || !t.result) return t;
+                const newRows = t.result.rows.map((row, ri) => {
+                  if (ri !== rowIndex) return row;
+                  const newRow = [...row];
+                  for (const ci of colIndices) newRow[ci] = rowEdits[ci];
+                  return newRow;
+                });
+                const restEdits = { ...t.pendingEdits };
+                delete restEdits[rowIndex];
+                return {
+                  ...t,
+                  result: { ...t.result, rows: newRows },
+                  pendingEdits: restEdits,
+                  updateError: null,
+                };
+              }),
+            ),
           }));
         } catch (err) {
           // Stop on the first failure; leave remaining edits pending so
@@ -808,7 +1619,9 @@ export const useStore = create<AppStore>((set, get) => {
             ? err
             : { message: errorMessage(err), code: null, hint: null, position: null, kind: "internal" };
           set((s) => ({
-            tabs: s.tabs.map((t) => (t.id === tabId ? { ...t, updateError: dbError } : t)),
+            connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+              tabs.map((t) => (t.id === tabId ? { ...t, updateError: dbError } : t)),
+            ),
           }));
           return;
         }
@@ -819,7 +1632,7 @@ export const useStore = create<AppStore>((set, get) => {
       // everything after it) still queued for the user to fix.
       let insertedAny = false;
       for (;;) {
-        const current = get().tabs.find((t) => t.id === tabId);
+        const current = get().connections[connectionId]?.tabs.find((t) => t.id === tabId);
         const draft = current?.newRows?.[0];
         if (!current || !current.result || !draft) break;
 
@@ -834,13 +1647,15 @@ export const useStore = create<AppStore>((set, get) => {
         });
 
         try {
-          await api.insertRow(tab.source.schema, tab.source.table, values);
+          await api.insertRow(slot.sessionId, tab.source.schema, tab.source.table, values);
           insertedAny = true;
           set((s) => ({
-            tabs: s.tabs.map((t) =>
-              t.id === tabId
-                ? { ...t, newRows: (t.newRows ?? []).slice(1), updateError: null }
-                : t,
+            connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+              tabs.map((t) =>
+                t.id === tabId
+                  ? { ...t, newRows: (t.newRows ?? []).slice(1), updateError: null }
+                  : t,
+              ),
             ),
           }));
         } catch (err) {
@@ -848,7 +1663,9 @@ export const useStore = create<AppStore>((set, get) => {
             ? err
             : { message: errorMessage(err), code: null, hint: null, position: null, kind: "internal" };
           set((s) => ({
-            tabs: s.tabs.map((t) => (t.id === tabId ? { ...t, updateError: dbError } : t)),
+            connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+              tabs.map((t) => (t.id === tabId ? { ...t, updateError: dbError } : t)),
+            ),
           }));
           return;
         }
@@ -859,61 +1676,87 @@ export const useStore = create<AppStore>((set, get) => {
     },
 
     addRow(tabId) {
-      set((s) => ({
-        tabs: s.tabs.map((t) => {
-          if (t.id !== tabId || !t.result) return t;
-          const blank = Array<string | null>(t.result.columns.length).fill(null);
-          return { ...t, newRows: [...(t.newRows ?? []), blank] };
-        }),
-      }));
+      set((s) => {
+        const owner = findTabOwner(s.connections, tabId);
+        if (!owner) return s;
+        return {
+          connections: mapSlotTabs(s.connections, owner.connectionId, (tabs) =>
+            tabs.map((t) => {
+              if (t.id !== tabId || !t.result) return t;
+              const blank = Array<string | null>(t.result.columns.length).fill(null);
+              return { ...t, newRows: [...(t.newRows ?? []), blank] };
+            }),
+          ),
+        };
+      });
     },
 
     addRows(tabId, rows) {
-      set((s) => ({
-        tabs: s.tabs.map((t) => {
-          if (t.id !== tabId || !t.result || rows.length === 0) return t;
-          const width = t.result.columns.length;
-          const drafts = rows.map((r) => {
-            const row = Array<string | null>(width).fill(null);
-            for (let ci = 0; ci < width; ci++) row[ci] = r[ci] ?? null;
-            return row;
-          });
-          return { ...t, newRows: [...(t.newRows ?? []), ...drafts] };
-        }),
-      }));
+      set((s) => {
+        const owner = findTabOwner(s.connections, tabId);
+        if (!owner) return s;
+        return {
+          connections: mapSlotTabs(s.connections, owner.connectionId, (tabs) =>
+            tabs.map((t) => {
+              if (t.id !== tabId || !t.result || rows.length === 0) return t;
+              const width = t.result.columns.length;
+              const drafts = rows.map((r) => {
+                const row = Array<string | null>(width).fill(null);
+                for (let ci = 0; ci < width; ci++) row[ci] = r[ci] ?? null;
+                return row;
+              });
+              return { ...t, newRows: [...(t.newRows ?? []), ...drafts] };
+            }),
+          ),
+        };
+      });
     },
 
     setNewCellEdit(tabId, newRowIndex, colIndex, value) {
-      set((s) => ({
-        tabs: s.tabs.map((t) => {
-          if (t.id !== tabId || !t.newRows) return t;
-          const newRows = t.newRows.map((row, i) => {
-            if (i !== newRowIndex) return row;
-            const copy = [...row];
-            copy[colIndex] = value;
-            return copy;
-          });
-          return { ...t, newRows };
-        }),
-      }));
+      set((s) => {
+        const owner = findTabOwner(s.connections, tabId);
+        if (!owner) return s;
+        return {
+          connections: mapSlotTabs(s.connections, owner.connectionId, (tabs) =>
+            tabs.map((t) => {
+              if (t.id !== tabId || !t.newRows) return t;
+              const newRows = t.newRows.map((row, i) => {
+                if (i !== newRowIndex) return row;
+                const copy = [...row];
+                copy[colIndex] = value;
+                return copy;
+              });
+              return { ...t, newRows };
+            }),
+          ),
+        };
+      });
     },
 
     removeNewRow(tabId, newRowIndex) {
-      set((s) => ({
-        tabs: s.tabs.map((t) =>
-          t.id === tabId && t.newRows
-            ? { ...t, newRows: t.newRows.filter((_, i) => i !== newRowIndex) }
-            : t,
-        ),
-      }));
+      set((s) => {
+        const owner = findTabOwner(s.connections, tabId);
+        if (!owner) return s;
+        return {
+          connections: mapSlotTabs(s.connections, owner.connectionId, (tabs) =>
+            tabs.map((t) =>
+              t.id === tabId && t.newRows
+                ? { ...t, newRows: t.newRows.filter((_, i) => i !== newRowIndex) }
+                : t,
+            ),
+          ),
+        };
+      });
     },
 
     async deleteExistingRow(tabId, rowIndex) {
-      const tab = get().tabs.find((t) => t.id === tabId);
-      if (!tab || !tab.result || !tab.source) return;
+      const owner = findTabOwner(get().connections, tabId);
+      if (!owner) return;
+      const { connectionId, slot, tab } = owner;
+      if (!tab.result || !tab.source) return;
 
-      const schemaTable = get()
-        .schema.find((s) => s.name === tab.source!.schema)
+      const schemaTable = slot.schema
+        .find((s) => s.name === tab.source!.schema)
         ?.tables.find((t) => t.name === tab.source!.table);
       const pkCols = schemaTable?.columns.filter((c) => c.isPrimaryKey).map((c) => c.name) ?? [];
       if (pkCols.length === 0) return; // deletion is gated on a detected primary key
@@ -925,7 +1768,7 @@ export const useStore = create<AppStore>((set, get) => {
       if (!ok) return;
 
       // Re-resolve the row after the async confirm (it may have shifted).
-      const fresh = get().tabs.find((t) => t.id === tabId);
+      const fresh = get().connections[connectionId]?.tabs.find((t) => t.id === tabId);
       const row = fresh?.result?.rows[rowIndex];
       if (!fresh || !fresh.result || !row) return;
 
@@ -935,42 +1778,48 @@ export const useStore = create<AppStore>((set, get) => {
       });
 
       try {
-        await api.deleteRow(tab.source.schema, tab.source.table, primaryKey);
+        await api.deleteRow(slot.sessionId, tab.source.schema, tab.source.table, primaryKey);
         set((s) => ({
-          tabs: s.tabs.map((t) => {
-            if (t.id !== tabId || !t.result) return t;
-            const rows = t.result.rows.filter((_, i) => i !== rowIndex);
-            // Re-index pending edits around the removed row.
-            const pendingEdits: Record<number, Record<number, string | null>> = {};
-            for (const [k, v] of Object.entries(t.pendingEdits ?? {})) {
-              const ri = Number(k);
-              if (ri === rowIndex) continue;
-              pendingEdits[ri > rowIndex ? ri - 1 : ri] = v;
-            }
-            return {
-              ...t,
-              result: { ...t.result, rows, rowCount: Math.max(0, t.result.rowCount - 1) },
-              pendingEdits,
-              updateError: null,
-            };
-          }),
+          connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+            tabs.map((t) => {
+              if (t.id !== tabId || !t.result) return t;
+              const rows = t.result.rows.filter((_, i) => i !== rowIndex);
+              // Re-index pending edits around the removed row.
+              const pendingEdits: Record<number, Record<number, string | null>> = {};
+              for (const [k, v] of Object.entries(t.pendingEdits ?? {})) {
+                const ri = Number(k);
+                if (ri === rowIndex) continue;
+                pendingEdits[ri > rowIndex ? ri - 1 : ri] = v;
+              }
+              return {
+                ...t,
+                result: { ...t.result, rows, rowCount: Math.max(0, t.result.rowCount - 1) },
+                pendingEdits,
+                updateError: null,
+              };
+            }),
+          ),
         }));
       } catch (err) {
         const dbError: DbError = isDbError(err)
           ? err
           : { message: errorMessage(err), code: null, hint: null, position: null, kind: "internal" };
         set((s) => ({
-          tabs: s.tabs.map((t) => (t.id === tabId ? { ...t, updateError: dbError } : t)),
+          connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+            tabs.map((t) => (t.id === tabId ? { ...t, updateError: dbError } : t)),
+          ),
         }));
       }
     },
 
     async deleteExistingRows(tabId, rowIndices) {
-      const tab = get().tabs.find((t) => t.id === tabId);
-      if (!tab || !tab.result || !tab.source || rowIndices.length === 0) return;
+      const owner = findTabOwner(get().connections, tabId);
+      if (!owner || rowIndices.length === 0) return;
+      const { connectionId, slot, tab } = owner;
+      if (!tab.result || !tab.source) return;
 
-      const schemaTable = get()
-        .schema.find((s) => s.name === tab.source!.schema)
+      const schemaTable = slot.schema
+        .find((s) => s.name === tab.source!.schema)
         ?.tables.find((t) => t.name === tab.source!.table);
       const pkCols = schemaTable?.columns.filter((c) => c.isPrimaryKey).map((c) => c.name) ?? [];
       if (pkCols.length === 0) return;
@@ -989,7 +1838,7 @@ export const useStore = create<AppStore>((set, get) => {
       // surface it (rows already deleted stay deleted).
       const sorted = [...new Set(rowIndices)].sort((a, b) => b - a);
       for (const rowIndex of sorted) {
-        const fresh = get().tabs.find((t) => t.id === tabId);
+        const fresh = get().connections[connectionId]?.tabs.find((t) => t.id === tabId);
         const row = fresh?.result?.rows[rowIndex];
         if (!fresh || !fresh.result || !row) continue;
 
@@ -999,31 +1848,35 @@ export const useStore = create<AppStore>((set, get) => {
         });
 
         try {
-          await api.deleteRow(tab.source.schema, tab.source.table, primaryKey);
+          await api.deleteRow(slot.sessionId, tab.source.schema, tab.source.table, primaryKey);
           set((s) => ({
-            tabs: s.tabs.map((t) => {
-              if (t.id !== tabId || !t.result) return t;
-              const rows = t.result.rows.filter((_, i) => i !== rowIndex);
-              const pendingEdits: Record<number, Record<number, string | null>> = {};
-              for (const [k, v] of Object.entries(t.pendingEdits ?? {})) {
-                const ri = Number(k);
-                if (ri === rowIndex) continue;
-                pendingEdits[ri > rowIndex ? ri - 1 : ri] = v;
-              }
-              return {
-                ...t,
-                result: { ...t.result, rows, rowCount: Math.max(0, t.result.rowCount - 1) },
-                pendingEdits,
-                updateError: null,
-              };
-            }),
+            connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+              tabs.map((t) => {
+                if (t.id !== tabId || !t.result) return t;
+                const rows = t.result.rows.filter((_, i) => i !== rowIndex);
+                const pendingEdits: Record<number, Record<number, string | null>> = {};
+                for (const [k, v] of Object.entries(t.pendingEdits ?? {})) {
+                  const ri = Number(k);
+                  if (ri === rowIndex) continue;
+                  pendingEdits[ri > rowIndex ? ri - 1 : ri] = v;
+                }
+                return {
+                  ...t,
+                  result: { ...t.result, rows, rowCount: Math.max(0, t.result.rowCount - 1) },
+                  pendingEdits,
+                  updateError: null,
+                };
+              }),
+            ),
           }));
         } catch (err) {
           const dbError: DbError = isDbError(err)
             ? err
             : { message: errorMessage(err), code: null, hint: null, position: null, kind: "internal" };
           set((s) => ({
-            tabs: s.tabs.map((t) => (t.id === tabId ? { ...t, updateError: dbError } : t)),
+            connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+              tabs.map((t) => (t.id === tabId ? { ...t, updateError: dbError } : t)),
+            ),
           }));
           return;
         }
@@ -1031,44 +1884,55 @@ export const useStore = create<AppStore>((set, get) => {
     },
 
     overwriteRow(tabId, rowIndex, values, editableColIndices) {
-      set((s) => ({
-        tabs: s.tabs.map((t) => {
-          if (t.id !== tabId || !t.result) return t;
-          const original = t.result.rows[rowIndex];
-          if (!original) return t;
-          const rowEdits = { ...(t.pendingEdits?.[rowIndex] ?? {}) };
-          for (const ci of editableColIndices) {
-            const v = values[ci] ?? null;
-            if (v === (original[ci] ?? null)) {
-              delete rowEdits[ci];
-            } else {
-              rowEdits[ci] = v;
-            }
-          }
-          const pendingEdits = { ...t.pendingEdits };
-          if (Object.keys(rowEdits).length > 0) {
-            pendingEdits[rowIndex] = rowEdits;
-          } else {
-            delete pendingEdits[rowIndex];
-          }
-          return { ...t, pendingEdits };
-        }),
-      }));
+      set((s) => {
+        const owner = findTabOwner(s.connections, tabId);
+        if (!owner) return s;
+        return {
+          connections: mapSlotTabs(s.connections, owner.connectionId, (tabs) =>
+            tabs.map((t) => {
+              if (t.id !== tabId || !t.result) return t;
+              const original = t.result.rows[rowIndex];
+              if (!original) return t;
+              const rowEdits = { ...(t.pendingEdits?.[rowIndex] ?? {}) };
+              for (const ci of editableColIndices) {
+                const v = values[ci] ?? null;
+                if (v === (original[ci] ?? null)) {
+                  delete rowEdits[ci];
+                } else {
+                  rowEdits[ci] = v;
+                }
+              }
+              const pendingEdits = { ...t.pendingEdits };
+              if (Object.keys(rowEdits).length > 0) {
+                pendingEdits[rowIndex] = rowEdits;
+              } else {
+                delete pendingEdits[rowIndex];
+              }
+              return { ...t, pendingEdits };
+            }),
+          ),
+        };
+      });
     },
 
     async setTablePage(tabId, page) {
-      const tab = get().tabs.find((t) => t.id === tabId);
-      if (!tab || !tab.source || tab.running) return;
+      const owner = findTabOwner(get().connections, tabId);
+      if (!owner || owner.tab.running) return;
+      const { connectionId, slot, tab } = owner;
+      if (!tab.source) return;
       const next = Math.max(0, page);
       if (next === (tab.page ?? 0)) return;
       const sql = await tableSql(
+        slot.sessionId,
         tab.source.schema,
         tab.source.table,
         tab.filter?.trim() || null,
         next,
       );
       set((s) => ({
-        tabs: s.tabs.map((t) => (t.id === tabId ? { ...t, sql, page: next } : t)),
+        connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+          tabs.map((t) => (t.id === tabId ? { ...t, sql, page: next } : t)),
+        ),
       }));
       await get().runTab(tabId);
     },
@@ -1081,7 +1945,7 @@ export const useStore = create<AppStore>((set, get) => {
 
     async refreshHistory() {
       try {
-        const history = await api.queryHistory(200);
+        const history = await api.queryHistory(get().historyLimit);
         set({ history });
       } catch (err) {
         console.error("failed to load history:", errorMessage(err));
@@ -1115,6 +1979,91 @@ export const useStore = create<AppStore>((set, get) => {
       set({ theme: next });
     },
 
+    setTableFont(font) {
+      applyTableFont(font);
+      set({ tableFont: font });
+    },
+
+    setTableFontSize(size) {
+      applyTableFontSize(size);
+      set({ tableFontSize: size });
+    },
+
+    setTableRowHeight(height) {
+      applyTableRowHeight(height);
+      set({ tableRowHeight: height });
+    },
+
+    setTableZebra(enabled) {
+      applyTableZebra(enabled);
+      set({ tableZebra: enabled });
+    },
+
+    setTableCellBorders(enabled) {
+      applyTableCellBorders(enabled);
+      set({ tableCellBorders: enabled });
+    },
+
+    setTableWrapText(enabled) {
+      applyTableWrapText(enabled);
+      set({ tableWrapText: enabled });
+    },
+
+    setNullDisplay(display) {
+      saveNullDisplay(display);
+      set({ nullDisplay: display });
+    },
+
+    setEditorFont(font) {
+      applyEditorFont(font);
+      set({ editorFont: font });
+    },
+
+    setEditorFontSize(size) {
+      applyEditorFontSize(size);
+      set({ editorFontSize: size });
+    },
+
+    setEditorLineWrap(enabled) {
+      saveEditorLineWrap(enabled);
+      set({ editorLineWrap: enabled });
+    },
+
+    setCompactTopBar(enabled) {
+      saveCompactTopBar(enabled);
+      set({ compactTopBar: enabled });
+    },
+
+    setRestoreTabsOnLaunch(enabled) {
+      saveRestoreTabsOnLaunch(enabled);
+      set({ restoreTabsOnLaunch: enabled });
+    },
+
+    setStarterSql(sql) {
+      saveStarterSql(sql);
+      set({ starterSql: sql });
+    },
+
+    setAutoRefreshSchema(enabled) {
+      saveAutoRefreshSchema(enabled);
+      set({ autoRefreshSchema: enabled });
+    },
+
+    setHistoryLimit(limit) {
+      saveHistoryLimit(limit);
+      set({ historyLimit: limit });
+    },
+
+    setCsvDelimiter(delimiter) {
+      saveDelimiter(CSV_DELIMITER_KEY, delimiter);
+      set({ csvDelimiter: delimiter });
+    },
+
+    setRowCopyDelimiter(delimiter) {
+      saveDelimiter(ROW_COPY_DELIMITER_KEY, delimiter);
+      set({ rowCopyDelimiter: delimiter });
+    },
+
     openSettings() {
       set({ settingsOpen: true });
     },
@@ -1125,14 +2074,67 @@ export const useStore = create<AppStore>((set, get) => {
   };
 });
 
-// Persist the open tabs whenever the set of tabs or the active tab changes, so
-// they can be restored on the next launch.
-let lastTabs = useStore.getState().tabs;
-let lastActive = useStore.getState().activeTabId;
+// Stable empty fallbacks so selectors below don't create a new array/object
+// reference (and trigger a needless re-render) every time there's no active
+// connection.
+const EMPTY_TABS: QueryTab[] = [];
+const EMPTY_SCHEMA: SchemaNode[] = [];
+
+/** The active connection's open tabs. Empty when nothing is connected. */
+export function useActiveTabs(): QueryTab[] {
+  return useStore((s) =>
+    s.activeConnectionId ? s.connections[s.activeConnectionId]?.tabs ?? EMPTY_TABS : EMPTY_TABS,
+  );
+}
+
+/** The active connection's currently focused tab id. */
+export function useActiveTabId(): string | null {
+  return useStore((s) =>
+    s.activeConnectionId ? s.connections[s.activeConnectionId]?.activeTabId ?? null : null,
+  );
+}
+
+/** The active connection's schema tree. Empty when nothing is connected. */
+export function useActiveSchema(): SchemaNode[] {
+  return useStore((s) =>
+    s.activeConnectionId ? s.connections[s.activeConnectionId]?.schema ?? EMPTY_SCHEMA : EMPTY_SCHEMA,
+  );
+}
+
+/** The active connection's schema-fetch loading/error state, for the tree's
+ *  own loading/error UI. Two separate hooks (rather than one returning
+ *  `{loading, error}`) because a Zustand selector must return a referentially
+ *  stable value — a fresh object literal on every call defeats
+ *  `useSyncExternalStore`'s snapshot caching and causes an infinite
+ *  update-depth loop. */
+export function useActiveSchemaLoading(): boolean {
+  return useStore((s) =>
+    s.activeConnectionId ? s.connections[s.activeConnectionId]?.schemaLoading ?? false : false,
+  );
+}
+export function useActiveSchemaError(): string | null {
+  return useStore((s) =>
+    s.activeConnectionId ? s.connections[s.activeConnectionId]?.schemaError ?? null : null,
+  );
+}
+
+// Persist the visible connection's open tabs whenever they (or which
+// connection is visible) change, so they can be restored on the next
+// launch. Per the scope decision on multi-connection tab persistence (see
+// `initialize`), only ever the one connection that gets auto-restored on
+// launch actually reads this back — but it's simplest to always keep it in
+// sync with whatever's currently visible.
+let lastConnections = useStore.getState().connections;
+let lastActiveConnectionId = useStore.getState().activeConnectionId;
 useStore.subscribe((state) => {
-  if (state.tabs !== lastTabs || state.activeTabId !== lastActive) {
-    lastTabs = state.tabs;
-    lastActive = state.activeTabId;
-    persistTabs(state.tabs, state.activeTabId);
+  if (
+    state.connections === lastConnections &&
+    state.activeConnectionId === lastActiveConnectionId
+  ) {
+    return;
   }
+  lastConnections = state.connections;
+  lastActiveConnectionId = state.activeConnectionId;
+  const slot = state.activeConnectionId ? state.connections[state.activeConnectionId] : null;
+  if (slot) persistTabs(slot.tabs, slot.activeTabId);
 });

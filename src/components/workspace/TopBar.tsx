@@ -1,13 +1,23 @@
+import { useState } from "react";
+
+import { ConnectionScreen } from "../connection/ConnectionScreen";
 import { useStore } from "../../state/store";
 
-/** The 42px application top bar: brand mark, connection pill, and actions. */
+/** The 42px application top bar: brand mark, connection switcher, and actions. */
 export function TopBar() {
-  const current = useStore((s) => s.current);
+  const connections = useStore((s) => s.connections);
+  const activeConnectionId = useStore((s) => s.activeConnectionId);
+  const switchConnection = useStore((s) => s.switchConnection);
   const historyOpen = useStore((s) => s.historyOpen);
   const toggleHistory = useStore((s) => s.toggleHistory);
   const refreshSchema = useStore((s) => s.refreshSchema);
   const disconnect = useStore((s) => s.disconnect);
   const openSettings = useStore((s) => s.openSettings);
+  const compactTopBar = useStore((s) => s.compactTopBar);
+  const [addOpen, setAddOpen] = useState(false);
+
+  const slots = Object.values(connections);
+  const active = activeConnectionId ? connections[activeConnectionId] : null;
 
   return (
     <div className="topbar" data-tauri-drag-region>
@@ -15,15 +25,49 @@ export function TopBar() {
         <div className="brand-mark" aria-hidden>
           <span />
         </div>
-        {current && (
-          <div className="conn-pill">
-            <span className="conn-pill__dot" />
-            <span className="conn-pill__name">{current.name}</span>
-            <span className="conn-pill__meta mono">
-              Postgres {current.info.serverVersion}
-            </span>
-          </div>
-        )}
+        <div className="conn-switcher">
+          {slots.map((slot) => (
+            <div
+              key={slot.sessionId}
+              className={
+                "conn-pill conn-pill--switch" +
+                (slot.sessionId === activeConnectionId ? " conn-pill--active" : "")
+              }
+              onClick={() => switchConnection(slot.sessionId)}
+              title={
+                slot.sessionId === activeConnectionId
+                  ? slot.current.name
+                  : `Switch to ${slot.current.name}`
+              }
+            >
+              <span className="conn-pill__dot" />
+              <span className="conn-pill__name">{slot.current.name}</span>
+              {!compactTopBar && slot.sessionId === activeConnectionId && (
+                <span className="conn-pill__meta mono">
+                  Postgres {slot.current.info.serverVersion}
+                </span>
+              )}
+              <span
+                className="conn-pill__close"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void disconnect(slot.sessionId);
+                }}
+                title={`Disconnect ${slot.current.name}`}
+              >
+                ×
+              </span>
+            </div>
+          ))}
+          <button
+            className="conn-switcher__add"
+            onClick={() => setAddOpen(true)}
+            title="Add another connection"
+            aria-label="Add another connection"
+          >
+            +
+          </button>
+        </div>
       </div>
 
       <div className="topbar__right">
@@ -44,7 +88,7 @@ export function TopBar() {
         <button
           className="topbar__btn"
           onClick={() => void disconnect()}
-          title="Disconnect"
+          title={active ? `Disconnect ${active.current.name}` : "Disconnect"}
         >
           Disconnect
         </button>
@@ -70,6 +114,31 @@ export function TopBar() {
           </svg>
         </button>
       </div>
+
+      {addOpen && (
+        <div className="settings-overlay" onClick={() => setAddOpen(false)}>
+          <div
+            className="add-connection-card"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Add connection"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="settings-panel__head">
+              <span className="settings-panel__title">Add connection</span>
+              <button
+                className="settings-panel__close"
+                onClick={() => setAddOpen(false)}
+                title="Close"
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+            <ConnectionScreen embedded onConnected={() => setAddOpen(false)} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { useStore } from "../../state/store";
+import { useActiveTabId, useActiveTabs, useStore } from "../../state/store";
 import { EditorTabs } from "./EditorTabs";
 import { HistoryPanel } from "./HistoryPanel";
 import { ResultsPane } from "./ResultsPane";
 import { SchemaTree } from "./SchemaTree";
 import { SqlEditor } from "./SqlEditor";
+import { TableStructurePane } from "./TableStructurePane";
 import { TopBar } from "./TopBar";
 import "./workspace.css";
 
@@ -14,8 +15,8 @@ const SIDEBAR_MAX = 360;
 const EDITOR_MIN = 120;
 
 export function Workspace() {
-  const tabs = useStore((s) => s.tabs);
-  const activeTabId = useStore((s) => s.activeTabId);
+  const tabs = useActiveTabs();
+  const activeTabId = useActiveTabId();
   const setTabSql = useStore((s) => s.setTabSql);
   const runTab = useStore((s) => s.runTab);
   const historyOpen = useStore((s) => s.historyOpen);
@@ -68,7 +69,7 @@ export function Workspace() {
                     <SqlEditor
                       value={activeTab.sql}
                       onChange={(sql) => setTabSql(activeTab.id, sql)}
-                      onRun={() => void runTab(activeTab.id)}
+                      onRun={(sql) => void runTab(activeTab.id, sql)}
                     />
                   </div>
                   <div
@@ -77,10 +78,14 @@ export function Workspace() {
                   />
                 </>
               )}
-              {/* Keyed by tab id so switching tabs fully resets the grid's
+              {/* Keyed by tab id so switching tabs fully resets each pane's
                   internal state (sort, selection, column layout) instead of
-                  reusing it with stale state pointed at the wrong result. */}
-              <ResultsPane key={activeTab.id} tab={activeTab} />
+                  reusing it with stale state pointed at the wrong table. */}
+              {activeTab.kind === "structure" ? (
+                <TableStructurePane key={activeTab.id} tab={activeTab} />
+              ) : (
+                <ResultsPane key={activeTab.id} tab={activeTab} />
+              )}
             </>
           ) : (
             <div className="workspace__empty">
@@ -132,18 +137,47 @@ function useDrag(
   }, []);
 }
 
-/** Fallback: Cmd/Ctrl+Enter runs the active tab even when the editor is unfocused. */
+/**
+ * Global workspace shortcuts that work even when the editor isn't focused:
+ * Cmd/Ctrl+Enter runs the active tab's whole query (the editor's own keymap
+ * handles the smarter statement/selection version while it has focus),
+ * Escape cancels the active tab's query if it's currently running,
+ * Cmd/Ctrl+T opens a new query tab, and Cmd/Ctrl+W closes the active tab
+ * (routed through the store's own unsaved-edits confirmation).
+ */
 function useGlobalRunShortcut() {
   const runTab = useStore((s) => s.runTab);
-  const activeTabId = useStore((s) => s.activeTabId);
+  const cancelQuery = useStore((s) => s.cancelQuery);
+  const newTab = useStore((s) => s.newTab);
+  const closeTab = useStore((s) => s.closeTab);
+  const activeTabId = useActiveTabId();
+  const tabs = useActiveTabs();
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && activeTabId) {
         e.preventDefault();
         void runTab(activeTabId);
+        return;
+      }
+      if (e.key === "Escape") {
+        const activeTab = tabs.find((t) => t.id === activeTabId);
+        if (activeTab?.running) {
+          e.preventDefault();
+          cancelQuery();
+        }
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "t") {
+        e.preventDefault();
+        void newTab();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "w") {
+        e.preventDefault();
+        if (activeTabId) closeTab(activeTabId);
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [runTab, activeTabId]);
+  }, [runTab, cancelQuery, newTab, closeTab, activeTabId, tabs]);
 }

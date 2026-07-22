@@ -199,23 +199,52 @@
   background: var(--success);
 }
 .conn-card__sub {
+  display: block;
   font-size: 11px;
   color: var(--text-faint);
   padding-left: 14px;
+  /* A connection string has no spaces to break on — without this it
+     overflows the fixed-width card instead of wrapping. */
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
-.conn-card__delete {
+.conn-card__actions {
   position: absolute;
   top: 8px;
   right: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  opacity: 0;
+  transition: opacity var(--transition);
+}
+.conn-card:hover .conn-card__actions {
+  opacity: 1;
+}
+.conn-card__duplicate {
+  color: var(--text-ghost);
+  font-size: 13px;
+  line-height: 1;
+  transition: color var(--transition);
+}
+.conn-card__duplicate:hover {
+  color: var(--accent);
+}
+.conn-card__delete {
   color: var(--text-ghost);
   font-size: 15px;
   line-height: 1;
-  opacity: 0;
-  transition: opacity var(--transition), color var(--transition);
-}
-.conn-card:hover .conn-card__delete {
-  opacity: 1;
+  transition: color var(--transition);
 }
 .conn-card__delete:hover {
   color: var(--error);
+}
+
+.conn-editing-note {
+  margin: -10px 0 0;
+  color: var(--text-faint);
+}
+.conn-editing-note strong {
+  color: var(--text-muted);
+  font-weight: 600;
 }

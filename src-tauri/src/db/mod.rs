@@ -115,6 +115,52 @@ pub struct ForeignKeyRef {
     pub column: String,
 }
 
+/// Column, index, and check-constraint details for one table — the "View
+/// structure" panel. Foreign keys aren't repeated here: the frontend already
+/// has them per-column from `fetch_schema` and merges them in.
+///
+/// Deliberately does NOT attempt to reconstruct a full `CREATE TABLE`
+/// statement — storage params, partitioning, generated/identity columns, and
+/// so on make a faithful reconstruction genuinely complex and easy to get
+/// subtly wrong. Index and constraint text instead comes straight from
+/// Postgres's own `pg_get_*def()` functions rather than being hand-built, so
+/// what's shown is always accurate for what it does cover.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableStructure {
+    pub columns: Vec<StructureColumn>,
+    pub indexes: Vec<IndexDetail>,
+    pub check_constraints: Vec<CheckConstraintDetail>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StructureColumn {
+    pub name: String,
+    pub data_type: String,
+    pub nullable: bool,
+    pub is_primary_key: bool,
+    /// The column's default expression (e.g. `nextval(...)`, `now()`, a
+    /// literal), verbatim from Postgres. `None` means no default.
+    pub default_expr: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexDetail {
+    pub name: String,
+    /// The index's own `CREATE INDEX ...` statement (`pg_indexes.indexdef`).
+    pub definition: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckConstraintDetail {
+    pub name: String,
+    /// The constraint's own `CHECK (...)` text (`pg_get_constraintdef`).
+    pub definition: String,
+}
+
 /// A single column/value pair used to describe a row edit: which column, and
 /// either its current value (identifying the row, in a `WHERE`) or its new
 /// value (setting it, in a `SET`). `value` is `None` for SQL NULL.
@@ -225,6 +271,29 @@ pub trait DbSession: Send + Sync {
         table: &str,
         primary_key: &[ColumnValue],
     ) -> Result<(), DbError>;
+
+    /// Column, index, and check-constraint details for one table — the "View
+    /// structure" panel.
+    async fn table_structure(&self, schema: &str, table: &str) -> Result<TableStructure, DbError>;
+
+    /// A lightweight, independent handle that can cancel whatever this
+    /// session is *currently* running. Must be usable concurrently with an
+    /// in-flight call to `run_query` on this same session — it cannot require
+    /// exclusive access to the session, since the caller of an in-flight
+    /// query already holds that exclusivity for the query's whole duration
+    /// (see `AppState.canceller` in `state.rs`, which is a separate lock from
+    /// `AppState.active` for exactly this reason).
+    fn canceller(&self) -> Box<dyn QueryCanceller>;
+}
+
+/// See [`DbSession::canceller`].
+#[async_trait]
+pub trait QueryCanceller: Send + Sync {
+    /// Best-effort: ask the server to interrupt whatever is currently running
+    /// on the session this canceller came from. If nothing is running, this
+    /// is a harmless no-op (Postgres just won't find a matching query to
+    /// cancel).
+    async fn cancel(&self) -> Result<(), DbError>;
 }
 
 /// The default row cap applied to unbounded SELECT statements.

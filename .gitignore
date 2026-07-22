@@ -30,3 +30,10 @@ yarn-error.log*
 .env
 .env.local
 *.local
+
+# AI coding agent tooling (Claude Code, etc.) — local session/config files, not
+# project source.
+.claude/
+.cursor/
+.windsurf/
+.aider*

@@ -1,7 +1,8 @@
 # AGENTS.md — CubbyDB
 
 Context and conventions for AI coding agents working in this repository. Read
-this before making changes. For user-facing docs see [README.md](README.md).
+this before making changes. For user-facing docs see [README.md](README.md);
+for a catalog of what's built see [FEATURES.md](FEATURES.md).
 
 ## What this is
 
@@ -16,22 +17,13 @@ ignore that name.
 
 ## Status & scope
 
-This is an early v1. The core loop works end to end: connect → browse schema →
-run a query → see results, plus CSV export, query history, tab persistence, and
-auto-reconnect.
+This is an early v1, but the core loop and most of a usable Postgres client are
+built: connect → browse schema → run a query → edit/insert/delete rows →
+export, plus query history, tab persistence, auto-reconnect, and a full
+Settings system (theme, table/editor appearance, general behavior).
 
-**In scope for v1 (built):**
-- Connection management (connection string or fields; test; save; auto-reconnect)
-- Schema browser (collapsible tree; click a table to open its rows)
-- SQL editor (CodeMirror 6, multiple tabs, Cmd/Ctrl+Enter to run)
-- Results grid (default LIMIT 100 on unbounded SELECTs, CSV export, resizable
-  and reorderable columns, per-table WHERE filter)
-- Query history (logged locally, browsable/re-runnable, bounded + clearable)
-
-**In scope for v1 (not built yet):**
-- Inline cell editing → backend-generated `UPDATE` scoped by primary key
-  (read-only cells with a note when a table has no detectable primary key)
-- The no-SQL table browser toolbar (sort/paginate) from design screen 04
+**[FEATURES.md](FEATURES.md) is the living, user-facing catalog of everything
+that's built — read it instead of trusting this section to be current.**
 
 **Explicitly OUT of scope — do not build:**
 - Autocomplete / IntelliSense in the editor
@@ -131,6 +123,13 @@ in `src-tauri/` are Rust-side.
 
 ## Conventions
 
+- **Document every feature you build in [FEATURES.md](FEATURES.md).** When you
+  ship something user-facing — a new capability, a new Settings option, a
+  meaningful change to how an existing feature behaves — add or update its
+  entry there in the same change. Write what it does, not how (implementation
+  detail belongs in code comments or this file's architecture sections).
+  FEATURES.md is the source of truth for "what does CubbyDB do"; don't let it
+  drift like the old inline status list did.
 - Rust ↔ TS types are serialized **camelCase** (`#[serde(rename_all =
   "camelCase")]`). Keep `types.ts` in sync with `db/mod.rs` and the stores.
 - Tauri command args map JS camelCase ↔ Rust snake_case automatically.

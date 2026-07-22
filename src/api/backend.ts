@@ -9,16 +9,17 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type {
+  ActiveConnectionInfo,
   ColumnValue,
   ConnectionInfo,
   ConnectionParams,
-  CurrentConnection,
   DbError,
   HistoryEntry,
   LastConnection,
   QueryResult,
   SavedConnection,
   SchemaNode,
+  TableStructure,
 } from "../types";
 
 export function listSavedConnections(): Promise<SavedConnection[]> {
@@ -41,35 +42,41 @@ export function testConnection(
   return invoke("test_connection", { params });
 }
 
+/** Opens a new session and adds it to the backend's pool — never replaces an
+ *  existing one, so connecting to a second database leaves the first live.
+ *  Returns the new session's id, used by every call below to address it. */
 export function connect(
   params: ConnectionParams,
   name: string,
   connectionId?: string | null,
-): Promise<ConnectionInfo> {
+): Promise<ActiveConnectionInfo> {
   return invoke("connect", { params, name, connectionId: connectionId ?? null });
 }
 
-export function disconnect(): Promise<void> {
-  return invoke("disconnect");
-}
-
-export function currentConnection(): Promise<CurrentConnection | null> {
-  return invoke("current_connection");
+export function disconnect(sessionId: string): Promise<void> {
+  return invoke("disconnect", { sessionId });
 }
 
 export function getLastConnection(): Promise<LastConnection | null> {
   return invoke("get_last_connection");
 }
 
-export function fetchSchema(): Promise<SchemaNode[]> {
-  return invoke("fetch_schema");
+export function fetchSchema(sessionId: string): Promise<SchemaNode[]> {
+  return invoke("fetch_schema", { sessionId });
 }
 
-export function runQuery(sql: string): Promise<QueryResult> {
-  return invoke("run_query", { sql });
+export function runQuery(sessionId: string, sql: string): Promise<QueryResult> {
+  return invoke("run_query", { sessionId, sql });
+}
+
+/** Ask the server to interrupt whatever's currently running on this session.
+ *  A no-op if nothing is running. */
+export function cancelQuery(sessionId: string): Promise<void> {
+  return invoke("cancel_query", { sessionId });
 }
 
 export function selectTopSql(
+  sessionId: string,
   schema: string,
   table: string,
   filter?: string | null,
@@ -77,6 +84,7 @@ export function selectTopSql(
   offset?: number,
 ): Promise<string> {
   return invoke("select_top_sql", {
+    sessionId,
     schema,
     table,
     filter: filter ?? null,
@@ -86,28 +94,40 @@ export function selectTopSql(
 }
 
 export function updateRow(
+  sessionId: string,
   schema: string,
   table: string,
   primaryKey: ColumnValue[],
   changes: ColumnValue[],
 ): Promise<void> {
-  return invoke("update_row", { schema, table, primaryKey, changes });
+  return invoke("update_row", { sessionId, schema, table, primaryKey, changes });
 }
 
 export function insertRow(
+  sessionId: string,
   schema: string,
   table: string,
   values: ColumnValue[],
 ): Promise<void> {
-  return invoke("insert_row", { schema, table, values });
+  return invoke("insert_row", { sessionId, schema, table, values });
 }
 
 export function deleteRow(
+  sessionId: string,
   schema: string,
   table: string,
   primaryKey: ColumnValue[],
 ): Promise<void> {
-  return invoke("delete_row", { schema, table, primaryKey });
+  return invoke("delete_row", { sessionId, schema, table, primaryKey });
+}
+
+/** Column, index, and check-constraint details for one table. */
+export function getTableStructure(
+  sessionId: string,
+  schema: string,
+  table: string,
+): Promise<TableStructure> {
+  return invoke("get_table_structure", { sessionId, schema, table });
 }
 
 /** Copy text to the OS clipboard (via the backend — see the Rust command). */

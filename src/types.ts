@@ -28,7 +28,11 @@ export interface SavedConnection {
   createdAt: number;
 }
 
-export interface CurrentConnection {
+/** Returned by `connect` for a newly-opened session — `sessionId` addresses
+ *  it in every other session-scoped backend call. Multiple can be live at
+ *  once; the frontend tracks one `ConnectionSlot` per session id. */
+export interface ActiveConnectionInfo {
+  sessionId: string;
   name: string;
   connectionId: string | null;
   info: ConnectionInfo;
@@ -114,4 +118,35 @@ export interface HistoryEntry {
   rowCount: number | null;
   elapsedMs: number | null;
   error: string | null;
+}
+
+/** Column, index, and check-constraint details for one table — the "View
+ *  structure" panel. Foreign keys aren't included here; they're already
+ *  available per-column from the schema tree (`ColumnNode`). */
+export interface TableStructure {
+  columns: StructureColumn[];
+  indexes: IndexDetail[];
+  checkConstraints: CheckConstraintDetail[];
+}
+
+export interface StructureColumn {
+  name: string;
+  dataType: string;
+  nullable: boolean;
+  isPrimaryKey: boolean;
+  /** The column's default expression, verbatim from Postgres. `null` means
+   *  no default. */
+  defaultExpr: string | null;
+}
+
+export interface IndexDetail {
+  name: string;
+  /** The index's own `CREATE INDEX ...` statement. */
+  definition: string;
+}
+
+export interface CheckConstraintDetail {
+  name: string;
+  /** The constraint's own `CHECK (...)` text. */
+  definition: string;
 }

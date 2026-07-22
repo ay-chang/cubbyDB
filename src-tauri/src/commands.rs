@@ -2,23 +2,40 @@
 //! database layer. Commands speak only in the neutral `db` types; no SQL is
 //! constructed here or on the frontend (except the user's editor text).
 
+use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use tauri::State;
 
 use crate::connections::{LastConnection, SavedConnection};
 use crate::db::{
     driver_for, ColumnValue, ConnectionInfo, ConnectionParams, DbError, DbErrorKind, Engine,
-    QueryResult, SchemaNode, DEFAULT_ROW_LIMIT,
+    QueryResult, SchemaNode, TableStructure, DEFAULT_ROW_LIMIT,
 };
 use crate::history::{now_millis, HistoryEntry};
 use crate::state::{ActiveSession, AppState};
 
-/// Snapshot of the active connection for the UI top bar.
+/// Returned by `connect` for a newly-opened session: its id (used by every
+/// other session-scoped command to address it) plus the same info the UI top
+/// bar shows.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CurrentConnection {
+pub struct ActiveConnectionInfo {
+    pub session_id: String,
     pub name: String,
     pub connection_id: Option<String>,
     pub info: ConnectionInfo,
+}
+
+/// Opaque id for one live session — monotonic-enough for in-memory keys
+/// (nanoseconds since the epoch, mirroring `connections::new_id`'s approach
+/// for saved-connection ids).
+fn new_session_id() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("sess_{nanos}")
 }
 
 // --- Saved connections -----------------------------------------------------
@@ -54,6 +71,8 @@ pub async fn test_connection(
     driver.test_connection(&params).await
 }
 
+/// Open a new session and add it to the pool — never overwrites an existing
+/// one, so connecting to a second database leaves the first live.
 #[tauri::command]
 pub async fn connect(
     state: State<'_, AppState>,
@@ -61,7 +80,7 @@ pub async fn connect(
     name: String,
     engine: Option<Engine>,
     connection_id: Option<String>,
-) -> Result<ConnectionInfo, DbError> {
+) -> Result<ActiveConnectionInfo, DbError> {
     let engine = engine.unwrap_or_default();
     let driver = driver_for(engine);
     let session = driver.connect(&params).await?;
@@ -76,47 +95,93 @@ pub async fn connect(
         eprintln!("[cubbydb] failed to persist last connection: {e}");
     }
 
-    let mut active = state.active.lock().await;
-    *active = Some(ActiveSession {
-        session,
+    let session_id = new_session_id();
+    state
+        .canceller
+        .lock()
+        .await
+        .insert(session_id.clone(), session.canceller());
+
+    state.active.lock().await.insert(
+        session_id.clone(),
+        ActiveSession {
+            session,
+            name: name.clone(),
+            connection_id: connection_id.clone(),
+            params,
+            engine,
+        },
+    );
+
+    Ok(ActiveConnectionInfo {
+        session_id,
         name,
         connection_id,
-        params,
-        engine,
-    });
-    Ok(info)
+        info,
+    })
 }
 
-/// Re-establish a dropped session in place, reusing its stored parameters.
-/// Returns an error if there was no session to reconnect.
+/// Re-establish a dropped session in place, reusing its stored parameters, and
+/// refresh its `state.canceller` entry to match the new session. Returns an
+/// error if there was no session at `session_id` to reconnect.
 async fn reconnect_in_place(
-    active: &mut Option<ActiveSession>,
+    active: &mut HashMap<String, ActiveSession>,
+    session_id: &str,
+    state: &AppState,
 ) -> Result<(), DbError> {
-    let old = active.as_ref().ok_or_else(DbError::not_connected)?;
+    let old = active.get(session_id).ok_or_else(DbError::not_connected)?;
     let params = old.params.clone();
     let engine = old.engine;
     let name = old.name.clone();
     let connection_id = old.connection_id.clone();
 
     let session = driver_for(engine).connect(&params).await?;
-    *active = Some(ActiveSession {
-        session,
-        name,
-        connection_id,
-        params,
-        engine,
-    });
+    state
+        .canceller
+        .lock()
+        .await
+        .insert(session_id.to_string(), session.canceller());
+    active.insert(
+        session_id.to_string(),
+        ActiveSession {
+            session,
+            name,
+            connection_id,
+            params,
+            engine,
+        },
+    );
     Ok(())
 }
 
 #[tauri::command]
-pub async fn disconnect(state: State<'_, AppState>) -> Result<(), DbError> {
-    *state.active.lock().await = None;
-    // An explicit disconnect opts out of auto-reconnect next launch.
-    if let Err(e) = state.last_connection_store().clear() {
-        eprintln!("[cubbydb] failed to clear last connection: {e}");
+pub async fn disconnect(state: State<'_, AppState>, session_id: String) -> Result<(), DbError> {
+    state.active.lock().await.remove(&session_id);
+    state.canceller.lock().await.remove(&session_id);
+    // An explicit disconnect opts out of launch auto-reconnect only once every
+    // connection is closed — a still-live connection should keep being the
+    // auto-reconnect target rather than losing it because a *different*
+    // session was disconnected.
+    if state.active.lock().await.is_empty() {
+        if let Err(e) = state.last_connection_store().clear() {
+            eprintln!("[cubbydb] failed to clear last connection: {e}");
+        }
     }
     Ok(())
+}
+
+/// Ask the server to interrupt whatever this session is currently running.
+/// Deliberately reads only `state.canceller` — never `state.active`, which an
+/// in-flight `run_query` holds locked for its whole duration; using that lock
+/// here would make a cancel request queue up behind the very query it's meant
+/// to interrupt. If nothing is running (or the session id is unknown), this
+/// is a harmless no-op.
+#[tauri::command]
+pub async fn cancel_query(state: State<'_, AppState>, session_id: String) -> Result<(), DbError> {
+    match state.canceller.lock().await.get(&session_id) {
+        Some(canceller) => canceller.cancel().await,
+        None => Ok(()),
+    }
 }
 
 /// The last connection's parameters, for auto-reconnect on launch.
@@ -127,34 +192,25 @@ pub async fn get_last_connection(
     state.last_connection_store().get()
 }
 
-#[tauri::command]
-pub async fn current_connection(
-    state: State<'_, AppState>,
-) -> Result<Option<CurrentConnection>, DbError> {
-    let active = state.active.lock().await;
-    Ok(active.as_ref().map(|a| CurrentConnection {
-        name: a.name.clone(),
-        connection_id: a.connection_id.clone(),
-        info: a.session.info().clone(),
-    }))
-}
-
 // --- Schema / query --------------------------------------------------------
 
 #[tauri::command]
-pub async fn fetch_schema(state: State<'_, AppState>) -> Result<Vec<SchemaNode>, DbError> {
+pub async fn fetch_schema(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<Vec<SchemaNode>, DbError> {
     let mut active = state.active.lock().await;
     {
-        let session = active.as_ref().ok_or_else(DbError::not_connected)?;
+        let session = active.get(&session_id).ok_or_else(DbError::not_connected)?;
         match session.session.fetch_schema().await {
             Err(e) if e.kind == DbErrorKind::Connection => { /* retry below */ }
             other => return other,
         }
     }
     // The connection had dropped — reconnect once and try again.
-    reconnect_in_place(&mut active).await?;
+    reconnect_in_place(&mut active, &session_id, &state).await?;
     active
-        .as_ref()
+        .get(&session_id)
         .ok_or_else(DbError::not_connected)?
         .session
         .fetch_schema()
@@ -162,16 +218,20 @@ pub async fn fetch_schema(state: State<'_, AppState>) -> Result<Vec<SchemaNode>,
 }
 
 #[tauri::command]
-pub async fn run_query(state: State<'_, AppState>, sql: String) -> Result<QueryResult, DbError> {
+pub async fn run_query(
+    state: State<'_, AppState>,
+    session_id: String,
+    sql: String,
+) -> Result<QueryResult, DbError> {
     let mut active = state.active.lock().await;
     let connection_name = active
-        .as_ref()
+        .get(&session_id)
         .ok_or_else(DbError::not_connected)?
         .name
         .clone();
 
     let mut result = active
-        .as_ref()
+        .get(&session_id)
         .ok_or_else(DbError::not_connected)?
         .session
         .run_query(&sql)
@@ -179,8 +239,8 @@ pub async fn run_query(state: State<'_, AppState>, sql: String) -> Result<QueryR
 
     // If the connection had silently dropped, reconnect once and retry.
     if matches!(&result, Err(e) if e.kind == DbErrorKind::Connection) {
-        if let Ok(()) = reconnect_in_place(&mut active).await {
-            if let Some(session) = active.as_ref() {
+        if let Ok(()) = reconnect_in_place(&mut active, &session_id, &state).await {
+            if let Some(session) = active.get(&session_id) {
                 result = session.session.run_query(&sql).await;
             }
         }
@@ -219,6 +279,7 @@ pub async fn run_query(state: State<'_, AppState>, sql: String) -> Result<QueryR
 #[tauri::command]
 pub async fn select_top_sql(
     state: State<'_, AppState>,
+    session_id: String,
     schema: String,
     table: String,
     filter: Option<String>,
@@ -226,7 +287,7 @@ pub async fn select_top_sql(
     offset: Option<u32>,
 ) -> Result<String, DbError> {
     let active = state.active.lock().await;
-    let active = active.as_ref().ok_or_else(DbError::not_connected)?;
+    let active = active.get(&session_id).ok_or_else(DbError::not_connected)?;
     Ok(active.session.select_top_sql(
         &schema,
         &table,
@@ -241,6 +302,7 @@ pub async fn select_top_sql(
 #[tauri::command]
 pub async fn update_row(
     state: State<'_, AppState>,
+    session_id: String,
     schema: String,
     table: String,
     primary_key: Vec<ColumnValue>,
@@ -248,7 +310,7 @@ pub async fn update_row(
 ) -> Result<(), DbError> {
     let mut active = state.active.lock().await;
     {
-        let session = active.as_ref().ok_or_else(DbError::not_connected)?;
+        let session = active.get(&session_id).ok_or_else(DbError::not_connected)?;
         match session
             .session
             .update_row(&schema, &table, &primary_key, &changes)
@@ -258,9 +320,9 @@ pub async fn update_row(
             other => return other,
         }
     }
-    reconnect_in_place(&mut active).await?;
+    reconnect_in_place(&mut active, &session_id, &state).await?;
     active
-        .as_ref()
+        .get(&session_id)
         .ok_or_else(DbError::not_connected)?
         .session
         .update_row(&schema, &table, &primary_key, &changes)
@@ -271,21 +333,22 @@ pub async fn update_row(
 #[tauri::command]
 pub async fn insert_row(
     state: State<'_, AppState>,
+    session_id: String,
     schema: String,
     table: String,
     values: Vec<ColumnValue>,
 ) -> Result<(), DbError> {
     let mut active = state.active.lock().await;
     {
-        let session = active.as_ref().ok_or_else(DbError::not_connected)?;
+        let session = active.get(&session_id).ok_or_else(DbError::not_connected)?;
         match session.session.insert_row(&schema, &table, &values).await {
             Err(e) if e.kind == DbErrorKind::Connection => { /* retry below */ }
             other => return other,
         }
     }
-    reconnect_in_place(&mut active).await?;
+    reconnect_in_place(&mut active, &session_id, &state).await?;
     active
-        .as_ref()
+        .get(&session_id)
         .ok_or_else(DbError::not_connected)?
         .session
         .insert_row(&schema, &table, &values)
@@ -296,13 +359,14 @@ pub async fn insert_row(
 #[tauri::command]
 pub async fn delete_row(
     state: State<'_, AppState>,
+    session_id: String,
     schema: String,
     table: String,
     primary_key: Vec<ColumnValue>,
 ) -> Result<(), DbError> {
     let mut active = state.active.lock().await;
     {
-        let session = active.as_ref().ok_or_else(DbError::not_connected)?;
+        let session = active.get(&session_id).ok_or_else(DbError::not_connected)?;
         match session
             .session
             .delete_row(&schema, &table, &primary_key)
@@ -312,12 +376,38 @@ pub async fn delete_row(
             other => return other,
         }
     }
-    reconnect_in_place(&mut active).await?;
+    reconnect_in_place(&mut active, &session_id, &state).await?;
     active
-        .as_ref()
+        .get(&session_id)
         .ok_or_else(DbError::not_connected)?
         .session
         .delete_row(&schema, &table, &primary_key)
+        .await
+}
+
+/// Column, index, and check-constraint details for one table — the "View
+/// structure" panel.
+#[tauri::command]
+pub async fn get_table_structure(
+    state: State<'_, AppState>,
+    session_id: String,
+    schema: String,
+    table: String,
+) -> Result<TableStructure, DbError> {
+    let mut active = state.active.lock().await;
+    {
+        let session = active.get(&session_id).ok_or_else(DbError::not_connected)?;
+        match session.session.table_structure(&schema, &table).await {
+            Err(e) if e.kind == DbErrorKind::Connection => { /* retry below */ }
+            other => return other,
+        }
+    }
+    reconnect_in_place(&mut active, &session_id, &state).await?;
+    active
+        .get(&session_id)
+        .ok_or_else(DbError::not_connected)?
+        .session
+        .table_structure(&schema, &table)
         .await
 }
 

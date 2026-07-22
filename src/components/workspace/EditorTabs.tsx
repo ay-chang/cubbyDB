@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 
-import { useStore } from "../../state/store";
+import { useActiveTabId, useActiveTabs, useStore } from "../../state/store";
 
 /**
  * The tab strip above the editor. Active tab carries a 2px accent underline.
@@ -9,8 +9,8 @@ import { useStore } from "../../state/store";
  * threshold is treated as a plain click that activates the tab.
  */
 export function EditorTabs() {
-  const tabs = useStore((s) => s.tabs);
-  const activeTabId = useStore((s) => s.activeTabId);
+  const tabs = useActiveTabs();
+  const activeTabId = useActiveTabId();
   const setActiveTab = useStore((s) => s.setActiveTab);
   const closeTab = useStore((s) => s.closeTab);
   const newTab = useStore((s) => s.newTab);
@@ -109,7 +109,7 @@ export function EditorTabs() {
             onMouseDown={onTabMouseDown(index, tab.id)}
           >
             <span className="tab__marker mono">
-              {tab.kind === "table" ? "▦" : "◆"}
+              {tab.kind === "table" ? "▦" : tab.kind === "structure" ? "▤" : "◆"}
             </span>
             <span className="tab__title">{tab.title}</span>
             <span

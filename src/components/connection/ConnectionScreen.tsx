@@ -77,7 +77,40 @@ function savedSubtitle(conn: SavedConnection): string {
   return "connection string";
 }
 
-export function ConnectionScreen() {
+/** Params equality for dirty-tracking — undefined and null both mean "unset". */
+function paramsEqual(a: ConnectionParams, b: ConnectionParams): boolean {
+  const norm = (p: ConnectionParams) => ({
+    connectionString: p.connectionString ?? null,
+    host: p.host ?? null,
+    port: p.port ?? null,
+    database: p.database ?? null,
+    user: p.user ?? null,
+    password: p.password ?? null,
+  });
+  const na = norm(a);
+  const nb = norm(b);
+  return (
+    na.connectionString === nb.connectionString &&
+    na.host === nb.host &&
+    na.port === nb.port &&
+    na.database === nb.database &&
+    na.user === nb.user &&
+    na.password === nb.password
+  );
+}
+
+/**
+ * `embedded`, when true, renders just the form + saved-list grid without the
+ * full-page window chrome (`AppFrame`) — used to add a second (or third...)
+ * connection from a modal while already connected, rather than replacing the
+ * whole screen. The plain full-page version is still used for the very first
+ * connection (`connections` empty, per `Workspace`/`App`'s routing).
+ */
+export function ConnectionScreen(props: {
+  embedded?: boolean;
+  onConnected?: () => void;
+} = {}) {
+  const { embedded, onConnected } = props;
   const savedConnections = useStore((s) => s.savedConnections);
   const loadSavedConnections = useStore((s) => s.loadSavedConnections);
   const connectTo = useStore((s) => s.connectTo);
@@ -85,9 +118,11 @@ export function ConnectionScreen() {
   const reconnectError = useStore((s) => s.reconnectError);
 
   // Prefill from the last connection (e.g. after a failed auto-reconnect) so
-  // getting back in is one click.
+  // getting back in is one click — but not when embedded as an "add another
+  // connection" modal, where prefilling with whatever's already connected
+  // would be confusing rather than convenient.
   const [form, setForm] = useState<FormState>(() =>
-    lastConnection ? paramsToForm(lastConnection.params) : EMPTY_FORM,
+    !embedded && lastConnection ? paramsToForm(lastConnection.params) : EMPTY_FORM,
   );
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [test, setTest] = useState<TestState>({ kind: "idle" });
@@ -99,12 +134,21 @@ export function ConnectionScreen() {
   const hasInput =
     form.connectionString.trim() !== "" || form.host.trim() !== "";
 
+  const selected = selectedId
+    ? savedConnections.find((c) => c.id === selectedId) ?? null
+    : null;
+  // Whether the form differs from the selected saved connection's stored
+  // params — drives whether we show one "Update" action or an explicit
+  // "Update" + "Save as new" pair, instead of silently switching between
+  // overwrite and create-new on every keystroke.
+  const dirty = selected ? !paramsEqual(params, selected.params) : false;
+
   function update<K extends keyof FormState>(key: K, value: string) {
     setForm((f) => ({ ...f, [key]: value }));
-    // Any edit invalidates a previous test result (per spec).
+    // Any edit invalidates a previous test result (per spec). The selected
+    // saved connection stays selected — see `dirty` above.
     setTest({ kind: "idle" });
     setConnectError(null);
-    setSelectedId(null);
   }
 
   function loadSaved(conn: SavedConnection) {
@@ -133,22 +177,22 @@ export function ConnectionScreen() {
     try {
       await connectTo({
         params,
-        name: selectedId
-          ? savedConnections.find((c) => c.id === selectedId)?.name ??
-            deriveName(form)
-          : deriveName(form),
+        name: selected?.name ?? deriveName(form),
         id: selectedId ?? undefined,
       });
+      onConnected?.();
     } catch (err) {
       setConnectError(errorMessage(err));
       setConnecting(false);
     }
   }
 
-  async function handleSave() {
+  /** `"new"` always creates a fresh saved connection; `"update"` overwrites
+   *  the currently-selected one (only valid when one is selected). */
+  async function handleSave(mode: "new" | "update" = "new") {
     const record: SavedConnection = {
-      id: selectedId ?? "",
-      name: deriveName(form),
+      id: mode === "update" && selectedId ? selectedId : "",
+      name: mode === "update" && selected ? selected.name : deriveName(form),
       engine: "postgres",
       params,
       createdAt: 0,
@@ -173,6 +217,24 @@ export function ConnectionScreen() {
     }
   }
 
+  async function handleDuplicate(conn: SavedConnection, e: React.MouseEvent) {
+    e.stopPropagation();
+    const record: SavedConnection = {
+      id: "",
+      name: `${conn.name} copy`,
+      engine: conn.engine,
+      params: conn.params,
+      createdAt: 0,
+    };
+    try {
+      const saved = await api.saveConnection(record);
+      await loadSavedConnections();
+      loadSaved(saved);
+    } catch (err) {
+      setConnectError(errorMessage(err));
+    }
+  }
+
   function onFormKeyDown(e: React.KeyboardEvent) {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && hasInput && !connecting) {
       e.preventDefault();
@@ -180,9 +242,7 @@ export function ConnectionScreen() {
     }
   }
 
-  return (
-    <div className="conn-screen">
-      <AppFrame title="New connection" maxWidth={1000}>
+  const body = (
         <div className="conn-body" onKeyDown={onFormKeyDown}>
           {/* --- Form --- */}
           <div className="conn-form">
@@ -271,15 +331,45 @@ export function ConnectionScreen() {
               >
                 Test connection
               </button>
-              <button
-                className="btn btn--ghost"
-                onClick={handleSave}
-                disabled={!hasInput}
-                title="Save this connection"
-              >
-                {selectedId ? "Update" : "Save"}
-              </button>
+              {selected ? (
+                <>
+                  <button
+                    className="btn btn--ghost"
+                    onClick={() => handleSave("update")}
+                    disabled={!hasInput || !dirty}
+                    title={`Overwrite "${selected.name}" with these values`}
+                  >
+                    Update
+                  </button>
+                  {dirty && (
+                    <button
+                      className="btn btn--ghost"
+                      onClick={() => handleSave("new")}
+                      disabled={!hasInput}
+                      title="Save these values as a new connection, leaving the original unchanged"
+                    >
+                      Save as new
+                    </button>
+                  )}
+                </>
+              ) : (
+                <button
+                  className="btn btn--ghost"
+                  onClick={() => handleSave("new")}
+                  disabled={!hasInput}
+                  title="Save this connection"
+                >
+                  Save
+                </button>
+              )}
             </div>
+
+            {selected && (
+              <p className="conn-editing-note caption">
+                Editing <strong>{selected.name}</strong>
+                {dirty && " · unsaved changes"}
+              </p>
+            )}
 
             {/* --- Test / connect states (inline, never modal) --- */}
             {test.kind === "testing" && (
@@ -309,7 +399,7 @@ export function ConnectionScreen() {
                 <span className="conn-state__detail mono">{connectError}</span>
               </div>
             )}
-            {reconnectError && !connectError && test.kind === "idle" && (
+            {!embedded && reconnectError && !connectError && test.kind === "idle" && (
               <div className="conn-state conn-state--error">
                 <div className="conn-state__title">
                   <span>✕</span>Couldn't reconnect automatically
@@ -348,19 +438,34 @@ export function ConnectionScreen() {
                     {conn.name}
                   </span>
                   <span className="conn-card__sub mono">{savedSubtitle(conn)}</span>
-                  <span
-                    className="conn-card__delete"
-                    onClick={(e) => handleDelete(conn.id, e)}
-                    title="Delete"
-                  >
-                    ×
+                  <span className="conn-card__actions">
+                    <span
+                      className="conn-card__duplicate"
+                      onClick={(e) => void handleDuplicate(conn, e)}
+                      title="Duplicate"
+                    >
+                      ⧉
+                    </span>
+                    <span
+                      className="conn-card__delete"
+                      onClick={(e) => handleDelete(conn.id, e)}
+                      title="Delete"
+                    >
+                      ×
+                    </span>
                   </span>
                 </button>
               ))}
             </div>
           </div>
         </div>
-      </AppFrame>
+  );
+
+  if (embedded) return body;
+
+  return (
+    <div className="conn-screen">
+      <AppFrame title="New connection" maxWidth={1000}>{body}</AppFrame>
     </div>
   );
 }

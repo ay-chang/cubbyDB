@@ -1,17 +1,20 @@
 //! Shared application state managed by Tauri.
 //!
-//! Holds the single active session (v1 keeps one connection open at a time) and
-//! the resolved data directory used by the connection and history stores.
+//! Holds every live session, keyed by an opaque session id (multiple
+//! connections can be open concurrently — the frontend picks which one's
+//! workspace is visible), and the resolved data directory used by the
+//! connection and history stores.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use tokio::sync::Mutex;
 
 use crate::connections::{ConnectionStore, LastConnectionStore};
-use crate::db::{ConnectionParams, DbSession, Engine};
+use crate::db::{ConnectionParams, DbSession, Engine, QueryCanceller};
 use crate::history::HistoryStore;
 
-/// The currently open connection, if any.
+/// One open connection.
 pub struct ActiveSession {
     pub session: Box<dyn DbSession>,
     /// Display name (from the saved connection or a derived label).
@@ -26,14 +29,24 @@ pub struct ActiveSession {
 
 pub struct AppState {
     data_dir: PathBuf,
-    pub active: Mutex<Option<ActiveSession>>,
+    /// Every live session, keyed by session id (assigned in `connect`).
+    pub active: Mutex<HashMap<String, ActiveSession>>,
+    /// Per-session handles that can cancel whatever that session is
+    /// currently running. Deliberately a *separate* lock from `active`:
+    /// `active`'s lock is held for the whole duration of an in-flight
+    /// `run_query`, so a cancel command that needed the same lock would just
+    /// queue up behind the very query it's trying to interrupt. A session's
+    /// entry is refreshed on every connect/reconnect and removed on
+    /// disconnect.
+    pub canceller: Mutex<HashMap<String, Box<dyn QueryCanceller>>>,
 }
 
 impl AppState {
     pub fn new(data_dir: PathBuf) -> Self {
         Self {
             data_dir,
-            active: Mutex::new(None),
+            active: Mutex::new(HashMap::new()),
+            canceller: Mutex::new(HashMap::new()),
         }
     }
 

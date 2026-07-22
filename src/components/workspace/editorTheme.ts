@@ -16,12 +16,14 @@ const theme = EditorView.theme(
     "&": {
       color: cssVar("--text", "#16181d"),
       backgroundColor: cssVar("--surface", "#ffffff"),
-      fontSize: "13px",
+      fontSize: cssVar("--editor-font-size", "13px"),
       height: "100%",
     },
     ".cm-scroller": {
-      fontFamily: cssVar("--font-mono", "'Geist Mono', monospace"),
-      lineHeight: "22px",
+      fontFamily: cssVar("--editor-font", "'Geist Mono', monospace"),
+      // Unitless so it scales automatically with the inherited font size above
+      // (~22/13 at the default size) rather than needing a second variable.
+      lineHeight: "1.7",
     },
     ".cm-content": {
       padding: "14px 0",

@@ -12,9 +12,10 @@ use tokio_postgres::error::ErrorPosition;
 use tokio_postgres::{Config, SimpleQueryMessage};
 
 use super::{
-    ColumnNode, ColumnValue, ConnectionInfo, ConnectionParams, DatabaseDriver, DbError,
-    DbErrorKind, DbSession, Engine, ForeignKeyRef, QueryResult, ResultColumn, SchemaNode,
-    TableKind, TableNode,
+    CheckConstraintDetail, ColumnNode, ColumnValue, ConnectionInfo, ConnectionParams,
+    DatabaseDriver, DbError, DbErrorKind, DbSession, Engine, ForeignKeyRef, IndexDetail,
+    QueryCanceller, QueryResult, ResultColumn, SchemaNode, StructureColumn, TableKind, TableNode,
+    TableStructure,
 };
 
 /// Stateless factory for Postgres sessions.
@@ -423,18 +424,94 @@ impl DbSession for PostgresSession {
 
         Ok(())
     }
+
+    async fn table_structure(&self, schema: &str, table: &str) -> Result<TableStructure, DbError> {
+        let col_rows = self
+            .client
+            .query(STRUCTURE_COLUMNS_SQL, &[&schema, &table])
+            .await
+            .map_err(map_query_err)?;
+        let columns = col_rows
+            .iter()
+            .map(|r| StructureColumn {
+                name: r.get(0),
+                data_type: r.get(1),
+                nullable: r.get(2),
+                is_primary_key: r.get(3),
+                default_expr: r.get(4),
+            })
+            .collect();
+
+        let index_rows = self
+            .client
+            .query(STRUCTURE_INDEXES_SQL, &[&schema, &table])
+            .await
+            .map_err(map_query_err)?;
+        let indexes = index_rows
+            .iter()
+            .map(|r| IndexDetail {
+                name: r.get(0),
+                definition: r.get(1),
+            })
+            .collect();
+
+        let check_rows = self
+            .client
+            .query(STRUCTURE_CHECK_CONSTRAINTS_SQL, &[&schema, &table])
+            .await
+            .map_err(map_query_err)?;
+        let check_constraints = check_rows
+            .iter()
+            .map(|r| CheckConstraintDetail {
+                name: r.get(0),
+                definition: r.get(1),
+            })
+            .collect();
+
+        Ok(TableStructure { columns, indexes, check_constraints })
+    }
+
+    fn canceller(&self) -> Box<dyn QueryCanceller> {
+        Box::new(PostgresCanceller {
+            token: self.client.cancel_token(),
+        })
+    }
 }
 
-/// Connect, spawn the connection driver task, and read the server version.
-async fn establish(params: &ConnectionParams) -> Result<(tokio_postgres::Client, ConnectionInfo), DbError> {
-    let config = build_config(params)?;
+/// Cancels whatever is running on the [`PostgresSession`] it came from, via
+/// Postgres's native cancel-request protocol on a fresh, independent
+/// connection — this is why it works even while the original session's
+/// `run_query` is still in-flight (unlike every other operation on a session,
+/// which the caller serializes by holding `AppState.active`'s lock).
+struct PostgresCanceller {
+    token: tokio_postgres::CancelToken,
+}
 
+#[async_trait]
+impl QueryCanceller for PostgresCanceller {
+    async fn cancel(&self) -> Result<(), DbError> {
+        let connector = tls_connector()?;
+        self.token.cancel_query(connector).await.map_err(map_conn_err)
+    }
+}
+
+/// Build the TLS connector used for every Postgres connection this driver
+/// opens, including the out-of-band connection a `CancelToken` needs. Cheap
+/// and purely local — no I/O — so callers can build a fresh one whenever
+/// needed rather than having to thread one through.
+fn tls_connector() -> Result<postgres_native_tls::MakeTlsConnector, DbError> {
     // native-tls uses the OS trust store; combined with sslmode=prefer this
     // negotiates TLS when the server offers it and falls back to plaintext.
     let tls = native_tls::TlsConnector::builder()
         .build()
         .map_err(|e| DbError::new(DbErrorKind::Connection, format!("TLS setup failed: {e}")))?;
-    let connector = postgres_native_tls::MakeTlsConnector::new(tls);
+    Ok(postgres_native_tls::MakeTlsConnector::new(tls))
+}
+
+/// Connect, spawn the connection driver task, and read the server version.
+async fn establish(params: &ConnectionParams) -> Result<(tokio_postgres::Client, ConnectionInfo), DbError> {
+    let config = build_config(params)?;
+    let connector = tls_connector()?;
 
     let start = Instant::now();
     let (client, connection) = config.connect(connector).await.map_err(map_conn_err)?;
@@ -688,6 +765,60 @@ const FOREIGN_KEYS_SQL: &str = "
       AND ns.nspname NOT IN ('pg_catalog', 'information_schema')
       AND ns.nspname NOT LIKE 'pg_toast%'
       AND ns.nspname NOT LIKE 'pg_temp%'
+";
+
+// --- "View structure" queries, each scoped to one table via $1 (schema) and
+// $2 (table) ------------------------------------------------------------
+
+/// Columns for one table, with type, nullability, PK flag, and default
+/// expression. Same shape as `SCHEMA_COLUMNS_SQL` plus `pg_attrdef` for the
+/// default — kept as a separate, table-scoped query rather than piggybacking
+/// on the whole-schema fetch, since the default expression isn't needed by
+/// the tree and computing it for every column in every table on every
+/// connect/refresh would be wasted work.
+const STRUCTURE_COLUMNS_SQL: &str = "
+    SELECT
+        a.attname                              AS column_name,
+        format_type(a.atttypid, a.atttypmod)   AS data_type,
+        NOT a.attnotnull                       AS nullable,
+        COALESCE(pk.is_pk, false)              AS is_primary_key,
+        pg_get_expr(ad.adbin, ad.adrelid)      AS default_expr
+    FROM pg_catalog.pg_class c
+    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    JOIN pg_catalog.pg_attribute a
+        ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+    LEFT JOIN pg_catalog.pg_attrdef ad
+        ON ad.adrelid = c.oid AND ad.adnum = a.attnum
+    LEFT JOIN LATERAL (
+        SELECT true AS is_pk
+        FROM pg_catalog.pg_index i
+        WHERE i.indrelid = c.oid AND i.indisprimary
+          AND a.attnum = ANY (i.indkey)
+        LIMIT 1
+    ) pk ON true
+    WHERE n.nspname = $1 AND c.relname = $2
+    ORDER BY a.attnum
+";
+
+/// Indexes for one table. `pg_indexes` is a builtin view that already has the
+/// full `CREATE INDEX ...` text per index — using it means we never hand-build
+/// index DDL ourselves.
+const STRUCTURE_INDEXES_SQL: &str = "
+    SELECT indexname, indexdef
+    FROM pg_catalog.pg_indexes
+    WHERE schemaname = $1 AND tablename = $2
+    ORDER BY indexname
+";
+
+/// CHECK constraints for one table, via Postgres's own constraint-rendering
+/// function rather than reconstructing the clause by hand.
+const STRUCTURE_CHECK_CONSTRAINTS_SQL: &str = "
+    SELECT con.conname, pg_get_constraintdef(con.oid)
+    FROM pg_catalog.pg_constraint con
+    JOIN pg_catalog.pg_class c ON c.oid = con.conrelid
+    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = $1 AND c.relname = $2 AND con.contype = 'c'
+    ORDER BY con.conname
 ";
 
 #[cfg(test)]
@@ -982,5 +1113,183 @@ mod tests {
             .run_query("DROP TABLE cubbydb_edit_test")
             .await
             .expect("clean up scratch table");
+    }
+
+    /// Verifies the specific property that makes cancellation actually work:
+    /// a `QueryCanceller` obtained from a session can interrupt a query
+    /// that's *currently in flight on that same session* — from a separate
+    /// concurrent task, with no shared lock between them. This is the exact
+    /// shape `commands::cancel_query` relies on (it only ever touches
+    /// `AppState.canceller`, never the `AppState.active` lock that an
+    /// in-flight `run_query` holds for its whole duration).
+    ///
+    ///   CUBBYDB_TEST_DSN="postgresql://user@localhost/db" \
+    ///     cargo test --lib -- --ignored --nocapture live_cancel_query
+    #[tokio::test]
+    #[ignore = "requires a running Postgres (set CUBBYDB_TEST_DSN)"]
+    async fn live_cancel_query() {
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        use super::super::{ConnectionParams, DatabaseDriver};
+
+        let Ok(dsn) = std::env::var("CUBBYDB_TEST_DSN") else {
+            eprintln!("CUBBYDB_TEST_DSN not set; skipping");
+            return;
+        };
+
+        let driver = PostgresDriver::new();
+        let params = ConnectionParams {
+            connection_string: Some(dsn),
+            ..Default::default()
+        };
+        let session: Arc<Box<dyn super::super::DbSession>> =
+            Arc::new(driver.connect(&params).await.expect("connect"));
+
+        let canceller = session.canceller();
+
+        let query_session = session.clone();
+        let query_task = tokio::spawn(async move {
+            let start = Instant::now();
+            let result = query_session.run_query("SELECT pg_sleep(15)").await;
+            (result, start.elapsed())
+        });
+
+        // Give the sleep query time to actually start executing on the server
+        // before trying to cancel it.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        let cancel_start = Instant::now();
+        canceller.cancel().await.expect("cancel_query itself should succeed");
+        let cancel_elapsed = cancel_start.elapsed();
+        eprintln!("cancel() returned in {cancel_elapsed:?}");
+        // The cancel call is its own short connection — it must not be stuck
+        // waiting behind the 15s query.
+        assert!(
+            cancel_elapsed < Duration::from_secs(5),
+            "cancel() took {cancel_elapsed:?} — it may have incorrectly blocked \
+             on the same lock as the in-flight query"
+        );
+
+        let (result, query_elapsed) = query_task.await.expect("query task panicked");
+        eprintln!("cancelled query returned in {query_elapsed:?}: {result:?}");
+        let err = result.expect_err("the cancelled query should return an error, not succeed");
+        // Postgres reports a cancelled statement as SQLSTATE 57014.
+        assert_eq!(err.code.as_deref(), Some("57014"), "expected a query_canceled SQLSTATE");
+        assert!(
+            query_elapsed < Duration::from_secs(10),
+            "query returned in {query_elapsed:?} — expected it to be interrupted well \
+             before its own 15s pg_sleep would have finished"
+        );
+
+        // The session must still be usable afterward — cancelling one query
+        // shouldn't poison the connection for the next one.
+        let after = session
+            .run_query("SELECT 1 AS n")
+            .await
+            .expect("session should still work after a cancelled query");
+        assert_eq!(after.rows[0][0].as_deref(), Some("1"));
+        eprintln!("session still usable after cancel: {:?}", after.rows);
+    }
+
+    /// Verifies `table_structure` against a scratch table exercising a
+    /// default expression, a NOT NULL / nullable pair, a primary key, a
+    /// secondary index, and a CHECK constraint.
+    ///
+    ///   CUBBYDB_TEST_DSN="postgresql://user@localhost/db" \
+    ///     cargo test --lib -- --ignored --nocapture live_table_structure
+    #[tokio::test]
+    #[ignore = "requires a running Postgres (set CUBBYDB_TEST_DSN)"]
+    async fn live_table_structure() {
+        use super::super::{ConnectionParams, DatabaseDriver};
+
+        let Ok(dsn) = std::env::var("CUBBYDB_TEST_DSN") else {
+            eprintln!("CUBBYDB_TEST_DSN not set; skipping");
+            return;
+        };
+
+        let driver = PostgresDriver::new();
+        let params = ConnectionParams {
+            connection_string: Some(dsn),
+            ..Default::default()
+        };
+        let session = driver.connect(&params).await.expect("connect");
+
+        session
+            .run_query("DROP TABLE IF EXISTS cubbydb_structure_test")
+            .await
+            .expect("drop leftover structure table");
+        session
+            .run_query(
+                "CREATE TABLE cubbydb_structure_test (
+                    id serial PRIMARY KEY,
+                    name text NOT NULL,
+                    qty int DEFAULT 0 CHECK (qty >= 0),
+                    note text
+                )",
+            )
+            .await
+            .expect("create structure table");
+        session
+            .run_query("CREATE INDEX cubbydb_structure_test_name_idx ON cubbydb_structure_test (name)")
+            .await
+            .expect("create secondary index");
+
+        let structure = session
+            .table_structure("public", "cubbydb_structure_test")
+            .await
+            .expect("table_structure");
+        eprintln!("{structure:#?}");
+
+        assert_eq!(structure.columns.len(), 4);
+        let by_name = |n: &str| {
+            structure
+                .columns
+                .iter()
+                .find(|c| c.name == n)
+                .unwrap_or_else(|| panic!("expected a column named {n}"))
+        };
+
+        let id = by_name("id");
+        assert!(id.is_primary_key, "id should be flagged as the primary key");
+        assert!(!id.nullable);
+        assert!(
+            id.default_expr.as_deref().is_some_and(|d| d.contains("nextval")),
+            "serial column should have a nextval() default, got {:?}",
+            id.default_expr,
+        );
+
+        let name = by_name("name");
+        assert!(!name.is_primary_key);
+        assert!(!name.nullable, "name is NOT NULL");
+        assert_eq!(name.default_expr, None);
+
+        let qty = by_name("qty");
+        assert!(qty.nullable, "qty has no NOT NULL, so it's nullable");
+        assert_eq!(qty.default_expr.as_deref(), Some("0"));
+
+        let note = by_name("note");
+        assert!(note.nullable);
+        assert_eq!(note.default_expr, None);
+
+        // The primary key's own index, plus the secondary one we created —
+        // pg_indexes should report both with real CREATE INDEX text.
+        assert_eq!(structure.indexes.len(), 2);
+        let secondary = structure
+            .indexes
+            .iter()
+            .find(|i| i.name == "cubbydb_structure_test_name_idx")
+            .expect("expected the secondary index");
+        assert!(secondary.definition.to_uppercase().starts_with("CREATE INDEX"));
+        assert!(secondary.definition.contains("name"));
+
+        assert_eq!(structure.check_constraints.len(), 1);
+        assert!(structure.check_constraints[0].definition.contains("qty"));
+        assert!(structure.check_constraints[0].definition.contains(">="));
+
+        session
+            .run_query("DROP TABLE cubbydb_structure_test")
+            .await
+            .expect("clean up structure table");
     }
 }

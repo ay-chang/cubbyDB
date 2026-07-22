@@ -2,9 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { CopyResult } from "../../api/backend";
 import { copyToClipboard, readClipboard } from "../../api/backend";
-import type { QueryTab } from "../../state/store";
-import { useStore } from "../../state/store";
-import { PAGE_SIZE, tabHasPendingEdits } from "../../state/store";
+import { parseCsv } from "../../lib/csv";
+import type { Delimiter, QueryTab } from "../../state/store";
+import { useActiveSchema, useStore } from "../../state/store";
+import { NULL_DISPLAY_LABELS, PAGE_SIZE, tabHasPendingEdits } from "../../state/store";
 import type { ForeignKeyRef, QueryResult } from "../../types";
 import { FilterBar } from "./FilterBar";
 import { PendingEditsBar } from "./PendingEditsBar";
@@ -29,7 +30,7 @@ export function ResultsPane({ tab }: { tab: QueryTab }) {
   // For table tabs, map each result column to its foreign keys in both
   // directions (from the schema): outgoing (this cell points at another row) and
   // incoming (other tables point at this row).
-  const schema = useStore((s) => s.schema);
+  const schema = useActiveSchema();
   const schemaTable = useMemo(() => {
     if (tab.kind !== "table" || !tab.source) return null;
     return (
@@ -135,6 +136,8 @@ function ResultsHeader({
   result: QueryResult | null;
   readOnlyReason: string | null;
 }) {
+  const csvDelimiter = useStore((s) => s.csvDelimiter);
+  const cancelQuery = useStore((s) => s.cancelQuery);
   return (
     <div
       className={
@@ -164,16 +167,33 @@ function ResultsHeader({
             Read-only
           </span>
         )}
-        {result && result.columns.length > 0 && (
-          <>
-            <span className="results__stat">
-              <span className="results__dot" />
-              {result.rowCount} {result.rowCount === 1 ? "row" : "rows"}
-            </span>
-            <span>·</span>
-            <span>{result.elapsedMs} ms</span>
-            <ResultsMenu onExportCsv={() => exportCsv(result, tab.title)} />
-          </>
+        {tab.running ? (
+          <span className="results__running">
+            <span className="spinner" />
+            Running…
+            <button
+              className="results__cancel"
+              onClick={cancelQuery}
+              title="Cancel this query (Esc)"
+            >
+              Cancel
+            </button>
+          </span>
+        ) : (
+          result &&
+          result.columns.length > 0 && (
+            <>
+              <span className="results__stat">
+                <span className="results__dot" />
+                {result.rowCount} {result.rowCount === 1 ? "row" : "rows"}
+              </span>
+              <span>·</span>
+              <span>{result.elapsedMs} ms</span>
+              <ResultsMenu
+                onExportCsv={() => exportCsv(result, tab.title, csvDelimiter)}
+              />
+            </>
+          )
         )}
       </div>
     </div>
@@ -263,6 +283,9 @@ function ResultsGrid({
   nullableColIndices: Set<number>;
 }) {
   const openTableWithFilter = useStore((s) => s.openTableWithFilter);
+  const nullDisplay = useStore((s) => s.nullDisplay);
+  const nullText = NULL_DISPLAY_LABELS[nullDisplay];
+  const rowCopyDelimiter = useStore((s) => s.rowCopyDelimiter);
   const setCellEdit = useStore((s) => s.setCellEdit);
   const setNewCellEdit = useStore((s) => s.setNewCellEdit);
   const overwriteRow = useStore((s) => s.overwriteRow);
@@ -271,6 +294,8 @@ function ResultsGrid({
   const removeNewRow = useStore((s) => s.removeNewRow);
   const deleteExistingRows = useStore((s) => s.deleteExistingRows);
   const setTablePage = useStore((s) => s.setTablePage);
+  const csvDelimiter = useStore((s) => s.csvDelimiter);
+  const setUpdateError = useStore((s) => s.setUpdateError);
   const isTable = tab.kind === "table";
   // Column layout — a display `order` (permutation of original column indices)
   // and per-column pixel `widths`. Both are shared by the header and every row
@@ -318,6 +343,13 @@ function ResultsGrid({
     draft: string;
     isNew?: boolean;
   } | null>(null);
+
+  // Find-in-results (Cmd/Ctrl+F) state; the matches themselves are computed
+  // further down, once `sortedRowIndices` (display row order) exists.
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const [findIndex, setFindIndex] = useState(0);
+  const findInputRef = useRef<HTMLInputElement>(null);
 
   // Commit the in-progress inline edit to the right place (existing vs draft).
   const commitEditing = () => {
@@ -408,6 +440,8 @@ function ResultsGrid({
     setFkMenu(null);
     setSort(null);
     setEditing(null);
+    setFindOpen(false);
+    setFindQuery("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [result]);
 
@@ -447,9 +481,11 @@ function ResultsGrid({
     const copyRows = (sels: RowSelection[]) => {
       const rows = sels.map(rowValues);
       rowClipboard = rows;
-      // Tab-separated columns, newline-separated rows — pastes cleanly into
-      // spreadsheets too.
-      const text = rows.map((r) => r.map((v) => v ?? "").join("\t")).join("\n");
+      // Columns joined by the configured delimiter, rows by newline — pastes
+      // cleanly into spreadsheets too.
+      const text = rows
+        .map((r) => r.map((v) => v ?? "").join(rowCopyDelimiter))
+        .join("\n");
       void copyToClipboard(text).then(showCopyStatus);
     };
 
@@ -536,6 +572,7 @@ function ResultsGrid({
     overwriteRow,
     addRows,
     showCopyStatus,
+    rowCopyDelimiter,
   ]);
 
   // A fixed row-number/selection gutter precedes the data columns.
@@ -680,6 +717,75 @@ function ResultsGrid({
     return indices;
   }, [result, sort, numericCols]);
 
+  // Find-in-results matches: every visible cell (existing rows only — draft
+  // rows are few and already visible unscrolled) whose value contains the
+  // query, case-insensitively, in display order (row then column).
+  const cellValue = useCallback(
+    (r: number, col: number): string | null => {
+      const draftEdit = tab.pendingEdits?.[r]?.[col];
+      return draftEdit !== undefined ? draftEdit : result.rows[r]?.[col] ?? null;
+    },
+    [tab.pendingEdits, result],
+  );
+
+  const findMatches = useMemo(() => {
+    const q = findQuery.trim().toLowerCase();
+    if (!q) return [];
+    const found: Array<{ r: number; col: number }> = [];
+    for (const r of sortedRowIndices) {
+      for (const col of order) {
+        const v = cellValue(r, col);
+        if (v != null && v.toLowerCase().includes(q)) found.push({ r, col });
+      }
+    }
+    return found;
+  }, [findQuery, sortedRowIndices, order, cellValue]);
+
+  useEffect(() => {
+    setFindIndex(0);
+  }, [findQuery]);
+
+  useEffect(() => {
+    if (findMatches.length === 0) return;
+    const m = findMatches[Math.min(findIndex, findMatches.length - 1)];
+    if (!m) return;
+    setSelected({ r: m.r, col: m.col });
+    document
+      .querySelector(`[data-cell="${m.r}-${m.col}"]`)
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [findIndex, findMatches]);
+
+  const gotoFindMatch = (delta: number) => {
+    if (findMatches.length === 0) return;
+    setFindIndex((i) => ((i + delta) % findMatches.length + findMatches.length) % findMatches.length);
+  };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        setFindOpen(true);
+        requestAnimationFrame(() => findInputRef.current?.focus());
+        return;
+      }
+      if (!findOpen) return;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setFindOpen(false);
+        setFindQuery("");
+        return;
+      }
+      if (e.key === "Enter" && document.activeElement === findInputRef.current) {
+        e.preventDefault();
+        gotoFindMatch(e.shiftKey ? -1 : 1);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [findOpen, findMatches]);
+
   // Transform for each header cell during a drag (the sliding animation).
   const headerStyle = (pos: number): React.CSSProperties => {
     if (!drag) return {};
@@ -732,9 +838,117 @@ function ResultsGrid({
     rowAnchorRef.current = null;
   };
 
+  const importInputRef = useRef<HTMLInputElement>(null);
+
+  // Parse a CSV file and append its rows as draft rows (the same "new row"
+  // flow as Add row / paste), matching header names to this table's columns
+  // case-insensitively. Unmatched CSV columns are ignored; unmatched table
+  // columns and blank CSV cells are left to the column's default, same as an
+  // unedited "Add row" cell. Nothing is inserted until the user hits Update.
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-selecting the same file again later
+    if (!file) return;
+
+    const fail = (message: string) =>
+      setUpdateError(tab.id, {
+        message,
+        code: null,
+        hint: null,
+        position: null,
+        kind: "internal",
+      });
+
+    const text = await file.text();
+    const rows = parseCsv(text, csvDelimiter);
+    if (rows.length === 0) {
+      fail("CSV import failed: the file is empty.");
+      return;
+    }
+    const [header, ...dataRows] = rows;
+    if (dataRows.length === 0) {
+      fail("CSV import failed: the file has a header row but no data rows.");
+      return;
+    }
+
+    const colIndexByName = new Map(
+      result.columns.map((c, i) => [c.name.toLowerCase(), i]),
+    );
+    const targetForCsvCol = header.map(
+      (h) => colIndexByName.get(h.trim().toLowerCase()) ?? null,
+    );
+    if (targetForCsvCol.every((i) => i === null)) {
+      fail(
+        `CSV import failed: no column in the file matched this table's columns ` +
+          `(expected one of: ${result.columns.map((c) => c.name).join(", ")}).`,
+      );
+      return;
+    }
+
+    const width = result.columns.length;
+    const draftRows = dataRows.map((csvRow) => {
+      const draft = Array<string | null>(width).fill(null);
+      csvRow.forEach((value, ci) => {
+        const targetIdx = targetForCsvCol[ci];
+        if (targetIdx == null) return; // CSV column didn't match any table column
+        if (value !== "") draft[targetIdx] = value; // blank cell -> leave to default
+      });
+      return draft;
+    });
+
+    addRows(tab.id, draftRows);
+  };
+
   return (
     <>
     <div className="grid">
+      {findOpen && (
+        <div className="grid-find">
+          <input
+            ref={findInputRef}
+            className="grid-find__input"
+            value={findQuery}
+            onChange={(e) => setFindQuery(e.target.value)}
+            placeholder="Find in results…"
+            spellCheck={false}
+            autoCapitalize="off"
+            autoCorrect="off"
+          />
+          <span className="grid-find__count mono">
+            {findQuery.trim() === ""
+              ? ""
+              : findMatches.length === 0
+                ? "0/0"
+                : `${findIndex + 1}/${findMatches.length}`}
+          </span>
+          <button
+            className="grid-find__nav"
+            onClick={() => gotoFindMatch(-1)}
+            disabled={findMatches.length === 0}
+            title="Previous match (Shift+Enter)"
+          >
+            ‹
+          </button>
+          <button
+            className="grid-find__nav"
+            onClick={() => gotoFindMatch(1)}
+            disabled={findMatches.length === 0}
+            title="Next match (Enter)"
+          >
+            ›
+          </button>
+          <button
+            className="grid-find__close"
+            onClick={() => {
+              setFindOpen(false);
+              setFindQuery("");
+            }}
+            title="Close (Esc)"
+          >
+            ×
+          </button>
+        </div>
+      )}
       <div className="grid__scroll">
         <div className="grid__head" style={gridStyle}>
           <div className="grid__gutter grid__gutter--head" />
@@ -853,9 +1067,13 @@ function ResultsGrid({
                 );
               }
 
+              const isActiveFindMatch =
+                findMatches[findIndex]?.r === r && findMatches[findIndex]?.col === colIndex;
+
               return (
                 <div
                   key={colIndex}
+                  data-cell={`${r}-${colIndex}`}
                   className={
                     "grid__cell" +
                     (numericCols[colIndex] ? " grid__cell--num mono" : "") +
@@ -884,13 +1102,17 @@ function ResultsGrid({
                     setEditing({ r, col: colIndex, draft: value ?? "" });
                   }}
                   onContextMenu={(e) => {
-                    if (!isFk && !canSetNull) return;
+                    if (!isFk && !canSetNull && !isDirty) return;
                     e.preventDefault();
                     setSelected({ r, col: colIndex });
                     setFkMenu({ r, col: colIndex, x: e.clientX, y: e.clientY });
                   }}
                 >
-                  {value === null ? "NULL" : value}
+                  {value === null
+                    ? nullText
+                    : findOpen && findQuery.trim()
+                      ? highlightMatches(value, findQuery, isActiveFindMatch)
+                      : value}
                 </div>
               );
             })}
@@ -981,9 +1203,10 @@ function ResultsGrid({
         (() => {
           const col = fkMenu.col;
           const nav = navByColumn?.[col];
+          const original = result.rows[fkMenu.r]?.[col] ?? null;
           const draftEdit = tab.pendingEdits?.[fkMenu.r]?.[col];
-          const value =
-            draftEdit !== undefined ? draftEdit : result.rows[fkMenu.r]?.[col] ?? null;
+          const isDirty = draftEdit !== undefined;
+          const value = isDirty ? draftEdit : original;
           const hasFk =
             !!nav &&
             value !== null &&
@@ -993,7 +1216,7 @@ function ResultsGrid({
             !pkColIndices.has(col) &&
             nullableColIndices.has(col) &&
             value !== null;
-          if (!hasFk && !canSetNull) return null;
+          if (!hasFk && !canSetNull && !isDirty) return null;
 
           const literal = (value ?? "").replace(/'/g, "''");
           const openRef = (ref: ForeignKeyRef) => {
@@ -1045,6 +1268,22 @@ function ResultsGrid({
                     }}
                   >
                     Set to <span className="mono">NULL</span>
+                  </button>
+                </>
+              )}
+              {isDirty && (
+                <>
+                  {(hasFk || canSetNull) && <div className="context-menu__sep" />}
+                  <button
+                    className="context-menu__item"
+                    onClick={() => {
+                      setFkMenu(null);
+                      // setCellEdit already clears the pending edit for a
+                      // cell whose new value equals the original.
+                      setCellEdit(tab.id, fkMenu.r, col, original);
+                    }}
+                  >
+                    Revert to original
                   </button>
                 </>
               )}
@@ -1106,6 +1345,20 @@ function ResultsGrid({
             >
               ＋ Add row
             </button>
+            <button
+              className="table-toolbar__btn"
+              onClick={() => importInputRef.current?.click()}
+              title="Import rows from a CSV file (added as new rows, inserted on Update)"
+            >
+              ⇪ Import CSV
+            </button>
+            <input
+              ref={importInputRef}
+              type="file"
+              accept=".csv,text/csv"
+              className="table-toolbar__file-input"
+              onChange={(e) => void handleImportFile(e)}
+            />
             <button
               className="table-toolbar__btn table-toolbar__btn--danger"
               disabled={rowSel.length === 0}
@@ -1308,6 +1561,30 @@ function compareCells(
   return dir === "asc" ? r : -r;
 }
 
+/** Wrap every case-insensitive occurrence of `query` in `text` with a <mark>. */
+function highlightMatches(text: string, query: string, active: boolean): React.ReactNode {
+  const q = query.trim().toLowerCase();
+  if (!q) return text;
+  const lower = text.toLowerCase();
+  if (!lower.includes(q)) return text;
+  const parts: React.ReactNode[] = [];
+  let i = 0;
+  let idx = lower.indexOf(q);
+  let key = 0;
+  while (idx !== -1) {
+    if (idx > i) parts.push(text.slice(i, idx));
+    parts.push(
+      <mark key={key++} className={"grid__mark" + (active ? " grid__mark--active" : "")}>
+        {text.slice(idx, idx + q.length)}
+      </mark>,
+    );
+    i = idx + q.length;
+    idx = lower.indexOf(q, i);
+  }
+  if (i < text.length) parts.push(text.slice(i));
+  return parts;
+}
+
 const NUMERIC_RE = /^-?\d+(\.\d+)?$/;
 
 function inferNumericColumns(result: QueryResult): boolean[] {
@@ -1323,19 +1600,24 @@ function inferNumericColumns(result: QueryResult): boolean[] {
   });
 }
 
-function toCsv(result: QueryResult): string {
+function toCsv(result: QueryResult, delimiter: Delimiter): string {
+  // Quote a field if it contains the active delimiter, a quote, or a newline —
+  // the delimiter itself must be included since it isn't always a comma.
+  const needsQuote = new RegExp(`["\\n\\r${delimiter === "\t" ? "\\t" : delimiter}]`);
   const escape = (v: string | null): string => {
     if (v === null) return "";
-    if (/[",\n\r]/.test(v)) return `"${v.replace(/"/g, '""')}"`;
+    if (needsQuote.test(v)) return `"${v.replace(/"/g, '""')}"`;
     return v;
   };
-  const header = result.columns.map((c) => escape(c.name)).join(",");
-  const body = result.rows.map((row) => row.map(escape).join(",")).join("\n");
+  const header = result.columns.map((c) => escape(c.name)).join(delimiter);
+  const body = result.rows
+    .map((row) => row.map(escape).join(delimiter))
+    .join("\n");
   return body ? `${header}\n${body}\n` : `${header}\n`;
 }
 
-function exportCsv(result: QueryResult, tabTitle: string) {
-  const csv = toCsv(result);
+function exportCsv(result: QueryResult, tabTitle: string, delimiter: Delimiter) {
+  const csv = toCsv(result, delimiter);
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");

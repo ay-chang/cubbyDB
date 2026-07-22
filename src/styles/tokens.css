@@ -12,6 +12,10 @@
   --surface: #ffffff;
   --surface-raised: #fcfcfd; /* top bar, sidebar, zebra rows */
   --surface-header: #fbfbfc; /* grid header */
+  /* Results-grid zebra-stripe color — user-toggleable in Settings > Table.
+     Off sets this to var(--surface) (the base row color) so stripes blend in
+     without touching the row markup. Set directly via JS. */
+  --table-zebra: var(--surface-raised);
 
   /* Borders / hairlines */
   --border: #e8eaed;
@@ -19,6 +23,11 @@
   --border-faint: #f0f1f3;
   --border-row: #f3f4f6;
   --border-cell: #f6f7f8;
+  /* Results-grid gridlines — user-toggleable in Settings > Table. Off sets
+     these to transparent so the row/cell divider lines disappear without
+     touching markup. Set directly via JS. */
+  --table-border-row: var(--border-row);
+  --table-border-cell: var(--border-cell);
 
   /* Incidental surfaces (connection pill, sidebar, tree hover, scrollbar) */
   --pill-bg: #f2f3f5;
@@ -72,6 +81,19 @@
   /* Typography */
   --font-sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* Results-grid data font — user-selectable in Settings > Table, defaults to
+     the app's sans stack. Set directly (not swapped per-theme) via JS. */
+  --table-font: var(--font-sans);
+  --table-font-size: 12.5px;
+  /* Results-grid text wrapping — user-toggleable in Settings > Table. On
+     switches these to "normal"/"visible" so long text wraps and the row (a
+     CSS grid track with no fixed height) grows to fit. Set directly via JS. */
+  --table-white-space: nowrap;
+  --table-cell-overflow: hidden;
+  /* SQL editor font — user-selectable in Settings > Appearance > Editor,
+     defaults to the classic code (mono) stack. Set directly via JS. */
+  --editor-font: var(--font-mono);
+  --editor-font-size: 13px;
 
   /* Radius */
   --radius-sm: 6px;

@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { useStore } from "../../state/store";
+import {
+  useActiveSchema,
+  useActiveSchemaError,
+  useActiveSchemaLoading,
+  useStore,
+} from "../../state/store";
 import type { SchemaNode, TableNode } from "../../types";
 
 /** Compact row-count label: 1.2M, 88k, 3.4k, ... */
@@ -19,10 +24,11 @@ interface Menu {
 }
 
 export function SchemaTree() {
-  const schema = useStore((s) => s.schema);
-  const loading = useStore((s) => s.schemaLoading);
-  const error = useStore((s) => s.schemaError);
+  const schema = useActiveSchema();
+  const loading = useActiveSchemaLoading();
+  const error = useActiveSchemaError();
   const openSelectTop = useStore((s) => s.openSelectTop);
+  const openTableStructure = useStore((s) => s.openTableStructure);
 
   const [filter, setFilter] = useState("");
   const [expandedSchemas, setExpandedSchemas] = useState<Set<string>>(new Set());
@@ -192,6 +198,15 @@ export function SchemaTree() {
             }}
           >
             Select top 100
+          </button>
+          <button
+            className="context-menu__item"
+            onClick={() => {
+              setMenu(null);
+              void openTableStructure(menu.schema, menu.table);
+            }}
+          >
+            View structure
           </button>
         </div>
       )}
