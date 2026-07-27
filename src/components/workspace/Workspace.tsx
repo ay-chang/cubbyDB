@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useActiveTabId, useActiveTabs, useStore } from "../../state/store";
+import { CommandPalette } from "./CommandPalette";
 import { EditorTabs } from "./EditorTabs";
+import { FunctionDefinitionPane } from "./FunctionDefinitionPane";
 import { HistoryPanel } from "./HistoryPanel";
 import { ResultsPane } from "./ResultsPane";
+import { SaveQueryDialog } from "./SaveQueryDialog";
+import { SavedQueriesPanel } from "./SavedQueriesPanel";
 import { SchemaTree } from "./SchemaTree";
+import { SequenceDetailsPane } from "./SequenceDetailsPane";
 import { SqlEditor } from "./SqlEditor";
 import { TableStructurePane } from "./TableStructurePane";
 import { TopBar } from "./TopBar";
@@ -20,10 +25,11 @@ export function Workspace() {
   const setTabSql = useStore((s) => s.setTabSql);
   const runTab = useStore((s) => s.runTab);
   const historyOpen = useStore((s) => s.historyOpen);
+  const savedQueriesOpen = useStore((s) => s.savedQueriesOpen);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
 
-  useGlobalRunShortcut();
+  const { saveDialogOpen, openSaveDialog, closeSaveDialog } = useGlobalRunShortcut();
 
   const [sidebarWidth, setSidebarWidth] = useState(246);
   const [editorHeight, setEditorHeight] = useState(280);
@@ -59,7 +65,7 @@ export function Workspace() {
         <div className="workspace__main" ref={mainRef}>
           {activeTab ? (
             <>
-              <EditorTabs />
+              <EditorTabs onSaveQuery={openSaveDialog} />
               {activeTab.kind === "query" && (
                 <>
                   <div
@@ -83,6 +89,10 @@ export function Workspace() {
                   reusing it with stale state pointed at the wrong table. */}
               {activeTab.kind === "structure" ? (
                 <TableStructurePane key={activeTab.id} tab={activeTab} />
+              ) : activeTab.kind === "function" ? (
+                <FunctionDefinitionPane key={activeTab.id} tab={activeTab} />
+              ) : activeTab.kind === "sequence" ? (
+                <SequenceDetailsPane key={activeTab.id} tab={activeTab} />
               ) : (
                 <ResultsPane key={activeTab.id} tab={activeTab} />
               )}
@@ -96,6 +106,9 @@ export function Workspace() {
       </div>
 
       {historyOpen && <HistoryPanel />}
+      {savedQueriesOpen && <SavedQueriesPanel />}
+      {saveDialogOpen && <SaveQueryDialog onClose={closeSaveDialog} />}
+      <CommandPalette />
     </div>
   );
 }
@@ -142,16 +155,23 @@ function useDrag(
  * Cmd/Ctrl+Enter runs the active tab's whole query (the editor's own keymap
  * handles the smarter statement/selection version while it has focus),
  * Escape cancels the active tab's query if it's currently running,
- * Cmd/Ctrl+T opens a new query tab, and Cmd/Ctrl+W closes the active tab
- * (routed through the store's own unsaved-edits confirmation).
+ * Cmd/Ctrl+T opens a new query tab, Cmd/Ctrl+W closes the active tab
+ * (routed through the store's own unsaved-edits confirmation), Cmd/Ctrl+K
+ * toggles the quick-jump command palette, and Cmd/Ctrl+S opens the "save as
+ * query" dialog when the active tab is a `query` tab (a `table` tab's own
+ * Cmd/Ctrl+S, for committing pending cell edits, lives in
+ * `PendingEditsBar` — the two never both mount for the same tab kind, so
+ * there's no collision).
  */
 function useGlobalRunShortcut() {
   const runTab = useStore((s) => s.runTab);
   const cancelQuery = useStore((s) => s.cancelQuery);
   const newTab = useStore((s) => s.newTab);
   const closeTab = useStore((s) => s.closeTab);
+  const toggleCommandPalette = useStore((s) => s.toggleCommandPalette);
   const activeTabId = useActiveTabId();
   const tabs = useActiveTabs();
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && activeTabId) {
@@ -175,9 +195,28 @@ function useGlobalRunShortcut() {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "w") {
         e.preventDefault();
         if (activeTabId) closeTab(activeTabId);
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        toggleCommandPalette();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+        const activeTab = tabs.find((t) => t.id === activeTabId);
+        if (activeTab?.kind === "query") {
+          e.preventDefault();
+          setSaveDialogOpen(true);
+        }
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [runTab, cancelQuery, newTab, closeTab, activeTabId, tabs]);
+  }, [runTab, cancelQuery, newTab, closeTab, toggleCommandPalette, activeTabId, tabs]);
+
+  return {
+    saveDialogOpen,
+    openSaveDialog: () => setSaveDialogOpen(true),
+    closeSaveDialog: () => setSaveDialogOpen(false),
+  };
 }

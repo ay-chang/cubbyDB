@@ -1,18 +1,23 @@
-import { sql, PostgreSQL } from "@codemirror/lang-sql";
+import { acceptCompletion } from "@codemirror/autocomplete";
 import { Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import CodeMirror from "@uiw/react-codemirror";
 import { useMemo, useRef } from "react";
 
+import { buildSqlNamespace, SQL_KEYWORDS, sqlLanguage } from "../../lib/sqlSchema";
 import { statementAt } from "../../lib/sqlStatements";
-import { useStore } from "../../state/store";
+import { useActiveSchema, useStore } from "../../state/store";
 import { cubbyEditorTheme } from "./editorTheme";
 
 /**
- * The SQL editor for one tab. CodeMirror 6 with Postgres dialect highlighting.
+ * The SQL editor for one tab. CodeMirror 6 with Postgres dialect highlighting
+ * and schema-aware autocomplete (table names after FROM/JOIN, column names
+ * after `alias.`, sourced from the active connection's live schema tree).
  * Cmd/Ctrl+Enter runs the selection (if any) or the statement under the
- * cursor; Cmd/Ctrl+Shift+Enter always runs the whole buffer. Autocomplete is
- * intentionally disabled (out of scope for v1).
+ * cursor; Cmd/Ctrl+Shift+Enter always runs the whole buffer; Cmd/Ctrl+Shift+E
+ * runs EXPLAIN and Cmd/Ctrl+Shift+A runs EXPLAIN ANALYZE on the same
+ * selection-or-statement target as Cmd/Ctrl+Enter; Tab accepts the
+ * highlighted completion when the autocomplete popup is open.
  */
 export function SqlEditor(props: {
   value: string;
@@ -27,21 +32,23 @@ export function SqlEditor(props: {
   runRef.current = props.onRun;
 
   const lineWrap = useStore((s) => s.editorLineWrap);
+  const schema = useActiveSchema();
+  const sqlNamespace = useMemo(() => buildSqlNamespace(schema), [schema]);
+  // A default (unqualified) schema only makes sense to guess when there's
+  // exactly one — with several, FROM/JOIN + alias resolution still works,
+  // just without a bare "table name with no schema prefix" shortcut.
+  const defaultSchema = schema.length === 1 ? schema[0].name : undefined;
 
   const extensions = useMemo(
     () => [
-      sql({ dialect: PostgreSQL, upperCaseKeywords: false }),
+      sqlLanguage(sqlNamespace, defaultSchema, undefined, SQL_KEYWORDS),
       Prec.highest(
         keymap.of([
           {
             key: "Mod-Enter",
             preventDefault: true,
             run: (view) => {
-              const sel = view.state.selection.main;
-              const text = !sel.empty
-                ? view.state.sliceDoc(sel.from, sel.to)
-                : sliceStatementAtCursor(view.state.doc.toString(), sel.from);
-              runRef.current(text);
+              runRef.current(selectionOrStatement(view));
               return true;
             },
           },
@@ -53,12 +60,31 @@ export function SqlEditor(props: {
               return true;
             },
           },
+          {
+            key: "Mod-Shift-e",
+            preventDefault: true,
+            run: (view) => {
+              runRef.current(`EXPLAIN ${selectionOrStatement(view)}`);
+              return true;
+            },
+          },
+          {
+            key: "Mod-Shift-a",
+            preventDefault: true,
+            run: (view) => {
+              runRef.current(`EXPLAIN ANALYZE ${selectionOrStatement(view)}`);
+              return true;
+            },
+          },
+          // Falls through (returns false) to normal Tab behavior when no
+          // completion popup is open.
+          { key: "Tab", run: acceptCompletion },
         ]),
       ),
       cubbyEditorTheme,
       ...(lineWrap ? [EditorView.lineWrapping] : []),
     ],
-    [lineWrap],
+    [lineWrap, sqlNamespace, defaultSchema],
   );
 
   return (
@@ -75,7 +101,7 @@ export function SqlEditor(props: {
         basicSetup={{
           lineNumbers: true,
           foldGutter: false,
-          autocompletion: false,
+          autocompletion: true,
           highlightActiveLine: false,
           highlightActiveLineGutter: false,
           bracketMatching: true,
@@ -93,4 +119,13 @@ export function SqlEditor(props: {
 function sliceStatementAtCursor(doc: string, pos: number): string {
   const stmt = statementAt(doc, pos);
   return stmt ? doc.slice(stmt.start, stmt.end) : doc;
+}
+
+/** The current selection, or the statement under the cursor when nothing is
+ *  selected — the shared target for Mod-Enter, Mod-Shift-E, Mod-Shift-A. */
+function selectionOrStatement(view: EditorView): string {
+  const sel = view.state.selection.main;
+  return !sel.empty
+    ? view.state.sliceDoc(sel.from, sel.to)
+    : sliceStatementAtCursor(view.state.doc.toString(), sel.from);
 }

@@ -70,9 +70,63 @@ export interface TableNode {
   columns: ColumnNode[];
 }
 
+export type FunctionKind = "function" | "procedure";
+
+export interface FunctionNode {
+  /** `pg_proc.oid` — needed to disambiguate overloads when fetching the
+   *  definition (Postgres allows multiple functions with the same name). */
+  oid: number;
+  name: string;
+  /** Display-ready argument list, e.g. `"user_id integer, since timestamptz DEFAULT now()"`. */
+  arguments: string;
+  /** `null` for procedures, which have no return type. */
+  returnType: string | null;
+  kind: FunctionKind;
+}
+
+export interface SequenceOwner {
+  table: string;
+  column: string;
+}
+
+export interface SequenceNode {
+  name: string;
+  /** The table/column this sequence is `OWNED BY`, if any — same schema as
+   *  the sequence itself. */
+  ownedBy: SequenceOwner | null;
+}
+
+export interface TypeNode {
+  name: string;
+  /** Enum values, in their defined display order. */
+  values: string[];
+}
+
 export interface SchemaNode {
   name: string;
   tables: TableNode[];
+  functions: FunctionNode[];
+  sequences: SequenceNode[];
+  types: TypeNode[];
+}
+
+/** A function/procedure's full body — fetched only when its tab is opened. */
+export interface FunctionDefinition {
+  definition: string;
+}
+
+/** A sequence's current value and configuration — fetched only when its tab
+ *  is opened. */
+export interface SequenceDetails {
+  dataType: string;
+  startValue: number;
+  minValue: number;
+  maxValue: number;
+  incrementBy: number;
+  cycle: boolean;
+  cacheSize: number;
+  /** `null` until `nextval()` has ever been called on this sequence. */
+  lastValue: number | null;
 }
 
 export interface ResultColumn {
@@ -149,4 +203,13 @@ export interface CheckConstraintDetail {
   name: string;
   /** The constraint's own `CHECK (...)` text. */
   definition: string;
+}
+
+/** A user-saved, named SQL query — distinct from `HistoryEntry` (automatic,
+ *  unnamed, one per execution). Global, not tied to a connection. */
+export interface SavedQuery {
+  id: string;
+  name: string;
+  sql: string;
+  createdAt: number;
 }

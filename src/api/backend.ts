@@ -14,11 +14,14 @@ import type {
   ConnectionInfo,
   ConnectionParams,
   DbError,
+  FunctionDefinition,
   HistoryEntry,
   LastConnection,
   QueryResult,
   SavedConnection,
+  SavedQuery,
   SchemaNode,
+  SequenceDetails,
   TableStructure,
 } from "../types";
 
@@ -55,6 +58,23 @@ export function connect(
 
 export function disconnect(sessionId: string): Promise<void> {
   return invoke("disconnect", { sessionId });
+}
+
+/** Re-establishes an *existing* session with edited params/name, keeping the
+ *  same session id (so its tabs/schema slot isn't lost) — used when editing
+ *  "the connection I'm on" rather than opening an additional one. */
+export function reconnectSession(
+  sessionId: string,
+  params: ConnectionParams,
+  name: string,
+  connectionId?: string | null,
+): Promise<ActiveConnectionInfo> {
+  return invoke("reconnect_session", {
+    sessionId,
+    params,
+    name,
+    connectionId: connectionId ?? null,
+  });
 }
 
 export function getLastConnection(): Promise<LastConnection | null> {
@@ -128,6 +148,35 @@ export function getTableStructure(
   table: string,
 ): Promise<TableStructure> {
   return invoke("get_table_structure", { sessionId, schema, table });
+}
+
+/** A function/procedure's full body, by oid. */
+export function getFunctionDefinition(
+  sessionId: string,
+  oid: number,
+): Promise<FunctionDefinition> {
+  return invoke("get_function_definition", { sessionId, oid });
+}
+
+/** One sequence's current value and configuration. */
+export function getSequenceDetails(
+  sessionId: string,
+  schema: string,
+  name: string,
+): Promise<SequenceDetails> {
+  return invoke("get_sequence_details", { sessionId, schema, name });
+}
+
+export function listSavedQueries(): Promise<SavedQuery[]> {
+  return invoke("list_saved_queries");
+}
+
+export function saveQuery(query: SavedQuery): Promise<SavedQuery> {
+  return invoke("save_query", { query });
+}
+
+export function deleteSavedQuery(id: string): Promise<void> {
+  return invoke("delete_saved_query", { id });
 }
 
 /** Copy text to the OS clipboard (via the backend — see the Rust command). */

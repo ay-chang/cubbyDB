@@ -8,7 +8,7 @@ import { useActiveTabId, useActiveTabs, useStore } from "../../state/store";
  * unreliable in the app's webview); a press that doesn't move past a small
  * threshold is treated as a plain click that activates the tab.
  */
-export function EditorTabs() {
+export function EditorTabs({ onSaveQuery }: { onSaveQuery: () => void }) {
   const tabs = useActiveTabs();
   const activeTabId = useActiveTabId();
   const setActiveTab = useStore((s) => s.setActiveTab);
@@ -28,8 +28,8 @@ export function EditorTabs() {
   const onTabMouseDown =
     (index: number, tabId: string) => (e: React.MouseEvent) => {
       if (e.button !== 0) return;
-      // A press on the close button isn't a tab press.
-      if ((e.target as HTMLElement).closest(".tab__close")) return;
+      // A press on the close or save button isn't a tab press.
+      if ((e.target as HTMLElement).closest(".tab__close, .tab__save")) return;
       e.preventDefault();
 
       const startX = e.clientX;
@@ -109,9 +109,29 @@ export function EditorTabs() {
             onMouseDown={onTabMouseDown(index, tab.id)}
           >
             <span className="tab__marker mono">
-              {tab.kind === "table" ? "▦" : tab.kind === "structure" ? "▤" : "◆"}
+              {tab.kind === "table"
+                ? "▦"
+                : tab.kind === "structure"
+                  ? "▤"
+                  : tab.kind === "function"
+                    ? "ƒ"
+                    : tab.kind === "sequence"
+                      ? "#"
+                      : "◆"}
             </span>
             <span className="tab__title">{tab.title}</span>
+            {tab.kind === "query" && active && (
+              <span
+                className="tab__save"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSaveQuery();
+                }}
+                title={tab.savedQueryId ? "Update saved query" : "Save as query (Cmd/Ctrl+S)"}
+              >
+                {tab.savedQueryId ? "✓" : "⇩"}
+              </span>
+            )}
             <span
               className="tab__close"
               onClick={(e) => {

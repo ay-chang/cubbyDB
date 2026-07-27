@@ -10,9 +10,11 @@ use tauri::State;
 use crate::connections::{LastConnection, SavedConnection};
 use crate::db::{
     driver_for, ColumnValue, ConnectionInfo, ConnectionParams, DbError, DbErrorKind, Engine,
-    QueryResult, SchemaNode, TableStructure, DEFAULT_ROW_LIMIT,
+    FunctionDefinition, QueryResult, SchemaNode, SequenceDetails, TableStructure,
+    DEFAULT_ROW_LIMIT,
 };
 use crate::history::{now_millis, HistoryEntry};
+use crate::saved_queries::SavedQuery;
 use crate::state::{ActiveSession, AppState};
 
 /// Returned by `connect` for a newly-opened session: its id (used by every
@@ -60,6 +62,26 @@ pub async fn delete_connection(state: State<'_, AppState>, id: String) -> Result
     state.connection_store().delete(&id)
 }
 
+// --- Saved queries -----------------------------------------------------------
+
+#[tauri::command]
+pub async fn list_saved_queries(state: State<'_, AppState>) -> Result<Vec<SavedQuery>, DbError> {
+    state.saved_query_store().list()
+}
+
+#[tauri::command]
+pub async fn save_query(
+    state: State<'_, AppState>,
+    query: SavedQuery,
+) -> Result<SavedQuery, DbError> {
+    state.saved_query_store().upsert(query)
+}
+
+#[tauri::command]
+pub async fn delete_saved_query(state: State<'_, AppState>, id: String) -> Result<(), DbError> {
+    state.saved_query_store().delete(&id)
+}
+
 // --- Connect / test --------------------------------------------------------
 
 #[tauri::command]
@@ -96,6 +118,65 @@ pub async fn connect(
     }
 
     let session_id = new_session_id();
+    state
+        .canceller
+        .lock()
+        .await
+        .insert(session_id.clone(), session.canceller());
+
+    state.active.lock().await.insert(
+        session_id.clone(),
+        ActiveSession {
+            session,
+            name: name.clone(),
+            connection_id: connection_id.clone(),
+            params,
+            engine,
+        },
+    );
+
+    Ok(ActiveConnectionInfo {
+        session_id,
+        name,
+        connection_id,
+        info,
+    })
+}
+
+/// Re-establish an *existing* session at `session_id` with edited
+/// params/name — used when the user edits "the connection I'm currently on"
+/// (connection string, name, ...) and wants it applied right away, rather
+/// than only saved for next time. Keeps the same session id (so the
+/// frontend's tabs/schema for that slot aren't lost), unlike `connect`,
+/// which always allocates a fresh one. Errors if `session_id` isn't a
+/// currently-open session — this edits an existing connection, not create
+/// one out of nowhere.
+#[tauri::command]
+pub async fn reconnect_session(
+    state: State<'_, AppState>,
+    session_id: String,
+    params: ConnectionParams,
+    name: String,
+    engine: Option<Engine>,
+    connection_id: Option<String>,
+) -> Result<ActiveConnectionInfo, DbError> {
+    if !state.active.lock().await.contains_key(&session_id) {
+        return Err(DbError::not_connected());
+    }
+
+    let engine = engine.unwrap_or_default();
+    let driver = driver_for(engine);
+    let session = driver.connect(&params).await?;
+    let info = session.info().clone();
+
+    if let Err(e) = state.last_connection_store().set(&LastConnection {
+        name: name.clone(),
+        engine,
+        params: params.clone(),
+    }) {
+        eprintln!("[cubbydb] failed to persist last connection: {e}");
+    }
+
     state
         .canceller
         .lock()
@@ -408,6 +489,57 @@ pub async fn get_table_structure(
         .ok_or_else(DbError::not_connected)?
         .session
         .table_structure(&schema, &table)
+        .await
+}
+
+/// A function/procedure's full body, by oid — the schema tree's "View
+/// definition" context-menu action.
+#[tauri::command]
+pub async fn get_function_definition(
+    state: State<'_, AppState>,
+    session_id: String,
+    oid: i64,
+) -> Result<FunctionDefinition, DbError> {
+    let mut active = state.active.lock().await;
+    {
+        let session = active.get(&session_id).ok_or_else(DbError::not_connected)?;
+        match session.session.function_definition(oid).await {
+            Err(e) if e.kind == DbErrorKind::Connection => { /* retry below */ }
+            other => return other,
+        }
+    }
+    reconnect_in_place(&mut active, &session_id, &state).await?;
+    active
+        .get(&session_id)
+        .ok_or_else(DbError::not_connected)?
+        .session
+        .function_definition(oid)
+        .await
+}
+
+/// One sequence's current value and configuration — the schema tree's "View
+/// details" context-menu action.
+#[tauri::command]
+pub async fn get_sequence_details(
+    state: State<'_, AppState>,
+    session_id: String,
+    schema: String,
+    name: String,
+) -> Result<SequenceDetails, DbError> {
+    let mut active = state.active.lock().await;
+    {
+        let session = active.get(&session_id).ok_or_else(DbError::not_connected)?;
+        match session.session.sequence_details(&schema, &name).await {
+            Err(e) if e.kind == DbErrorKind::Connection => { /* retry below */ }
+            other => return other,
+        }
+    }
+    reconnect_in_place(&mut active, &session_id, &state).await?;
+    active
+        .get(&session_id)
+        .ok_or_else(DbError::not_connected)?
+        .session
+        .sequence_details(&schema, &name)
         .await
 }
 

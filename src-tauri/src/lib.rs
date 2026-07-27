@@ -11,6 +11,8 @@ mod commands;
 mod connections;
 mod db;
 mod history;
+mod keychain;
+mod saved_queries;
 mod state;
 
 use tauri::Manager;
@@ -31,8 +33,12 @@ pub fn run() {
             commands::list_saved_connections,
             commands::save_connection,
             commands::delete_connection,
+            commands::list_saved_queries,
+            commands::save_query,
+            commands::delete_saved_query,
             commands::test_connection,
             commands::connect,
+            commands::reconnect_session,
             commands::disconnect,
             commands::get_last_connection,
             commands::fetch_schema,
@@ -43,6 +49,8 @@ pub fn run() {
             commands::insert_row,
             commands::delete_row,
             commands::get_table_structure,
+            commands::get_function_definition,
+            commands::get_sequence_details,
             commands::write_clipboard,
             commands::read_clipboard,
             commands::query_history,

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
+import { formatCount } from "../../lib/format";
 import {
   useActiveSchema,
   useActiveSchemaError,
@@ -8,20 +9,10 @@ import {
 } from "../../state/store";
 import type { SchemaNode, TableNode } from "../../types";
 
-/** Compact row-count label: 1.2M, 88k, 3.4k, ... */
-function formatCount(n: number | null): string {
-  if (n == null) return "";
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
-  return String(n);
-}
-
-interface Menu {
-  x: number;
-  y: number;
-  schema: string;
-  table: string;
-}
+type Menu =
+  | { kind: "table"; x: number; y: number; schema: string; table: string }
+  | { kind: "function"; x: number; y: number; schema: string; oid: number; name: string }
+  | { kind: "sequence"; x: number; y: number; schema: string; name: string };
 
 export function SchemaTree() {
   const schema = useActiveSchema();
@@ -29,10 +20,17 @@ export function SchemaTree() {
   const error = useActiveSchemaError();
   const openSelectTop = useStore((s) => s.openSelectTop);
   const openTableStructure = useStore((s) => s.openTableStructure);
+  const openFunctionDefinition = useStore((s) => s.openFunctionDefinition);
+  const openSequenceDetails = useStore((s) => s.openSequenceDetails);
 
   const [filter, setFilter] = useState("");
   const [expandedSchemas, setExpandedSchemas] = useState<Set<string>>(new Set());
   const [expandedTables, setExpandedTables] = useState<Set<string>>(new Set());
+  // Functions/Sequences/Types group headers, default collapsed — keeps the
+  // existing Tables UX untouched and avoids clutter for schemas with many
+  // extension-installed functions.
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [expandedTypes, setExpandedTypes] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<string | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
 
@@ -62,12 +60,19 @@ export function SchemaTree() {
     () => filterTree(schema, filter.trim().toLowerCase()),
     [schema, filter],
   );
+  const filtering = filter.trim() !== "";
 
   function toggleSchema(name: string) {
     setExpandedSchemas((prev) => toggle(prev, name));
   }
   function toggleTable(key: string) {
     setExpandedTables((prev) => toggle(prev, key));
+  }
+  function toggleGroup(key: string) {
+    setExpandedGroups((prev) => toggle(prev, key));
+  }
+  function toggleType(key: string) {
+    setExpandedTypes((prev) => toggle(prev, key));
   }
 
   return (
@@ -92,7 +97,14 @@ export function SchemaTree() {
         )}
 
         {filtered.map((s) => {
-          const schemaOpen = expandedSchemas.has(s.name) || filter.trim() !== "";
+          const schemaOpen = expandedSchemas.has(s.name) || filtering;
+          const functionsKey = `${s.name}:functions`;
+          const sequencesKey = `${s.name}:sequences`;
+          const typesKey = `${s.name}:types`;
+          const functionsOpen = expandedGroups.has(functionsKey) || filtering;
+          const sequencesOpen = expandedGroups.has(sequencesKey) || filtering;
+          const typesOpen = expandedGroups.has(typesKey) || filtering;
+
           return (
             <div key={s.name}>
               <div
@@ -108,8 +120,7 @@ export function SchemaTree() {
                 <div className="tree__children">
                   {s.tables.map((t) => {
                     const key = `${s.name}.${t.name}`;
-                    const tableOpen =
-                      expandedTables.has(key) || filter.trim() !== "";
+                    const tableOpen = expandedTables.has(key) || filtering;
                     const isSelected = selected === key;
                     return (
                       <div key={key}>
@@ -127,6 +138,7 @@ export function SchemaTree() {
                             e.preventDefault();
                             setSelected(key);
                             setMenu({
+                              kind: "table",
                               x: e.clientX,
                               y: e.clientY,
                               schema: s.name,
@@ -177,6 +189,172 @@ export function SchemaTree() {
                   {s.tables.length === 0 && (
                     <div className="tree__note tree__note--sub">No tables.</div>
                   )}
+
+                  {s.functions.length > 0 && (
+                    <div>
+                      <div
+                        className="tree__row tree__row--group"
+                        onClick={() => toggleGroup(functionsKey)}
+                      >
+                        <span className="tree__chevron">{functionsOpen ? "▼" : "▶"}</span>
+                        <span className="tree__label">Functions</span>
+                        <span className="tree__count mono">{s.functions.length}</span>
+                      </div>
+                      {functionsOpen && (
+                        <div className="tree__children">
+                          {s.functions.map((fn) => {
+                            const key = `${s.name}.fn.${fn.oid}`;
+                            const isSelected = selected === key;
+                            return (
+                              <div
+                                key={key}
+                                className={
+                                  "tree__row tree__row--table" +
+                                  (isSelected ? " tree__row--selected" : "")
+                                }
+                                title={`${fn.name}(${fn.arguments})${fn.returnType ? ` → ${fn.returnType}` : ""}`}
+                                onClick={() => {
+                                  setSelected(key);
+                                  void openFunctionDefinition(s.name, fn.oid, fn.name);
+                                }}
+                                onContextMenu={(e) => {
+                                  e.preventDefault();
+                                  setSelected(key);
+                                  setMenu({
+                                    kind: "function",
+                                    x: e.clientX,
+                                    y: e.clientY,
+                                    schema: s.name,
+                                    oid: fn.oid,
+                                    name: fn.name,
+                                  });
+                                }}
+                              >
+                                <span className="tree__chevron" />
+                                <span className="tree__icon">ƒ</span>
+                                <span className="tree__label">
+                                  {fn.name}({fn.arguments})
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {s.sequences.length > 0 && (
+                    <div>
+                      <div
+                        className="tree__row tree__row--group"
+                        onClick={() => toggleGroup(sequencesKey)}
+                      >
+                        <span className="tree__chevron">{sequencesOpen ? "▼" : "▶"}</span>
+                        <span className="tree__label">Sequences</span>
+                        <span className="tree__count mono">{s.sequences.length}</span>
+                      </div>
+                      {sequencesOpen && (
+                        <div className="tree__children">
+                          {s.sequences.map((seq) => {
+                            const key = `${s.name}.seq.${seq.name}`;
+                            const isSelected = selected === key;
+                            return (
+                              <div
+                                key={key}
+                                className={
+                                  "tree__row tree__row--table" +
+                                  (isSelected ? " tree__row--selected" : "")
+                                }
+                                title={
+                                  seq.ownedBy
+                                    ? `Owned by ${seq.ownedBy.table}.${seq.ownedBy.column}`
+                                    : undefined
+                                }
+                                onClick={() => {
+                                  setSelected(key);
+                                  void openSequenceDetails(s.name, seq.name);
+                                }}
+                                onContextMenu={(e) => {
+                                  e.preventDefault();
+                                  setSelected(key);
+                                  setMenu({
+                                    kind: "sequence",
+                                    x: e.clientX,
+                                    y: e.clientY,
+                                    schema: s.name,
+                                    name: seq.name,
+                                  });
+                                }}
+                              >
+                                <span className="tree__chevron" />
+                                <span className="tree__icon">#</span>
+                                <span className="tree__label">{seq.name}</span>
+                                {seq.ownedBy && (
+                                  <span className="tree__count mono">
+                                    → {seq.ownedBy.table}.{seq.ownedBy.column}
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {s.types.length > 0 && (
+                    <div>
+                      <div
+                        className="tree__row tree__row--group"
+                        onClick={() => toggleGroup(typesKey)}
+                      >
+                        <span className="tree__chevron">{typesOpen ? "▼" : "▶"}</span>
+                        <span className="tree__label">Types</span>
+                        <span className="tree__count mono">{s.types.length}</span>
+                      </div>
+                      {typesOpen && (
+                        <div className="tree__children">
+                          {s.types.map((ty) => {
+                            const key = `${s.name}.ty.${ty.name}`;
+                            const valuesOpen = expandedTypes.has(key) || filtering;
+                            return (
+                              <div key={key}>
+                                <div
+                                  className="tree__row tree__row--table"
+                                  onClick={() => toggleType(key)}
+                                >
+                                  <span
+                                    className="tree__chevron tree__chevron--btn"
+                                    title={valuesOpen ? "Hide values" : "Show values"}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      toggleType(key);
+                                    }}
+                                  >
+                                    {valuesOpen ? "▼" : "▶"}
+                                  </span>
+                                  <span className="tree__icon">◇</span>
+                                  <span className="tree__label">{ty.name}</span>
+                                  <span className="tree__count mono">
+                                    {ty.values.length}
+                                  </span>
+                                </div>
+                                {valuesOpen && (
+                                  <div className="tree__columns">
+                                    {ty.values.map((v) => (
+                                      <div key={v} className="tree__col">
+                                        <span className="tree__col-name">{v}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -184,7 +362,7 @@ export function SchemaTree() {
         })}
       </div>
 
-      {menu && (
+      {menu?.kind === "table" && (
         <div
           className="context-menu"
           style={{ left: menu.x, top: menu.y }}
@@ -210,6 +388,42 @@ export function SchemaTree() {
           </button>
         </div>
       )}
+
+      {menu?.kind === "function" && (
+        <div
+          className="context-menu"
+          style={{ left: menu.x, top: menu.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            className="context-menu__item"
+            onClick={() => {
+              setMenu(null);
+              void openFunctionDefinition(menu.schema, menu.oid, menu.name);
+            }}
+          >
+            View definition
+          </button>
+        </div>
+      )}
+
+      {menu?.kind === "sequence" && (
+        <div
+          className="context-menu"
+          style={{ left: menu.x, top: menu.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            className="context-menu__item"
+            onClick={() => {
+              setMenu(null);
+              void openSequenceDetails(menu.schema, menu.name);
+            }}
+          >
+            View details
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -221,7 +435,9 @@ function toggle(set: Set<string>, key: string): Set<string> {
   return next;
 }
 
-/** Filter tables/schemas by name substring; keeps schemas with any match. */
+/** Filter tables/functions/sequences/types by name (and, for tables and
+ *  enum types, by what's inside them — columns / values) substring; keeps
+ *  schemas with any match. */
 function filterTree(schema: SchemaNode[], q: string): SchemaNode[] {
   if (!q) return schema;
   const out: SchemaNode[] = [];
@@ -235,7 +451,21 @@ function filterTree(schema: SchemaNode[], q: string): SchemaNode[] {
         t.name.toLowerCase().includes(q) ||
         t.columns.some((c) => c.name.toLowerCase().includes(q)),
     );
-    if (tables.length > 0) out.push({ ...s, tables });
+    const functions = s.functions.filter((f) => f.name.toLowerCase().includes(q));
+    const sequences = s.sequences.filter((sq) => sq.name.toLowerCase().includes(q));
+    const types = s.types.filter(
+      (ty) =>
+        ty.name.toLowerCase().includes(q) ||
+        ty.values.some((v) => v.toLowerCase().includes(q)),
+    );
+    if (
+      tables.length > 0 ||
+      functions.length > 0 ||
+      sequences.length > 0 ||
+      types.length > 0
+    ) {
+      out.push({ ...s, tables, functions, sequences, types });
+    }
   }
   return out;
 }

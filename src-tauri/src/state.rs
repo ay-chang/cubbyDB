@@ -13,6 +13,7 @@ use tokio::sync::Mutex;
 use crate::connections::{ConnectionStore, LastConnectionStore};
 use crate::db::{ConnectionParams, DbSession, Engine, QueryCanceller};
 use crate::history::HistoryStore;
+use crate::saved_queries::SavedQueryStore;
 
 /// One open connection.
 pub struct ActiveSession {
@@ -60,5 +61,9 @@ impl AppState {
 
     pub fn last_connection_store(&self) -> LastConnectionStore {
         LastConnectionStore::new(&self.data_dir)
+    }
+
+    pub fn saved_query_store(&self) -> SavedQueryStore {
+        SavedQueryStore::new(&self.data_dir)
     }
 }

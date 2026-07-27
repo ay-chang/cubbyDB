@@ -12,13 +12,20 @@ code comments or AGENTS.md's architecture section.
 - Connect via a full connection string, or individual fields (host, port,
   database, user, password)
 - Test a connection before connecting or saving
-- Save, rename (via re-save), and delete named connections; shown as cards you
-  can click to reload into the form
-- Clicking a saved card loads it into the form and keeps it selected even as
-  you edit fields; an "Editing X" note appears, and editing enables both
-  **Update** (overwrites the selected connection) and **Save as new**
-  (creates a separate connection, leaving the original untouched) — so which
-  one you're about to do is always explicit, never inferred silently
+- A **Name** field on the form controls what a saved connection is called —
+  it's independent of the database/host, defaulting to a placeholder
+  auto-derived from them (database name, then host, then a parsed-out
+  connection-string segment) if left blank
+- Save, rename, and delete named connections; shown as cards you can click to
+  reload into the form
+- Clicking a saved card loads it (name included) into the form and keeps it
+  selected even as you edit fields; an "Editing X" note appears, and editing
+  either the name or the connection details enables both **Update**
+  (overwrites the selected connection) and **Save as new** (creates a
+  separate connection, leaving the original untouched) — so which one you're
+  about to do is always explicit, never inferred silently. Renaming a
+  connection that's currently live updates its name in the top bar's
+  connection switcher immediately, without needing to reconnect
 - **Duplicate** a saved card (⧉ icon, next to Delete) to clone it into a new
   saved connection pre-loaded in the form, ready to tweak (e.g. cloning a
   prod connection to make a staging one)
@@ -32,6 +39,14 @@ code comments or AGENTS.md's architecture section.
   Only the most-recently-used connection is restored automatically on
   launch — additional connections from a previous session aren't reopened
   and start fresh each time
+- **Edit the connection you're on** — a ✎ icon on each pill in the switcher
+  opens the same form pre-filled with that session's actual name and
+  connection details (works even if it was never saved). Hitting **Reconnect**
+  applies the edit to that same session in place — same tabs, same slot,
+  just pointed at the new details — rather than opening another connection.
+  If it came from a saved connection, that saved record is kept in sync too;
+  if it didn't (an ad-hoc connection typed in directly), **Save** persists it
+  as a new saved connection independently of reconnecting
 - Auto-reconnect on launch to the last-used connection; if it fails, the
   connect screen opens pre-filled with the reason
 - If a query or schema fetch fails because a connection silently dropped
@@ -42,6 +57,13 @@ code comments or AGENTS.md's architecture section.
 - Disconnecting a connection clears the launch auto-reconnect target only
   once every connection is closed — closing one of several open connections
   leaves the others as the target for next launch
+- **Passwords live in the OS keychain** (macOS Keychain, Windows Credential
+  Manager, Linux Secret Service), not in the saved-connections JSON file —
+  covers both the discrete password field and one embedded in a connection
+  string. A connection saved before this shipped just keeps working as
+  plaintext until the next time it's saved, at which point its password is
+  moved to the keychain automatically. If the keychain is ever unavailable,
+  the password is left in the JSON rather than lost
 
 ## Schema browser
 
@@ -52,11 +74,54 @@ code comments or AGENTS.md's architecture section.
   one if already open)
 - Right-click a table for a context menu ("Select top 100")
 - Expand a table in the tree to see its columns, with a primary-key badge
+- **Functions, sequences, and enum types**, each in their own collapsible
+  group per schema (default collapsed, shown only when non-empty — keeps a
+  schema with lots of extension-installed functions from cluttering the
+  Tables list). Functions/procedures show their argument signature inline;
+  clicking one opens a read-only tab with its full body via Postgres's own
+  `pg_get_functiondef()`, syntax-highlighted like the SQL editor — accurate
+  regardless of language (SQL, PL/pgSQL, ...). Sequences show which
+  table/column they're `OWNED BY`, if any; clicking one opens its current
+  value, min/max, increment, and cache size, straight from Postgres's own
+  `pg_sequences` view. Enum types expand inline to show their values, the
+  same interaction as expanding a table to see its columns — no tab needed.
+  Aggregate/window functions, and composite/domain types, are out of scope
+  for now — regular functions/procedures and enums cover the common case
+- The top bar's **Refresh** button visibly confirms it ran: it shows a
+  spinner + "Refreshing…" while the schema reloads, then briefly flashes
+  "Refreshed ✓" — so even a near-instant refresh (the common case) is
+  never silently indistinguishable from a no-op
+- **Cmd/Ctrl+K quick-jump**: fuzzy-search every table and column across
+  *every open connection* — not just the visible one, so searching while
+  staging and prod are both connected finds either. With nothing typed it
+  lists every table (grouped by connection, then alphabetically); typing
+  narrows to fuzzy-matching tables *and* columns together across all of
+  them, ranked by match quality, with the matched characters highlighted.
+  Each result is tagged with which connection it's from (a small badge,
+  shown only once more than one connection is open — no clutter with just
+  one). Enter (or click) on a table opens/focuses its browse-rows tab — the
+  same as clicking it in the sidebar; on a column, it opens/focuses that
+  table's **structure** tab and scrolls to + briefly flashes that column's
+  row there, since structure is the closest thing to a column's
+  "definition" to jump to. Jumping to a result on a different connection
+  switches to it first (same as clicking its pill in the top bar)
 
 ## SQL editor
 
 - CodeMirror 6 with Postgres syntax highlighting (keywords, strings, numbers,
   comments)
+- **Schema-aware autocomplete**, sourced from the active connection's live
+  schema tree: table names after `FROM`/`JOIN`, and column names after
+  `alias.` — resolved from the query's own `FROM`/`JOIN` clauses, so it knows
+  which table an alias refers to. Matching is fuzzy (what you've typed
+  doesn't need to be an exact prefix), and **Tab** accepts the highlighted
+  suggestion; Enter/↑/↓/Escape work as usual while the popup is open.
+  Keyword suggestions are a small curated list of common clause words
+  (`SELECT`, `WHERE`, `JOIN`, `GROUP BY`, `ILIKE`, ...) rather than
+  `@codemirror/lang-sql`'s full ~600-word dialect dictionary — that list
+  includes obscure system-catalog and XML-function terms that would
+  otherwise fuzzy-match so much of what you type that they bury the schema
+  suggestions that are actually useful
 - Multiple tabs; drag to reorder; "+" to add, click to close.
   Cmd/Ctrl+T opens a new tab and Cmd/Ctrl+W closes the active one from
   anywhere in the workspace (both route through the same unsaved-edits
@@ -69,6 +134,14 @@ code comments or AGENTS.md's architecture section.
   understands quoted strings and comments but not Postgres's `$$...$$`
   dollar-quoting, so a multi-statement script containing a dollar-quoted
   function body should be run as a whole rather than statement-by-statement
+- **Cmd/Ctrl+Shift+E** runs `EXPLAIN` and **Cmd/Ctrl+Shift+A** runs
+  `EXPLAIN ANALYZE` on the same selection-or-statement-at-cursor target as
+  Cmd/Ctrl+Enter — the plan comes back through the same results grid as any
+  other query (Postgres's own `"QUERY PLAN"` column is a visual cue it's a
+  plan, not a normal result set), so it's searchable, copyable, and
+  exportable for free. `EXPLAIN ANALYZE` actually executes the statement —
+  real side effects for DML — same as running it directly with no confirm
+  prompt, so there isn't one for `EXPLAIN ANALYZE` either
 - **Cancel a running query** — a Cancel button appears in the results header
   while a query runs, and Escape cancels it too. Scoped to the currently
   visible connection (one query executing at a time per connection): it
@@ -80,6 +153,29 @@ code comments or AGENTS.md's architecture section.
   (Settings → Appearance → Editor)
 - New tabs open with a configurable starter-SQL placeholder
   (Settings → General)
+
+## Saved queries
+
+- Save the active query tab as a named, persistent "saved query" —
+  **Cmd/Ctrl+S** (or the save icon on the active query tab) opens a small
+  dialog to name it. Global, not tied to a connection — a saved query is
+  meant to be reusable across databases with the same shape (e.g. staging
+  vs prod), the same reasoning Cmd+K quick-jump already searches across
+  every open connection
+- Distinct from the existing "restore tabs on launch": that's an unnamed,
+  un-curated snapshot of whatever tabs happened to be open, for the one
+  auto-reconnected connection. This is explicit and named — you choose what
+  to save, and it's there in the **Saved** panel regardless of which
+  connection you're on
+- A tab that's already linked to a saved query shows a "✓" instead of the
+  save icon; saving again **updates** that same record. A second **Save as
+  new** option branches off a separate saved query instead, leaving the
+  original untouched — the same explicit Update/Save-as-new split saved
+  connections use
+- The **Saved** panel (top bar, next to History) lists every saved query —
+  name, a SQL preview, and when it was saved — with inline rename (✎) and
+  delete. Clicking one opens it in a new tab (or focuses its already-open
+  tab)
 
 ## Results grid
 
@@ -104,7 +200,12 @@ code comments or AGENTS.md's architecture section.
 - Clicking a table opens a backend-generated `SELECT * ... LIMIT ... OFFSET
   ...` — the frontend never assembles this SQL itself
 - A `WHERE` filter bar: type a predicate, press Enter/Apply; the backend
-  rebuilds the query with it
+  rebuilds the query with it. Same schema-aware autocomplete as the SQL
+  editor (fuzzy match, Tab to accept), scoped to just this table — so a bare
+  column name (e.g. `pri` → `price`) completes directly with no alias needed.
+  Keyword suggestions here are an even smaller curated set — just the
+  operators/connectives a single predicate actually uses (`AND`, `OR`,
+  `IS`, `NULL`, `LIKE`, `ILIKE`, `BETWEEN`, ...)
 - Pagination — 500 rows per page, Prev/Next; changing the filter resets to
   page 1
 
@@ -175,9 +276,11 @@ code comments or AGENTS.md's architecture section.
 
 ## Tabs & session persistence
 
-- Three tab kinds: "query" (editor + results), "table" (opened from the
-  schema tree, results only, backed by the WHERE bar + pagination), and
-  "structure" (read-only columns/indexes/constraints view)
+- Five tab kinds: "query" (editor + results), "table" (opened from the
+  schema tree, results only, backed by the WHERE bar + pagination),
+  "structure" (read-only columns/indexes/constraints view), and
+  "function"/"sequence" (read-only definition/details views, also opened
+  from the schema tree)
 - Each connection has its own independent set of tabs — switching connections
   switches the whole tab strip, not just what's shown
 - Cmd/Ctrl+T opens a new tab in the currently visible connection; Cmd/Ctrl+W

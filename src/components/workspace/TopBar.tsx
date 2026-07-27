@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { ConnectionScreen } from "../connection/ConnectionScreen";
-import { useStore } from "../../state/store";
+import { Spinner } from "../common/Spinner";
+import { useActiveSchemaLoading, useStore } from "../../state/store";
 
 /** The 42px application top bar: brand mark, connection switcher, and actions. */
 export function TopBar() {
@@ -10,11 +11,31 @@ export function TopBar() {
   const switchConnection = useStore((s) => s.switchConnection);
   const historyOpen = useStore((s) => s.historyOpen);
   const toggleHistory = useStore((s) => s.toggleHistory);
+  const savedQueriesOpen = useStore((s) => s.savedQueriesOpen);
+  const toggleSavedQueries = useStore((s) => s.toggleSavedQueries);
   const refreshSchema = useStore((s) => s.refreshSchema);
   const disconnect = useStore((s) => s.disconnect);
   const openSettings = useStore((s) => s.openSettings);
   const compactTopBar = useStore((s) => s.compactTopBar);
   const [addOpen, setAddOpen] = useState(false);
+  const [editSessionId, setEditSessionId] = useState<string | null>(null);
+  const schemaLoading = useActiveSchemaLoading();
+  // Flashed briefly after a refresh completes, so a fast reload (the common
+  // case) still gives visible confirmation instead of the spinner just
+  // blinking past too quickly to register.
+  const [justRefreshed, setJustRefreshed] = useState(false);
+  const justRefreshedTimer = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (justRefreshedTimer.current) window.clearTimeout(justRefreshedTimer.current);
+  }, []);
+
+  const handleRefresh = () => {
+    void refreshSchema().then(() => {
+      setJustRefreshed(true);
+      if (justRefreshedTimer.current) window.clearTimeout(justRefreshedTimer.current);
+      justRefreshedTimer.current = window.setTimeout(() => setJustRefreshed(false), 1200);
+    });
+  };
 
   const slots = Object.values(connections);
   const active = activeConnectionId ? connections[activeConnectionId] : null;
@@ -48,6 +69,16 @@ export function TopBar() {
                 </span>
               )}
               <span
+                className="conn-pill__edit"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setEditSessionId(slot.sessionId);
+                }}
+                title={`Edit ${slot.current.name}`}
+              >
+                ✎
+              </span>
+              <span
                 className="conn-pill__close"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -72,6 +103,13 @@ export function TopBar() {
 
       <div className="topbar__right">
         <button
+          className={"topbar__btn" + (savedQueriesOpen ? " topbar__btn--active" : "")}
+          onClick={toggleSavedQueries}
+          title="Saved queries"
+        >
+          Saved
+        </button>
+        <button
           className={"topbar__btn" + (historyOpen ? " topbar__btn--active" : "")}
           onClick={toggleHistory}
           title="Query history"
@@ -79,11 +117,24 @@ export function TopBar() {
           History
         </button>
         <button
-          className="topbar__btn"
-          onClick={() => void refreshSchema()}
+          className={
+            "topbar__btn topbar__btn--refresh" +
+            (schemaLoading ? " topbar__btn--loading" : "") +
+            (justRefreshed ? " topbar__btn--active" : "")
+          }
+          onClick={handleRefresh}
+          disabled={schemaLoading}
           title="Refresh schema"
         >
-          Refresh
+          {schemaLoading ? (
+            <>
+              <Spinner /> Refreshing…
+            </>
+          ) : justRefreshed ? (
+            "Refreshed ✓"
+          ) : (
+            "Refresh"
+          )}
         </button>
         <button
           className="topbar__btn"
@@ -136,6 +187,35 @@ export function TopBar() {
               </button>
             </div>
             <ConnectionScreen embedded onConnected={() => setAddOpen(false)} />
+          </div>
+        </div>
+      )}
+
+      {editSessionId && (
+        <div className="settings-overlay" onClick={() => setEditSessionId(null)}>
+          <div
+            className="add-connection-card"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Edit connection"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="settings-panel__head">
+              <span className="settings-panel__title">Edit connection</span>
+              <button
+                className="settings-panel__close"
+                onClick={() => setEditSessionId(null)}
+                title="Close"
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+            <ConnectionScreen
+              embedded
+              editSessionId={editSessionId}
+              onConnected={() => setEditSessionId(null)}
+            />
           </div>
         </div>
       )}

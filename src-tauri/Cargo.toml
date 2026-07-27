@@ -49,3 +49,20 @@ thiserror = "2"
 [features]
 # This feature is used by Tauri's mobile tooling; kept for forward-compat.
 custom-protocol = ["tauri/custom-protocol"]
+
+# OS credential storage for saved-connection passwords (macOS Keychain,
+# Windows Credential Manager, Linux Secret Service) instead of plaintext
+# JSON. `keyring` has no default backend — each platform needs its own
+# feature flag, per the crate's own cross-compilation recipe (its docs.rs
+# metadata pairs the Linux backend with `crypto-rust` explicitly, so that's
+# included here too). Only the macOS (`apple-native`) path is build- and
+# runtime-verified in this repo's dev environment; Windows/Linux are wired
+# per the crate's documented combination but unverified here.
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }

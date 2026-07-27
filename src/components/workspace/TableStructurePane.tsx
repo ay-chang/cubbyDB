@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { errorMessage, getTableStructure } from "../../api/backend";
 import type { QueryTab } from "../../state/store";
@@ -59,11 +59,35 @@ export function TableStructurePane({ tab }: { tab: QueryTab }) {
     return new Map((table?.columns ?? []).map((c) => [c.name, c]));
   }, [schema, source]);
 
+  // "Jump to column" from the command palette: scroll to and briefly flash
+  // the requested column's row once the structure has finished loading.
+  // Keyed by `nonce` so re-jumping to the same column re-triggers this even
+  // though schema/table haven't changed.
+  const pendingHighlight = useStore((s) => s.pendingColumnHighlight);
+  const clearPendingColumnHighlight = useStore((s) => s.clearPendingColumnHighlight);
+  const [highlightedColumn, setHighlightedColumn] = useState<string | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!source || !pendingHighlight || state.kind !== "ok") return;
+    if (pendingHighlight.schema !== source.schema || pendingHighlight.table !== source.table) {
+      return;
+    }
+    const el = scrollRef.current?.querySelector(
+      `[data-column="${CSS.escape(pendingHighlight.column)}"]`,
+    );
+    el?.scrollIntoView({ block: "center", behavior: "smooth" });
+    setHighlightedColumn(pendingHighlight.column);
+    clearPendingColumnHighlight();
+    const timer = window.setTimeout(() => setHighlightedColumn(null), 1800);
+    return () => window.clearTimeout(timer);
+  }, [source, pendingHighlight, state.kind, clearPendingColumnHighlight]);
+
   if (!source) return null;
 
   return (
     <div className="structure">
-      <div className="structure__scroll">
+      <div className="structure__scroll" ref={scrollRef}>
         <div className="structure__crumb mono">
           {source.schema}.{source.table}
         </div>
@@ -94,7 +118,14 @@ export function TableStructurePane({ tab }: { tab: QueryTab }) {
                   const isFk = (fk?.references.length ?? 0) > 0;
                   const isReferenced = (fk?.referencedBy.length ?? 0) > 0;
                   return (
-                    <div key={col.name} className="structure-table__row">
+                    <div
+                      key={col.name}
+                      data-column={col.name}
+                      className={
+                        "structure-table__row" +
+                        (highlightedColumn === col.name ? " structure-table__row--highlight" : "")
+                      }
+                    >
                       <span className="mono">{col.name}</span>
                       <span className="mono structure-table__type">{col.dataType}</span>
                       <span>{col.nullable ? "yes" : "no"}</span>

@@ -59,12 +59,16 @@ pub struct ConnectionInfo {
     pub elapsed_ms: u64,
 }
 
-/// A schema and the tables/views it contains.
+/// A schema and everything in it: tables/views, functions/procedures,
+/// sequences, and enum types.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SchemaNode {
     pub name: String,
     pub tables: Vec<TableNode>,
+    pub functions: Vec<FunctionNode>,
+    pub sequences: Vec<SequenceNode>,
+    pub types: Vec<TypeNode>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -113,6 +117,94 @@ pub struct ForeignKeyRef {
     pub schema: String,
     pub table: String,
     pub column: String,
+}
+
+/// A function or procedure, listed lightly (name + signature) in the schema
+/// tree — its body is fetched separately, only when opened (see
+/// [`FunctionDefinition`]), since bodies can be large and aren't needed just
+/// to browse the list. Aggregate and window functions (`pg_proc.prokind`
+/// `'a'`/`'w'`) are deliberately excluded — rarer to browse and would need
+/// different definition rendering than a plain function/procedure body.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FunctionNode {
+    /// The function's `pg_proc.oid`, cast to `i64`. Needed to disambiguate
+    /// overloads (same name, different argument types) when fetching the
+    /// definition — Postgres allows multiple functions with the same name.
+    pub oid: i64,
+    pub name: String,
+    /// Display-ready argument list from `pg_get_function_arguments`, e.g.
+    /// `"user_id integer, since timestamptz DEFAULT now()"`.
+    pub arguments: String,
+    /// `None` for procedures, which have no return type.
+    pub return_type: Option<String>,
+    pub kind: FunctionKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FunctionKind {
+    Function,
+    Procedure,
+}
+
+/// The table/column a sequence is `OWNED BY` (e.g. the sequence backing a
+/// `SERIAL`/`GENERATED ... AS IDENTITY` column), if any — always in the same
+/// schema as the sequence itself.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceOwner {
+    pub table: String,
+    pub column: String,
+}
+
+/// A sequence, listed lightly in the schema tree — its current value and
+/// bounds are fetched separately, only when opened (see [`SequenceDetails`]).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceNode {
+    pub name: String,
+    pub owned_by: Option<SequenceOwner>,
+}
+
+/// A custom enum type. Values are cheap and small, so — unlike functions and
+/// sequences — they're included directly here rather than fetched lazily;
+/// the schema tree shows them by expanding the type row, the same
+/// interaction as expanding a table to see its columns.
+///
+/// Deliberately enum types only, not composite or domain types — same
+/// honest-scope-cut as [`TableStructure`] not reconstructing `CREATE TABLE`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TypeNode {
+    pub name: String,
+    /// In their defined display order (`pg_enum.enumsortorder`).
+    pub values: Vec<String>,
+}
+
+/// A function/procedure's full body — `pg_get_functiondef(oid)`, fetched only
+/// when the function's tab is opened.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FunctionDefinition {
+    pub definition: String,
+}
+
+/// A sequence's current value and configuration, straight from Postgres's own
+/// `pg_sequences` system view — fetched only when the sequence's tab is
+/// opened.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceDetails {
+    pub data_type: String,
+    pub start_value: i64,
+    pub min_value: i64,
+    pub max_value: i64,
+    pub increment_by: i64,
+    pub cycle: bool,
+    pub cache_size: i64,
+    /// `None` until `nextval()` has ever been called on this sequence.
+    pub last_value: Option<i64>,
 }
 
 /// Column, index, and check-constraint details for one table — the "View
@@ -275,6 +367,13 @@ pub trait DbSession: Send + Sync {
     /// Column, index, and check-constraint details for one table — the "View
     /// structure" panel.
     async fn table_structure(&self, schema: &str, table: &str) -> Result<TableStructure, DbError>;
+
+    /// A function/procedure's full body, identified by its `pg_proc.oid`
+    /// (disambiguates overloads — see [`FunctionNode::oid`]).
+    async fn function_definition(&self, oid: i64) -> Result<FunctionDefinition, DbError>;
+
+    /// A sequence's current value and configuration.
+    async fn sequence_details(&self, schema: &str, name: &str) -> Result<SequenceDetails, DbError>;
 
     /// A lightweight, independent handle that can cancel whatever this
     /// session is *currently* running. Must be usable concurrently with an

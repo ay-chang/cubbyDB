@@ -13,9 +13,10 @@ use tokio_postgres::{Config, SimpleQueryMessage};
 
 use super::{
     CheckConstraintDetail, ColumnNode, ColumnValue, ConnectionInfo, ConnectionParams,
-    DatabaseDriver, DbError, DbErrorKind, DbSession, Engine, ForeignKeyRef, IndexDetail,
-    QueryCanceller, QueryResult, ResultColumn, SchemaNode, StructureColumn, TableKind, TableNode,
-    TableStructure,
+    DatabaseDriver, DbError, DbErrorKind, DbSession, Engine, ForeignKeyRef, FunctionDefinition,
+    FunctionKind, FunctionNode, IndexDetail, QueryCanceller, QueryResult, ResultColumn,
+    SchemaNode, SequenceDetails, SequenceNode, SequenceOwner, StructureColumn, TableKind,
+    TableNode, TableStructure, TypeNode,
 };
 
 /// Stateless factory for Postgres sessions.
@@ -104,12 +105,36 @@ impl DbSession for PostgresSession {
                 });
         }
 
+        // 4-6) Functions/procedures, sequences, and enum types — each a
+        //    single whole-schema query, folded in below alongside the
+        //    columns fold. Functions/sequences are listed lightly here (name
+        //    + signature); their bodies/current-value are fetched lazily,
+        //    only when opened (see `function_definition`/`sequence_details`).
+        let function_rows = self
+            .client
+            .query(FUNCTIONS_SQL, &[])
+            .await
+            .map_err(map_query_err)?;
+        let sequence_rows = self
+            .client
+            .query(SEQUENCES_SQL, &[])
+            .await
+            .map_err(map_query_err)?;
+        let type_rows = self
+            .client
+            .query(ENUM_TYPES_SQL, &[])
+            .await
+            .map_err(map_query_err)?;
+
         // Fold columns into an ordered map: schema -> tables -> columns.
         let mut schemas: Vec<SchemaNode> = schema_rows
             .iter()
             .map(|r| SchemaNode {
                 name: r.get::<_, String>(0),
                 tables: Vec::new(),
+                functions: Vec::new(),
+                sequences: Vec::new(),
+                types: Vec::new(),
             })
             .collect();
 
@@ -156,6 +181,53 @@ impl DbSession for PostgresSession {
                 is_primary_key,
                 references,
                 referenced_by,
+            });
+        }
+
+        for row in &function_rows {
+            let schema_name: String = row.get(0);
+            let Some(schema) = schemas.iter_mut().find(|s| s.name == schema_name) else {
+                continue;
+            };
+            let prokind: String = row.get(5);
+            schema.functions.push(FunctionNode {
+                oid: row.get(1),
+                name: row.get(2),
+                arguments: row.get(3),
+                return_type: row.get(4),
+                kind: if prokind == "p" {
+                    FunctionKind::Procedure
+                } else {
+                    FunctionKind::Function
+                },
+            });
+        }
+
+        for row in &sequence_rows {
+            let schema_name: String = row.get(0);
+            let Some(schema) = schemas.iter_mut().find(|s| s.name == schema_name) else {
+                continue;
+            };
+            let owner_table: Option<String> = row.get(2);
+            let owner_column: Option<String> = row.get(3);
+            let owned_by = match (owner_table, owner_column) {
+                (Some(table), Some(column)) => Some(SequenceOwner { table, column }),
+                _ => None,
+            };
+            schema.sequences.push(SequenceNode {
+                name: row.get(1),
+                owned_by,
+            });
+        }
+
+        for row in &type_rows {
+            let schema_name: String = row.get(0);
+            let Some(schema) = schemas.iter_mut().find(|s| s.name == schema_name) else {
+                continue;
+            };
+            schema.types.push(TypeNode {
+                name: row.get(1),
+                values: row.get(2),
             });
         }
 
@@ -471,6 +543,33 @@ impl DbSession for PostgresSession {
         Ok(TableStructure { columns, indexes, check_constraints })
     }
 
+    async fn function_definition(&self, oid: i64) -> Result<FunctionDefinition, DbError> {
+        let row = self
+            .client
+            .query_one(FUNCTION_DEFINITION_SQL, &[&oid])
+            .await
+            .map_err(map_query_err)?;
+        Ok(FunctionDefinition { definition: row.get(0) })
+    }
+
+    async fn sequence_details(&self, schema: &str, name: &str) -> Result<SequenceDetails, DbError> {
+        let row = self
+            .client
+            .query_one(SEQUENCE_DETAILS_SQL, &[&schema, &name])
+            .await
+            .map_err(map_query_err)?;
+        Ok(SequenceDetails {
+            data_type: row.get(0),
+            start_value: row.get(1),
+            min_value: row.get(2),
+            max_value: row.get(3),
+            increment_by: row.get(4),
+            cycle: row.get(5),
+            cache_size: row.get(6),
+            last_value: row.get(7),
+        })
+    }
+
     fn canceller(&self) -> Box<dyn QueryCanceller> {
         Box::new(PostgresCanceller {
             token: self.client.cancel_token(),
@@ -765,6 +864,93 @@ const FOREIGN_KEYS_SQL: &str = "
       AND ns.nspname NOT IN ('pg_catalog', 'information_schema')
       AND ns.nspname NOT LIKE 'pg_toast%'
       AND ns.nspname NOT LIKE 'pg_temp%'
+";
+
+/// Functions and procedures in user schemas (aggregates/window functions
+/// excluded — see `FunctionNode`'s doc comment for why). `oid` is cast to
+/// `bigint` so it comes back as a plain `i64` rather than the Postgres `oid`
+/// type, which has no built-in `tokio-postgres` Rust mapping.
+const FUNCTIONS_SQL: &str = "
+    SELECT
+        n.nspname                                   AS schema_name,
+        p.oid::bigint                                AS oid,
+        p.proname                                    AS name,
+        pg_get_function_arguments(p.oid)             AS arguments,
+        CASE WHEN p.prokind = 'p' THEN NULL
+             ELSE pg_get_function_result(p.oid) END  AS return_type,
+        p.prokind::text                              AS prokind
+    FROM pg_catalog.pg_proc p
+    JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+    WHERE p.prokind IN ('f', 'p')
+      AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+      AND n.nspname NOT LIKE 'pg_toast%'
+      AND n.nspname NOT LIKE 'pg_temp%'
+    ORDER BY n.nspname, p.proname
+";
+
+/// Sequences in user schemas, with the table/column they're `OWNED BY` (the
+/// mechanism behind `SERIAL`/`GENERATED ... AS IDENTITY` columns), if any —
+/// found via `pg_depend`'s auto-dependency (`deptype = 'a'`) rather than
+/// hand-parsing anything.
+const SEQUENCES_SQL: &str = "
+    SELECT
+        n.nspname          AS schema_name,
+        c.relname          AS name,
+        owner_tab.relname  AS owner_table,
+        owner_col.attname  AS owner_column
+    FROM pg_catalog.pg_class c
+    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    LEFT JOIN pg_catalog.pg_depend d
+        ON d.objid = c.oid
+       AND d.classid = 'pg_catalog.pg_class'::regclass
+       AND d.refclassid = 'pg_catalog.pg_class'::regclass
+       AND d.deptype = 'a'
+    LEFT JOIN pg_catalog.pg_class owner_tab ON owner_tab.oid = d.refobjid
+    LEFT JOIN pg_catalog.pg_attribute owner_col
+        ON owner_col.attrelid = d.refobjid AND owner_col.attnum = d.refobjsubid
+    WHERE c.relkind = 'S'
+      AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+      AND n.nspname NOT LIKE 'pg_toast%'
+      AND n.nspname NOT LIKE 'pg_temp%'
+    ORDER BY n.nspname, c.relname
+";
+
+/// Enum types in user schemas, with their values in defined display order.
+const ENUM_TYPES_SQL: &str = "
+    SELECT
+        n.nspname                                        AS schema_name,
+        t.typname                                         AS name,
+        array_agg(e.enumlabel ORDER BY e.enumsortorder)  AS values
+    FROM pg_catalog.pg_type t
+    JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
+    JOIN pg_catalog.pg_enum e ON e.enumtypid = t.oid
+    WHERE t.typtype = 'e'
+      AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+      AND n.nspname NOT LIKE 'pg_toast%'
+      AND n.nspname NOT LIKE 'pg_temp%'
+    GROUP BY n.nspname, t.typname
+    ORDER BY n.nspname, t.typname
+";
+
+/// A function/procedure's full body, by oid ($1) — Postgres's own renderer,
+/// so it's always accurate (handles SQL, PL/pgSQL, and other languages alike).
+const FUNCTION_DEFINITION_SQL: &str = "SELECT pg_get_functiondef($1::oid)";
+
+/// One sequence's current configuration, straight from the `pg_sequences`
+/// system view — no manual computation needed. `data_type` is cast to `text`
+/// since its native type (`regtype`) has no built-in `tokio-postgres` mapping.
+const SEQUENCE_DETAILS_SQL: &str = "
+    SELECT
+        data_type::text,
+        start_value,
+        min_value,
+        max_value,
+        increment_by,
+        cycle,
+        cache_size,
+        last_value
+    FROM pg_catalog.pg_sequences
+    WHERE schemaname = $1 AND sequencename = $2
 ";
 
 // --- "View structure" queries, each scoped to one table via $1 (schema) and

@@ -10,6 +10,7 @@ import "./connection.css";
 
 /** Editable form fields. Kept as strings; converted to params on submit. */
 interface FormState {
+  name: string;
   connectionString: string;
   host: string;
   port: string;
@@ -19,6 +20,7 @@ interface FormState {
 }
 
 const EMPTY_FORM: FormState = {
+  name: "",
   connectionString: "",
   host: "",
   port: "",
@@ -45,8 +47,9 @@ function toParams(form: FormState): ConnectionParams {
   };
 }
 
-function paramsToForm(p: ConnectionParams): FormState {
+function paramsToForm(p: ConnectionParams, name = ""): FormState {
   return {
+    name,
     connectionString: p.connectionString ?? "",
     host: p.host ?? "",
     port: p.port != null ? String(p.port) : "",
@@ -105,26 +108,46 @@ function paramsEqual(a: ConnectionParams, b: ConnectionParams): boolean {
  * connection from a modal while already connected, rather than replacing the
  * whole screen. The plain full-page version is still used for the very first
  * connection (`connections` empty, per `Workspace`/`App`'s routing).
+ *
+ * `editSessionId`, when set, edits *that* live session in place instead of
+ * opening a new one: the form is pre-filled from its actual name/params
+ * (which works even if it was never saved), and the primary action becomes
+ * "Reconnect" — applying the edit to that same session (same tabs/schema
+ * slot) rather than adding another connection. Save/Update still manage its
+ * saved record, if any, independently.
  */
 export function ConnectionScreen(props: {
   embedded?: boolean;
   onConnected?: () => void;
+  editSessionId?: string;
 } = {}) {
-  const { embedded, onConnected } = props;
+  const { embedded, onConnected, editSessionId } = props;
   const savedConnections = useStore((s) => s.savedConnections);
   const loadSavedConnections = useStore((s) => s.loadSavedConnections);
   const connectTo = useStore((s) => s.connectTo);
+  const reconnectSession = useStore((s) => s.reconnectSession);
   const lastConnection = useStore((s) => s.lastConnection);
   const reconnectError = useStore((s) => s.reconnectError);
-
-  // Prefill from the last connection (e.g. after a failed auto-reconnect) so
-  // getting back in is one click — but not when embedded as an "add another
-  // connection" modal, where prefilling with whatever's already connected
-  // would be confusing rather than convenient.
-  const [form, setForm] = useState<FormState>(() =>
-    !embedded && lastConnection ? paramsToForm(lastConnection.params) : EMPTY_FORM,
+  const renameLiveConnection = useStore((s) => s.renameLiveConnection);
+  // Only read once, at mount, to seed the form below — this component
+  // doesn't need to react to the slot changing after that.
+  const [editSlot] = useState(() =>
+    editSessionId ? useStore.getState().connections[editSessionId] ?? null : null,
   );
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // Prefill from: the session being edited, if any; else the last connection
+  // (e.g. after a failed auto-reconnect) so getting back in is one click —
+  // but not when embedded as an "add another connection" modal, where
+  // prefilling with whatever's already connected would be confusing rather
+  // than convenient.
+  const [form, setForm] = useState<FormState>(() => {
+    if (editSlot) return paramsToForm(editSlot.params, editSlot.current.name);
+    if (!embedded && lastConnection) return paramsToForm(lastConnection.params);
+    return EMPTY_FORM;
+  });
+  const [selectedId, setSelectedId] = useState<string | null>(
+    editSlot?.current.connectionId ?? null,
+  );
   const [test, setTest] = useState<TestState>({ kind: "idle" });
   const [connectError, setConnectError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
@@ -137,11 +160,18 @@ export function ConnectionScreen(props: {
   const selected = selectedId
     ? savedConnections.find((c) => c.id === selectedId) ?? null
     : null;
-  // Whether the form differs from the selected saved connection's stored
-  // params — drives whether we show one "Update" action or an explicit
-  // "Update" + "Save as new" pair, instead of silently switching between
-  // overwrite and create-new on every keystroke.
-  const dirty = selected ? !paramsEqual(params, selected.params) : false;
+  // The name actually used on connect/save: whatever's typed in the Name
+  // field, falling back to the auto-derived suggestion (mirrors the field's
+  // own placeholder) when left blank.
+  const derivedName = useMemo(() => deriveName(form), [form]);
+  const effectiveName = form.name.trim() || derivedName;
+  // Whether the form differs from the selected saved connection — either its
+  // stored params or its name — drives whether we show one "Update" action
+  // or an explicit "Update" + "Save as new" pair, instead of silently
+  // switching between overwrite and create-new on every keystroke.
+  const dirty = selected
+    ? !paramsEqual(params, selected.params) || effectiveName !== selected.name
+    : false;
 
   function update<K extends keyof FormState>(key: K, value: string) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -152,7 +182,7 @@ export function ConnectionScreen(props: {
   }
 
   function loadSaved(conn: SavedConnection) {
-    setForm(paramsToForm(conn.params));
+    setForm(paramsToForm(conn.params, conn.name));
     setSelectedId(conn.id);
     setTest({ kind: "idle" });
     setConnectError(null);
@@ -177,7 +207,7 @@ export function ConnectionScreen(props: {
     try {
       await connectTo({
         params,
-        name: selected?.name ?? deriveName(form),
+        name: effectiveName,
         id: selectedId ?? undefined,
       });
       onConnected?.();
@@ -187,12 +217,37 @@ export function ConnectionScreen(props: {
     }
   }
 
+  /** Applies the edited params/name to the session being edited, in place —
+   *  same tabs, same slot, just reconnected. If it came from a saved
+   *  connection, that record is kept in sync too, so a future launch's
+   *  auto-reconnect (or reopening it from the saved list) picks up the edit
+   *  as well; an ad-hoc (never-saved) connection stays unsaved unless the
+   *  user separately hits Save. */
+  async function handleReconnect() {
+    if (!editSessionId) return;
+    setConnecting(true);
+    setConnectError(null);
+    try {
+      await reconnectSession(editSessionId, {
+        params,
+        name: effectiveName,
+        id: selectedId ?? undefined,
+      });
+      if (selectedId) await handleSave("update");
+      onConnected?.();
+    } catch (err) {
+      setConnectError(errorMessage(err));
+    } finally {
+      setConnecting(false);
+    }
+  }
+
   /** `"new"` always creates a fresh saved connection; `"update"` overwrites
    *  the currently-selected one (only valid when one is selected). */
   async function handleSave(mode: "new" | "update" = "new") {
     const record: SavedConnection = {
       id: mode === "update" && selectedId ? selectedId : "",
-      name: mode === "update" && selected ? selected.name : deriveName(form),
+      name: effectiveName,
       engine: "postgres",
       params,
       createdAt: 0,
@@ -201,6 +256,10 @@ export function ConnectionScreen(props: {
       const saved = await api.saveConnection(record);
       setSelectedId(saved.id);
       await loadSavedConnections();
+      // If this saved connection is currently live (in this or another
+      // connection's session), reflect the rename in the switcher right
+      // away rather than only after reconnecting.
+      if (mode === "update") renameLiveConnection(saved.id, saved.name);
     } catch (err) {
       setConnectError(errorMessage(err));
     }
@@ -238,7 +297,8 @@ export function ConnectionScreen(props: {
   function onFormKeyDown(e: React.KeyboardEvent) {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && hasInput && !connecting) {
       e.preventDefault();
-      void handleConnect();
+      if (editSessionId) void handleReconnect();
+      else void handleConnect();
     }
   }
 
@@ -250,6 +310,13 @@ export function ConnectionScreen(props: {
               <h3>Connect to Postgres</h3>
               <p>Paste a connection string, or fill in the fields below.</p>
             </div>
+
+            <Field
+              label="Name"
+              value={form.name}
+              onChange={(v) => update("name", v)}
+              placeholder={derivedName}
+            />
 
             <label className="conn-field">
               <span className="caption">Connection string</span>
@@ -311,12 +378,21 @@ export function ConnectionScreen(props: {
             <div className="conn-actions">
               <button
                 className="btn btn--primary"
-                onClick={handleConnect}
+                onClick={editSessionId ? handleReconnect : handleConnect}
                 disabled={!hasInput || connecting}
+                title={
+                  editSessionId
+                    ? "Apply these changes to the connection you're on now"
+                    : undefined
+                }
               >
                 {connecting ? (
                   <>
-                    <Spinner light /> Connecting…
+                    <Spinner light /> {editSessionId ? "Reconnecting…" : "Connecting…"}
+                  </>
+                ) : editSessionId ? (
+                  <>
+                    Reconnect <span className="btn__kbd">⌘↵</span>
                   </>
                 ) : (
                   <>

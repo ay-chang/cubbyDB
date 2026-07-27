@@ -13,22 +13,26 @@ import * as api from "../api/backend";
 import type {
   ActiveConnectionInfo,
   ColumnValue,
+  ConnectionParams,
   DbError,
   HistoryEntry,
   LastConnection,
   QueryResult,
   SavedConnection,
+  SavedQuery,
   SchemaNode,
 } from "../types";
 import { errorMessage, isDbError } from "../api/backend";
 
 /**
  * A tab is a `query` tab (SQL editor + results), a `table` tab (results
- * only — opened by clicking a table in the tree, no editor), or a
- * `structure` tab (a read-only columns/indexes/constraints view for one
- * table, opened via the schema tree's context menu).
+ * only — opened by clicking a table in the tree, no editor), a `structure`
+ * tab (a read-only columns/indexes/constraints view for one table), or a
+ * `function`/`sequence` tab (a read-only definition/details view for one
+ * function or sequence) — the latter three all opened via the schema tree's
+ * context menu.
  */
-export type TabKind = "query" | "table" | "structure";
+export type TabKind = "query" | "table" | "structure" | "function" | "sequence";
 
 /** One open tab and its most recent execution. */
 export interface QueryTab {
@@ -43,8 +47,15 @@ export interface QueryTab {
   hasRun: boolean;
   /** For `table` tabs: which relation is being browsed. */
   source?: { schema: string; table: string };
+  /** For `function`/`sequence` tabs: which object is being viewed. `oid`
+   *  disambiguates function overloads; unused for sequences. */
+  objectRef?: { schema: string; name: string; oid?: number };
   /** For `table` tabs: the current WHERE-filter predicate, if any. */
   filter?: string;
+  /** For `query` tabs: which saved query (if any) this tab represents — set
+   *  on first save, or when opened from the Saved Queries panel. Absent for
+   *  ad-hoc, never-saved tabs. */
+  savedQueryId?: string;
   /**
    * Unsaved cell edits for a `table` tab: row index (into `result.rows`) ->
    * column index -> new value (`null` = SQL NULL). Cleared whenever the tab's
@@ -91,6 +102,10 @@ export function tabHasPendingEdits(tab: QueryTab): boolean {
 export interface ConnectionSlot {
   sessionId: string;
   current: ActiveConnectionInfo;
+  /** The params this session was (re)connected with — kept so "edit the
+   *  connection I'm on" has something to prefill from, even for an ad-hoc
+   *  connection that was never saved. */
+  params: ConnectionParams;
   schema: SchemaNode[];
   schemaLoading: boolean;
   schemaError: string | null;
@@ -208,6 +223,10 @@ interface AppStore {
 
   savedConnections: SavedConnection[];
 
+  /** User-saved, named SQL queries — global, not tied to a connection. */
+  savedQueries: SavedQuery[];
+  savedQueriesOpen: boolean;
+
   /** Every live connection's workspace, keyed by session id. */
   connections: Record<string, ConnectionSlot>;
   /** Which connection's workspace is currently visible. */
@@ -215,6 +234,15 @@ interface AppStore {
 
   history: HistoryEntry[];
   historyOpen: boolean;
+
+  /** Cmd/Ctrl+K quick-jump: search tables and columns in the active
+   *  connection's schema. */
+  commandPaletteOpen: boolean;
+  /** A one-shot request for `TableStructurePane` to scroll to and flash a
+   *  specific column, set by jumping to it from the command palette. Keyed
+   *  by a `nonce` so re-jumping to the same column still re-triggers the
+   *  effect; cleared once consumed. */
+  pendingColumnHighlight: { schema: string; table: string; column: string; nonce: number } | null;
 
   /** When set, a "leave without saving?" confirmation is shown. */
   confirmDialog: ConfirmDialogState | null;
@@ -261,6 +289,20 @@ interface AppStore {
   // --- lifecycle ---
   initialize: () => Promise<void>;
   loadSavedConnections: () => Promise<void>;
+  loadSavedQueries: () => Promise<void>;
+  toggleSavedQueries: () => void;
+  /** Save (or update) the active tab's SQL as a named saved query. `mode`
+   *  "update" overwrites the tab's already-linked saved query (falls back to
+   *  creating a new one if it isn't linked to one yet); "new" always creates
+   *  a separate record, leaving any existing link untouched — the same
+   *  Update/Save-as-new split saved connections use. */
+  saveTabAsQuery: (tabId: string, name: string, mode: "update" | "new") => Promise<void>;
+  /** Open (or focus) a saved query in a new/existing tab. */
+  openSavedQuery: (query: SavedQuery) => Promise<void>;
+  deleteSavedQueryById: (id: string) => Promise<void>;
+  /** Rename a saved query in place (its SQL is untouched) — the Saved
+   *  Queries panel's inline "✎" rename. */
+  renameSavedQuery: (id: string, name: string) => Promise<void>;
   /** Open a new connection and add it as a slot — never replaces an
    *  existing one, so connecting to a second database leaves the first
    *  live. Becomes the active (visible) slot. */
@@ -273,9 +315,23 @@ interface AppStore {
   /** Switch which already-open connection's workspace is visible. No
    *  backend call — every open connection stays live regardless. */
   switchConnection: (sessionId: string) => void;
+  /** Reflect a saved connection's new name onto any live session that was
+   *  opened from it, so a rename shows up in the connection switcher
+   *  immediately rather than only after reconnecting. A no-op if that saved
+   *  connection isn't currently connected. */
+  renameLiveConnection: (savedConnectionId: string, name: string) => void;
+  /** Re-establish an already-open session with edited params/name — for
+   *  "edit the connection I'm on," not opening an additional one. Keeps the
+   *  same slot (tabs stay put); its schema is cleared since it may now point
+   *  at a different database. */
+  reconnectSession: (
+    sessionId: string,
+    connection: Pick<SavedConnection, "params" | "name"> & { id?: string },
+  ) => Promise<void>;
 
   // --- schema ---
-  refreshSchema: () => Promise<void>;
+  /** Defaults to the active connection when `connectionId` is omitted. */
+  refreshSchema: (connectionId?: string) => Promise<void>;
 
   // --- tabs ---
   newTab: (opts?: { title?: string; sql?: string }) => Promise<string>;
@@ -300,6 +356,18 @@ interface AppStore {
    *  indexes, and check constraints. No query is run; `TableStructurePane`
    *  fetches its own data once the tab is open. */
   openTableStructure: (schema: string, table: string) => Promise<void>;
+  /** Open (or focus) a table's structure tab, then flag a specific column
+   *  for `TableStructurePane` to scroll to and briefly highlight — the
+   *  command palette's "jump to column" action. */
+  jumpToColumn: (schema: string, table: string, column: string) => Promise<void>;
+  clearPendingColumnHighlight: () => void;
+  /** Open (or focus) a read-only "function" tab for one function/procedure —
+   *  its body is fetched separately by `FunctionDefinitionPane`. `oid`
+   *  disambiguates overloads. */
+  openFunctionDefinition: (schema: string, oid: number, name: string) => Promise<void>;
+  /** Open (or focus) a read-only "sequence" tab for one sequence — its
+   *  current value/config is fetched separately by `SequenceDetailsPane`. */
+  openSequenceDetails: (schema: string, name: string) => Promise<void>;
   setTableFilter: (id: string, filter: string) => Promise<void>;
   openTableWithFilter: (
     schema: string,
@@ -358,6 +426,10 @@ interface AppStore {
   clearHistory: () => Promise<void>;
   rerunFromHistory: (sql: string) => void;
 
+  // --- command palette ---
+  toggleCommandPalette: () => void;
+  closeCommandPalette: () => void;
+
   // --- appearance / settings ---
   setTheme: (theme: Theme) => void;
   toggleTheme: () => void;
@@ -398,8 +470,10 @@ function makeTab(opts?: {
   sql?: string;
   kind?: TabKind;
   source?: { schema: string; table: string };
+  objectRef?: { schema: string; name: string; oid?: number };
   filter?: string;
   page?: number;
+  savedQueryId?: string;
 }): QueryTab {
   return {
     id: nextTabId(),
@@ -411,8 +485,10 @@ function makeTab(opts?: {
     running: false,
     hasRun: false,
     source: opts?.source,
+    objectRef: opts?.objectRef,
     filter: opts?.filter,
     page: opts?.page,
+    savedQueryId: opts?.savedQueryId,
   };
 }
 
@@ -903,8 +979,10 @@ function persistTabs(tabs: QueryTab[], activeTabId: string | null) {
         title: t.title,
         sql: t.sql,
         source: t.source,
+        objectRef: t.objectRef,
         filter: t.filter,
         page: t.page,
+        savedQueryId: t.savedQueryId,
       })),
     };
     localStorage.setItem(TABS_KEY, JSON.stringify(payload));
@@ -926,8 +1004,10 @@ function loadPersistedTabs(): { tabs: QueryTab[]; activeTabId: string } | null {
         title: t.title,
         sql: t.sql,
         source: t.source,
+        objectRef: t.objectRef,
         filter: t.filter,
         page: t.page,
+        savedQueryId: t.savedQueryId,
       }),
     );
     const active = tabs[payload.activeIndex] ?? tabs[0];
@@ -1000,10 +1080,14 @@ export const useStore = create<AppStore>((set, get) => {
     lastConnection: null,
     reconnectError: null,
     savedConnections: [],
+    savedQueries: [],
+    savedQueriesOpen: false,
     connections: {},
     activeConnectionId: null,
     history: [],
     historyOpen: false,
+    commandPaletteOpen: false,
+    pendingColumnHighlight: null,
     confirmDialog: null,
     theme: loadTheme(),
     tableFont: loadTableFont(),
@@ -1030,6 +1114,7 @@ export const useStore = create<AppStore>((set, get) => {
       didInitialize = true;
 
       await get().loadSavedConnections();
+      await get().loadSavedQueries();
 
       // Try to reconnect to the last-used database so the user doesn't have to
       // re-enter it every launch. Remember its params either way, to prefill the
@@ -1095,12 +1180,23 @@ export const useStore = create<AppStore>((set, get) => {
       }
     },
 
+    async loadSavedQueries() {
+      try {
+        const saved = await api.listSavedQueries();
+        set({ savedQueries: saved });
+      } catch (err) {
+        // Non-fatal: the panel just shows empty until the next successful load.
+        console.error("failed to load saved queries:", errorMessage(err));
+      }
+    },
+
     async connectTo(connection) {
       const info = await api.connect(connection.params, connection.name, connection.id ?? null);
       const tab = makeTab({ sql: get().starterSql });
       const slot: ConnectionSlot = {
         sessionId: info.sessionId,
         current: info,
+        params: connection.params,
         schema: [],
         schemaLoading: false,
         schemaError: null,
@@ -1145,25 +1241,62 @@ export const useStore = create<AppStore>((set, get) => {
       set({ activeConnectionId: sessionId });
     },
 
-    async refreshSchema() {
-      const connectionId = get().activeConnectionId;
-      if (!connectionId) return;
+    renameLiveConnection(savedConnectionId, name) {
+      set((s) => {
+        const entry = Object.entries(s.connections).find(
+          ([, slot]) => slot.current.connectionId === savedConnectionId,
+        );
+        if (!entry) return s;
+        const [sessionId, slot] = entry;
+        return {
+          connections: {
+            ...s.connections,
+            [sessionId]: { ...slot, current: { ...slot.current, name } },
+          },
+        };
+      });
+    },
+
+    async reconnectSession(sessionId, connection) {
+      if (!get().connections[sessionId]) return;
+      const info = await api.reconnectSession(
+        sessionId,
+        connection.params,
+        connection.name,
+        connection.id ?? null,
+      );
       set((s) => ({
-        connections: patchSlot(s.connections, connectionId, {
+        connections: patchSlot(s.connections, sessionId, {
+          current: info,
+          params: connection.params,
+          // The schema tree may now describe an entirely different
+          // database — drop it rather than show stale/wrong tables.
+          schema: [],
+          schemaError: null,
+        }),
+      }));
+      if (get().autoRefreshSchema) await get().refreshSchema(sessionId);
+    },
+
+    async refreshSchema(connectionId) {
+      const id = connectionId ?? get().activeConnectionId;
+      if (!id) return;
+      set((s) => ({
+        connections: patchSlot(s.connections, id, {
           schemaLoading: true,
           schemaError: null,
         }),
       }));
       try {
-        const slot = get().connections[connectionId];
+        const slot = get().connections[id];
         if (!slot) return;
         const schema = await api.fetchSchema(slot.sessionId);
         set((s) => ({
-          connections: patchSlot(s.connections, connectionId, { schema, schemaLoading: false }),
+          connections: patchSlot(s.connections, id, { schema, schemaLoading: false }),
         }));
       } catch (err) {
         set((s) => ({
-          connections: patchSlot(s.connections, connectionId, {
+          connections: patchSlot(s.connections, id, {
             schemaLoading: false,
             schemaError: errorMessage(err),
           }),
@@ -1402,6 +1535,90 @@ export const useStore = create<AppStore>((set, get) => {
           ),
         }));
       }
+    },
+
+    async openFunctionDefinition(schema, oid, name) {
+      const connectionId = get().activeConnectionId;
+      if (!connectionId) return;
+      const slot = get().connections[connectionId];
+      if (!slot) return;
+
+      const existing = slot.tabs.find(
+        (t) => t.kind === "function" && t.objectRef?.oid === oid,
+      );
+      if (existing) {
+        await switchActiveTab(connectionId, existing.id);
+        return;
+      }
+
+      const tab = makeTab({
+        kind: "function",
+        title: `${name}()`,
+        objectRef: { schema, name, oid },
+      });
+      set((s) => ({ connections: mapSlotTabs(s.connections, connectionId, (tabs) => [...tabs, tab]) }));
+      const switched = await switchActiveTab(connectionId, tab.id);
+      if (!switched) {
+        set((s) => ({
+          connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+            tabs.filter((t) => t.id !== tab.id),
+          ),
+        }));
+      }
+    },
+
+    async openSequenceDetails(schema, name) {
+      const connectionId = get().activeConnectionId;
+      if (!connectionId) return;
+      const slot = get().connections[connectionId];
+      if (!slot) return;
+
+      const existing = slot.tabs.find(
+        (t) =>
+          t.kind === "sequence" &&
+          t.objectRef?.schema === schema &&
+          t.objectRef?.name === name,
+      );
+      if (existing) {
+        await switchActiveTab(connectionId, existing.id);
+        return;
+      }
+
+      const tab = makeTab({
+        kind: "sequence",
+        title: name,
+        objectRef: { schema, name },
+      });
+      set((s) => ({ connections: mapSlotTabs(s.connections, connectionId, (tabs) => [...tabs, tab]) }));
+      const switched = await switchActiveTab(connectionId, tab.id);
+      if (!switched) {
+        set((s) => ({
+          connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+            tabs.filter((t) => t.id !== tab.id),
+          ),
+        }));
+      }
+    },
+
+    async jumpToColumn(schema, table, column) {
+      await get().openTableStructure(schema, table);
+      // Only flag the highlight if we actually landed on that structure tab
+      // — openTableStructure can no-op if the user declined to leave a
+      // dirty tab, and we don't want a stale highlight firing later.
+      const connectionId = get().activeConnectionId;
+      const slot = connectionId ? get().connections[connectionId] : null;
+      const activeTab = slot?.tabs.find((t) => t.id === slot.activeTabId);
+      if (
+        activeTab?.kind === "structure" &&
+        activeTab.source?.schema === schema &&
+        activeTab.source?.table === table
+      ) {
+        set({ pendingColumnHighlight: { schema, table, column, nonce: Date.now() } });
+      }
+    },
+
+    clearPendingColumnHighlight() {
+      set({ pendingColumnHighlight: null });
     },
 
     async openTableWithFilter(schema, table, filter) {
@@ -1943,6 +2160,14 @@ export const useStore = create<AppStore>((set, get) => {
       if (next) void get().refreshHistory();
     },
 
+    toggleCommandPalette() {
+      set((s) => ({ commandPaletteOpen: !s.commandPaletteOpen }));
+    },
+
+    closeCommandPalette() {
+      set({ commandPaletteOpen: false });
+    },
+
     async refreshHistory() {
       try {
         const history = await api.queryHistory(get().historyLimit);
@@ -1966,6 +2191,102 @@ export const useStore = create<AppStore>((set, get) => {
         const id = await get().newTab({ title: "history.sql", sql });
         await get().runTab(id);
       })();
+    },
+
+    toggleSavedQueries() {
+      const next = !get().savedQueriesOpen;
+      set({ savedQueriesOpen: next });
+      if (next) void get().loadSavedQueries();
+    },
+
+    async saveTabAsQuery(tabId, name, mode) {
+      const owner = findTabOwner(get().connections, tabId);
+      if (!owner) return;
+      const existingId = mode === "update" ? owner.tab.savedQueryId : undefined;
+      const saved = await api.saveQuery({
+        id: existingId ?? "",
+        name,
+        sql: owner.tab.sql,
+        createdAt: 0,
+      });
+      set((s) => {
+        const withoutOld = s.savedQueries.filter((q) => q.id !== saved.id);
+        return {
+          savedQueries: [saved, ...withoutOld],
+          connections: mapSlotTabs(s.connections, owner.connectionId, (tabs) =>
+            tabs.map((t) =>
+              t.id === tabId ? { ...t, savedQueryId: saved.id, title: saved.name } : t,
+            ),
+          ),
+        };
+      });
+    },
+
+    async openSavedQuery(query) {
+      const connectionId = get().activeConnectionId;
+      if (!connectionId) return;
+      const slot = get().connections[connectionId];
+      if (!slot) return;
+
+      const existing = slot.tabs.find((t) => t.savedQueryId === query.id);
+      if (existing) {
+        await switchActiveTab(connectionId, existing.id);
+        return;
+      }
+
+      const tab = makeTab({
+        kind: "query",
+        title: query.name,
+        sql: query.sql,
+        savedQueryId: query.id,
+      });
+      set((s) => ({ connections: mapSlotTabs(s.connections, connectionId, (tabs) => [...tabs, tab]) }));
+      const switched = await switchActiveTab(connectionId, tab.id);
+      if (!switched) {
+        set((s) => ({
+          connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+            tabs.filter((t) => t.id !== tab.id),
+          ),
+        }));
+      }
+    },
+
+    async renameSavedQuery(id, name) {
+      const existing = get().savedQueries.find((q) => q.id === id);
+      if (!existing) return;
+      const saved = await api.saveQuery({ ...existing, name });
+      set((s) => ({
+        savedQueries: s.savedQueries.map((q) => (q.id === id ? saved : q)),
+        connections: Object.fromEntries(
+          Object.entries(s.connections).map(([connectionId, slot]) => [
+            connectionId,
+            {
+              ...slot,
+              tabs: slot.tabs.map((t) =>
+                t.savedQueryId === id ? { ...t, title: saved.name } : t,
+              ),
+            },
+          ]),
+        ),
+      }));
+    },
+
+    async deleteSavedQueryById(id) {
+      await api.deleteSavedQuery(id);
+      set((s) => ({
+        savedQueries: s.savedQueries.filter((q) => q.id !== id),
+        connections: Object.fromEntries(
+          Object.entries(s.connections).map(([connectionId, slot]) => [
+            connectionId,
+            {
+              ...slot,
+              tabs: slot.tabs.map((t) =>
+                t.savedQueryId === id ? { ...t, savedQueryId: undefined } : t,
+              ),
+            },
+          ]),
+        ),
+      }));
     },
 
     setTheme(theme) {
