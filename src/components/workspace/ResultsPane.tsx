@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { CopyResult } from "../../api/backend";
 import { copyToClipboard, readClipboard } from "../../api/backend";
@@ -351,18 +351,6 @@ function ResultsGrid({
   const [findIndex, setFindIndex] = useState(0);
   const findInputRef = useRef<HTMLInputElement>(null);
 
-  // Commit the in-progress inline edit to the right place (existing vs draft).
-  const commitEditing = () => {
-    if (!editing) return;
-    if (editing.isNew) {
-      // For a new row, an empty field means "leave to the column default".
-      setNewCellEdit(tab.id, editing.r, editing.col, editing.draft === "" ? null : editing.draft);
-    } else {
-      setCellEdit(tab.id, editing.r, editing.col, editing.draft);
-    }
-    setEditing(null);
-  };
-
   const isRowSelected = (kind: "existing" | "new", index: number) =>
     rowSel.some((s) => s.kind === kind && s.index === index);
 
@@ -374,46 +362,115 @@ function ResultsGrid({
     setFkMenu(null);
   };
 
+  // Row indices in display order (sorted client-side when a sort is active).
+  // Guard against a stale sort column left over from a different result (e.g.
+  // switching tabs) — treat an out-of-range column as "no sort" rather than
+  // indexing past the row, which previously crashed the whole render tree.
+  // Declared up here (rather than down near the rest of the find/sort logic,
+  // where it used to live) since `selectRowFromGutter` right below needs it
+  // in a `useCallback` dependency array, which — unlike a plain closure —
+  // TypeScript's block-scoping requires to already be declared at this point
+  // in the source, not just by the time the callback actually runs.
+  const sortedRowIndices = useMemo(() => {
+    const indices = result.rows.map((_, i) => i);
+    if (!sort || sort.col >= result.columns.length) return indices;
+    const { col, dir } = sort;
+    const numeric = numericCols[col];
+    indices.sort((a, b) =>
+      compareCells(result.rows[a][col], result.rows[b][col], numeric, dir),
+    );
+    return indices;
+  }, [result, sort, numericCols]);
+
   /**
    * Gutter click with modifiers: plain = select just this row, ⌘/Ctrl+click =
    * toggle it in/out of the selection, Shift+click = select the range from the
-   * anchor (existing rows only, in display order).
+   * anchor (existing rows only, in display order). Wrapped in `useCallback`
+   * (and the two thin per-kind wrappers below it) so `GridRow`/`GridNewRow`
+   * receive a referentially stable handler prop — required for their
+   * `memo()` to actually skip re-rendering rows a click didn't touch.
    */
-  const selectRowFromGutter = (
-    e: React.MouseEvent,
-    kind: "existing" | "new",
-    index: number,
-  ) => {
-    const sel: RowSelection = { kind, index };
-    const anchor = rowAnchorRef.current;
-    if (e.shiftKey && anchor && anchor.kind === "existing" && kind === "existing") {
-      const aPos = sortedRowIndices.indexOf(anchor.index);
-      const cPos = sortedRowIndices.indexOf(index);
-      if (aPos >= 0 && cPos >= 0) {
-        const [lo, hi] = aPos <= cPos ? [aPos, cPos] : [cPos, aPos];
-        setRowSel(
-          sortedRowIndices
-            .slice(lo, hi + 1)
-            .map((ri) => ({ kind: "existing" as const, index: ri })),
+  const selectRowFromGutter = useCallback(
+    (e: React.MouseEvent, kind: "existing" | "new", index: number) => {
+      const sel: RowSelection = { kind, index };
+      const anchor = rowAnchorRef.current;
+      if (e.shiftKey && anchor && anchor.kind === "existing" && kind === "existing") {
+        const aPos = sortedRowIndices.indexOf(anchor.index);
+        const cPos = sortedRowIndices.indexOf(index);
+        if (aPos >= 0 && cPos >= 0) {
+          const [lo, hi] = aPos <= cPos ? [aPos, cPos] : [cPos, aPos];
+          setRowSel(
+            sortedRowIndices
+              .slice(lo, hi + 1)
+              .map((ri) => ({ kind: "existing" as const, index: ri })),
+          );
+        } else {
+          setRowSel([sel]);
+          rowAnchorRef.current = sel;
+        }
+      } else if (e.metaKey || e.ctrlKey) {
+        setRowSel((prev) =>
+          prev.some((s) => s.kind === kind && s.index === index)
+            ? prev.filter((s) => !(s.kind === kind && s.index === index))
+            : [...prev, sel],
         );
+        rowAnchorRef.current = sel;
       } else {
         setRowSel([sel]);
         rowAnchorRef.current = sel;
       }
-    } else if (e.metaKey || e.ctrlKey) {
-      setRowSel((prev) =>
-        prev.some((s) => s.kind === kind && s.index === index)
-          ? prev.filter((s) => !(s.kind === kind && s.index === index))
-          : [...prev, sel],
-      );
-      rowAnchorRef.current = sel;
-    } else {
-      setRowSel([sel]);
-      rowAnchorRef.current = sel;
-    }
-    setSelected(null);
-    setFkMenu(null);
-  };
+      setSelected(null);
+      setFkMenu(null);
+    },
+    [sortedRowIndices],
+  );
+  const onExistingGutterClick = useCallback(
+    (e: React.MouseEvent, r: number) => selectRowFromGutter(e, "existing", r),
+    [selectRowFromGutter],
+  );
+  const onNewGutterClick = useCallback(
+    (e: React.MouseEvent, ni: number) => selectRowFromGutter(e, "new", ni),
+    [selectRowFromGutter],
+  );
+
+  // Cell selection/editing/context-menu handlers, likewise stable — each
+  // takes the row/col as arguments rather than closing over them, so one
+  // shared instance works for every row.
+  const onCellClick = useCallback((r: number, col: number) => {
+    setSelected({ r, col });
+    setRowSel([]);
+  }, []);
+  const onCellDoubleClick = useCallback(
+    (r: number, col: number, currentValue: string | null) => {
+      setEditing({ r, col, draft: currentValue ?? "" });
+    },
+    [],
+  );
+  const onCellContextMenu = useCallback((e: React.MouseEvent, r: number, col: number) => {
+    setSelected({ r, col });
+    setFkMenu({ r, col, x: e.clientX, y: e.clientY });
+  }, []);
+  const onNewCellClick = useCallback((ni: number, col: number, currentValue: string | null) => {
+    setEditing({ r: ni, col, draft: currentValue ?? "", isNew: true });
+  }, []);
+  const onEditDraftChange = useCallback(
+    (r: number, col: number, draft: string, isNew?: boolean) => {
+      setEditing({ r, col, draft, isNew });
+    },
+    [],
+  );
+  const onEditCommit = useCallback(
+    (r: number, col: number, draft: string, isNew?: boolean) => {
+      if (isNew) {
+        setNewCellEdit(tab.id, r, col, draft === "" ? null : draft);
+      } else {
+        setCellEdit(tab.id, r, col, draft);
+      }
+      setEditing(null);
+    },
+    [tab.id, setNewCellEdit, setCellEdit],
+  );
+  const onEditCancel = useCallback(() => setEditing(null), []);
 
   // On-screen copy diagnostics: shows the value and which clipboard method
   // worked/failed for a few seconds after each copy.
@@ -575,10 +632,16 @@ function ResultsGrid({
     rowCopyDelimiter,
   ]);
 
-  // A fixed row-number/selection gutter precedes the data columns.
-  const template = `${GUTTER_W}px ` + order.map((i) => `${widths[i]}px`).join(" ");
-  const totalWidth = GUTTER_W + order.reduce((sum, i) => sum + widths[i], 0);
-  const gridStyle = { gridTemplateColumns: template, width: totalWidth };
+  // A fixed row-number/selection gutter precedes the data columns. Memoized
+  // so it keeps the same object reference across renders that don't touch
+  // `order`/`widths` (e.g. a cell click) — passed down to every `GridRow`/
+  // `GridNewRow`, whose `memo()` wrapper needs a stable reference here to
+  // correctly skip re-rendering rows a click didn't actually affect.
+  const gridStyle = useMemo(() => {
+    const template = `${GUTTER_W}px ` + order.map((i) => `${widths[i]}px`).join(" ");
+    const totalWidth = GUTTER_W + order.reduce((sum, i) => sum + widths[i], 0);
+    return { gridTemplateColumns: template, width: totalWidth };
+  }, [order, widths]);
   const dragWidth = drag ? widths[order[drag.fromPos]] : 0;
 
   const startResize = (colIndex: number) => (e: React.MouseEvent) => {
@@ -701,21 +764,6 @@ function ResultsGrid({
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
   };
-
-  // Row indices in display order (sorted client-side when a sort is active).
-  // Guard against a stale sort column left over from a different result (e.g.
-  // switching tabs) — treat an out-of-range column as "no sort" rather than
-  // indexing past the row, which previously crashed the whole render tree.
-  const sortedRowIndices = useMemo(() => {
-    const indices = result.rows.map((_, i) => i);
-    if (!sort || sort.col >= result.columns.length) return indices;
-    const { col, dir } = sort;
-    const numeric = numericCols[col];
-    indices.sort((a, b) =>
-      compareCells(result.rows[a][col], result.rows[b][col], numeric, dir),
-    );
-    return indices;
-  }, [result, sort, numericCols]);
 
   // Find-in-results matches: every visible cell (existing rows only — draft
   // rows are few and already visible unscrolled) whose value contains the
@@ -985,217 +1033,68 @@ function ResultsGrid({
         {result.rows.length === 0 && (
           <div className="results__note results__note--sub">No rows returned.</div>
         )}
-        {sortedRowIndices.map((r, displayPos) => {
-          const row = result.rows[r];
-          const rowEdits = tab.pendingEdits?.[r];
-          const rowDirty = !!rowEdits && Object.keys(rowEdits).length > 0;
-          return (
-          <div
-            key={r}
-            className={
-              "grid__row" +
-              (displayPos % 2 === 1 ? " grid__row--zebra" : "") +
-              (selected?.r === r ? " grid__row--active" : "") +
-              (isRowSelected("existing", r) ? " grid__row--rowsel" : "") +
-              (rowDirty ? " grid__row--dirty" : "")
-            }
-            style={gridStyle}
-          >
-            <div
-              className="grid__gutter"
-              title="Click to select the row · Shift-click for a range · ⌘/Ctrl-click to add · ⌘C copies, ⌘V pastes/duplicates"
-              onClick={(e) => selectRowFromGutter(e, "existing", r)}
-            >
-              {displayPos + 1}
-            </div>
-            {order.map((colIndex) => {
-              const original = row[colIndex];
-              const draftEdit = rowEdits?.[colIndex];
-              const value = draftEdit !== undefined ? draftEdit : original;
-              const isDirty = draftEdit !== undefined;
-              const isSelected = selected?.r === r && selected?.col === colIndex;
-              const isPk = pkColIndices.has(colIndex);
-              // Primary-key cells are editable too: an UPDATE keys off the row's
-              // *original* PK (built at commit time), so changing it produces a
-              // valid `SET id = new WHERE id = old`.
-              const isCellEditable = editable;
-              // Exclude `isNew` edits: a draft row shares the same numeric index
-              // as an existing row, so without this an existing row would also
-              // render an edit input for a draft cell — two autofocus inputs
-              // would fight for focus and immediately cancel the edit.
-              const isEditingThis =
-                !editing?.isNew && editing?.r === r && editing?.col === colIndex;
-              const nav = navByColumn?.[colIndex];
-              const isFk =
-                !!nav &&
-                original !== null &&
-                (nav.references.length > 0 || nav.referencedBy.length > 0);
-              // Right-clickable to set NULL only if the column is editable,
-              // nullable, and not already null.
-              const canSetNull =
-                isCellEditable && nullableColIndices.has(colIndex) && value !== null;
-
-              if (isEditingThis) {
-                return (
-                  <div
-                    key={colIndex}
-                    className={
-                      "grid__cell grid__cell--editing" +
-                      (numericCols[colIndex] ? " grid__cell--num" : "")
-                    }
-                  >
-                    <input
-                      className="grid__cell-input mono"
-                      autoFocus
-                      value={editing.draft}
-                      onFocus={(e) => e.target.select()}
-                      onChange={(e) =>
-                        setEditing({ r, col: colIndex, draft: e.target.value })
-                      }
-                      onBlur={commitEditing}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          commitEditing();
-                        } else if (e.key === "Escape") {
-                          e.preventDefault();
-                          setEditing(null);
-                        }
-                      }}
-                    />
-                  </div>
-                );
+        {(() => {
+          // Hoisted out of the row loop — the same for every row, just
+          // compared against each row's own `r` below.
+          const activeMatch = findMatches[findIndex];
+          const selectedColGlobal = selected?.col ?? null;
+          return sortedRowIndices.map((r, displayPos) => (
+            <GridRow
+              key={r}
+              r={r}
+              displayPos={displayPos}
+              row={result.rows[r]}
+              rowEdits={tab.pendingEdits?.[r]}
+              gridStyle={gridStyle}
+              order={order}
+              numericCols={numericCols}
+              navByColumn={navByColumn}
+              pkColIndices={pkColIndices}
+              nullableColIndices={nullableColIndices}
+              nullText={nullText}
+              editable={editable}
+              isRowActive={selected?.r === r}
+              selectedCol={selectedColGlobal}
+              isRowGutterSelected={isRowSelected("existing", r)}
+              editingCell={
+                !editing?.isNew && editing?.r === r
+                  ? { col: editing.col, draft: editing.draft }
+                  : null
               }
-
-              const isActiveFindMatch =
-                findMatches[findIndex]?.r === r && findMatches[findIndex]?.col === colIndex;
-
-              return (
-                <div
-                  key={colIndex}
-                  data-cell={`${r}-${colIndex}`}
-                  className={
-                    "grid__cell" +
-                    (numericCols[colIndex] ? " grid__cell--num mono" : "") +
-                    (value === null ? " grid__cell--null" : "") +
-                    (selected?.col === colIndex ? " grid__cell--col-active" : "") +
-                    (isSelected ? " grid__cell--selected" : "") +
-                    (isFk ? " grid__cell--fk" : "") +
-                    (isDirty ? " grid__cell--dirty" : "") +
-                    (isPk && editable ? " grid__cell--pk" : "")
-                  }
-                  title={
-                    isFk
-                      ? fkTooltip(nav!)
-                      : isPk && editable
-                        ? "Primary key — double-click to edit (changes the row's key)"
-                        : value ?? "NULL"
-                  }
-                  onClick={() => {
-                    // A single click just highlights the cell — it's then
-                    // available to copy with ⌘/Ctrl+C (double-click to edit).
-                    setSelected({ r, col: colIndex });
-                    setRowSel([]);
-                  }}
-                  onDoubleClick={() => {
-                    if (!isCellEditable) return;
-                    setEditing({ r, col: colIndex, draft: value ?? "" });
-                  }}
-                  onContextMenu={(e) => {
-                    if (!isFk && !canSetNull && !isDirty) return;
-                    e.preventDefault();
-                    setSelected({ r, col: colIndex });
-                    setFkMenu({ r, col: colIndex, x: e.clientX, y: e.clientY });
-                  }}
-                >
-                  {value === null
-                    ? nullText
-                    : findOpen && findQuery.trim()
-                      ? highlightMatches(value, findQuery, isActiveFindMatch)
-                      : value}
-                </div>
-              );
-            })}
-          </div>
-          );
-        })}
+              findOpen={findOpen}
+              findQuery={findQuery}
+              activeMatchCol={activeMatch?.r === r ? activeMatch.col : null}
+              onGutterClick={onExistingGutterClick}
+              onCellClick={onCellClick}
+              onCellDoubleClick={onCellDoubleClick}
+              onCellContextMenu={onCellContextMenu}
+              onEditDraftChange={onEditDraftChange}
+              onEditCommit={onEditCommit}
+              onEditCancel={onEditCancel}
+            />
+          ));
+        })()}
         {isTable &&
           (tab.newRows ?? []).map((draft, ni) => (
-            <div
+            <GridNewRow
               key={`new-${ni}`}
-              className={
-                "grid__row grid__row--new" +
-                (isRowSelected("new", ni) ? " grid__row--rowsel" : "")
+              ni={ni}
+              draft={draft}
+              gridStyle={gridStyle}
+              order={order}
+              numericCols={numericCols}
+              isRowGutterSelected={isRowSelected("new", ni)}
+              editingCell={
+                editing?.isNew && editing.r === ni
+                  ? { col: editing.col, draft: editing.draft }
+                  : null
               }
-              style={gridStyle}
-            >
-              <div
-                className="grid__gutter grid__gutter--new"
-                title="New row — commit with Update to insert it"
-                onClick={(e) => selectRowFromGutter(e, "new", ni)}
-              >
-                +
-              </div>
-              {order.map((colIndex) => {
-                const value = draft[colIndex];
-                const isEditingThis =
-                  editing?.isNew && editing.r === ni && editing.col === colIndex;
-                if (isEditingThis) {
-                  return (
-                    <div
-                      key={colIndex}
-                      className={
-                        "grid__cell grid__cell--editing" +
-                        (numericCols[colIndex] ? " grid__cell--num" : "")
-                      }
-                    >
-                      <input
-                        className="grid__cell-input mono"
-                        autoFocus
-                        value={editing.draft}
-                        onFocus={(e) => e.target.select()}
-                        onChange={(e) =>
-                          setEditing({
-                            r: ni,
-                            col: colIndex,
-                            draft: e.target.value,
-                            isNew: true,
-                          })
-                        }
-                        onBlur={commitEditing}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            e.preventDefault();
-                            commitEditing();
-                          } else if (e.key === "Escape") {
-                            e.preventDefault();
-                            setEditing(null);
-                          }
-                        }}
-                      />
-                    </div>
-                  );
-                }
-                return (
-                  <div
-                    key={colIndex}
-                    className={
-                      "grid__cell grid__cell--newcell" +
-                      (numericCols[colIndex] ? " grid__cell--num mono" : "") +
-                      (value === null ? " grid__cell--null" : "")
-                    }
-                    title={value ?? "Click to edit (empty leaves the column default)"}
-                    // A single click on a draft cell starts editing right away —
-                    // no double-click needed. (Select the whole row via its gutter.)
-                    onClick={() =>
-                      setEditing({ r: ni, col: colIndex, draft: value ?? "", isNew: true })
-                    }
-                  >
-                    {value === null ? "default" : value}
-                  </div>
-                );
-              })}
-            </div>
+              onGutterClick={onNewGutterClick}
+              onNewCellClick={onNewCellClick}
+              onEditDraftChange={onEditDraftChange}
+              onEditCommit={onEditCommit}
+              onEditCancel={onEditCancel}
+            />
           ))}
       </div>
 
@@ -1378,6 +1277,381 @@ function ResultsGrid({
     </>
   );
 }
+
+interface GridCellProps {
+  r: number;
+  colIndex: number;
+  value: string | null;
+  isDirty: boolean;
+  /** Exact selected cell (row *and* column match). */
+  isSelected: boolean;
+  /** Selected cell's column, highlighted down every row (the "crosshair"
+   *  design — see the `.grid__cell--col-active` comment in workspace.css).
+   *  Global, not row-scoped, so it's the same value for every row's cell in
+   *  that column — this is exactly why cells (not just rows) need their own
+   *  `memo()`: a click changes this for every row, but only the ~2 columns
+   *  (old + new selected) actually need to re-render, not all of them. */
+  isColActive: boolean;
+  isPk: boolean;
+  isFk: boolean;
+  nav: ColNav | undefined;
+  canSetNull: boolean;
+  numeric: boolean;
+  editable: boolean;
+  nullText: string;
+  isEditing: boolean;
+  editDraft: string;
+  findOpen: boolean;
+  findQuery: string;
+  isActiveFindMatch: boolean;
+  onCellClick: (r: number, col: number) => void;
+  onCellDoubleClick: (r: number, col: number, currentValue: string | null) => void;
+  onCellContextMenu: (e: React.MouseEvent, r: number, col: number) => void;
+  onEditDraftChange: (r: number, col: number, draft: string, isNew?: boolean) => void;
+  onEditCommit: (r: number, col: number, draft: string, isNew?: boolean) => void;
+  onEditCancel: () => void;
+}
+
+/**
+ * One data cell in the results grid — the leaf `memo()` boundary that makes
+ * clicking a cell cheap regardless of result-set size. See `GridRow`'s doc
+ * comment for the full picture of why this needed splitting this finely.
+ */
+const GridCell = memo(function GridCell({
+  r,
+  colIndex,
+  value,
+  isDirty,
+  isSelected,
+  isColActive,
+  isPk,
+  isFk,
+  nav,
+  canSetNull,
+  numeric,
+  editable,
+  nullText,
+  isEditing,
+  editDraft,
+  findOpen,
+  findQuery,
+  isActiveFindMatch,
+  onCellClick,
+  onCellDoubleClick,
+  onCellContextMenu,
+  onEditDraftChange,
+  onEditCommit,
+  onEditCancel,
+}: GridCellProps) {
+  if (isEditing) {
+    return (
+      <div
+        className={"grid__cell grid__cell--editing" + (numeric ? " grid__cell--num" : "")}
+      >
+        <input
+          className="grid__cell-input mono"
+          autoFocus
+          value={editDraft}
+          onFocus={(e) => e.target.select()}
+          onChange={(e) => onEditDraftChange(r, colIndex, e.target.value)}
+          onBlur={() => onEditCommit(r, colIndex, editDraft)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              onEditCommit(r, colIndex, editDraft);
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              onEditCancel();
+            }
+          }}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      data-cell={`${r}-${colIndex}`}
+      className={
+        "grid__cell" +
+        (numeric ? " grid__cell--num mono" : "") +
+        (value === null ? " grid__cell--null" : "") +
+        (isColActive ? " grid__cell--col-active" : "") +
+        (isSelected ? " grid__cell--selected" : "") +
+        (isFk ? " grid__cell--fk" : "") +
+        (isDirty ? " grid__cell--dirty" : "") +
+        (isPk && editable ? " grid__cell--pk" : "")
+      }
+      title={
+        isFk
+          ? fkTooltip(nav!)
+          : isPk && editable
+            ? "Primary key — double-click to edit (changes the row's key)"
+            : value ?? "NULL"
+      }
+      onClick={() => onCellClick(r, colIndex)}
+      onDoubleClick={() => {
+        if (!editable) return;
+        onCellDoubleClick(r, colIndex, value);
+      }}
+      onContextMenu={(e) => {
+        if (!isFk && !canSetNull && !isDirty) return;
+        e.preventDefault();
+        onCellContextMenu(e, r, colIndex);
+      }}
+    >
+      {value === null
+        ? nullText
+        : findOpen && findQuery.trim()
+          ? highlightMatches(value, findQuery, isActiveFindMatch)
+          : value}
+    </div>
+  );
+});
+
+interface GridRowProps {
+  r: number;
+  displayPos: number;
+  row: Array<string | null>;
+  rowEdits: Record<number, string | null> | undefined;
+  gridStyle: React.CSSProperties;
+  order: number[];
+  numericCols: boolean[];
+  navByColumn: ColNav[] | null;
+  pkColIndices: Set<number>;
+  nullableColIndices: Set<number>;
+  nullText: string;
+  editable: boolean;
+  isRowActive: boolean;
+  selectedCol: number | null;
+  isRowGutterSelected: boolean;
+  editingCell: { col: number; draft: string } | null;
+  findOpen: boolean;
+  findQuery: string;
+  activeMatchCol: number | null;
+  onGutterClick: (e: React.MouseEvent, r: number) => void;
+  onCellClick: (r: number, col: number) => void;
+  onCellDoubleClick: (r: number, col: number, currentValue: string | null) => void;
+  onCellContextMenu: (e: React.MouseEvent, r: number, col: number) => void;
+  onEditDraftChange: (r: number, col: number, draft: string, isNew?: boolean) => void;
+  onEditCommit: (r: number, col: number, draft: string, isNew?: boolean) => void;
+  onEditCancel: () => void;
+}
+
+/**
+ * One existing-row of the results grid. `memo()`-wrapped, with narrow,
+ * row-scoped props instead of reading `selected`/`rowSel`/`editing`/
+ * `findQuery` etc. from `ResultsGrid`'s closure — without this, *any* local
+ * state change there (including just clicking a cell) re-renders and
+ * reconciles every currently-loaded row (up to 500) times every column,
+ * which is invisible with a handful of columns/rows but multi-second on a
+ * wide, fully-paged production table. `GridRow` itself still re-executes on
+ * most clicks (it needs the globally-selected column to hand to every
+ * cell, for the "crosshair" column highlight — see `GridCell`), but that's
+ * just cheap JS object creation; the actual expensive DOM work is gated one
+ * level down, per cell, by `GridCell`'s own `memo()`.
+ */
+const GridRow = memo(function GridRow({
+  r,
+  displayPos,
+  row,
+  rowEdits,
+  gridStyle,
+  order,
+  numericCols,
+  navByColumn,
+  pkColIndices,
+  nullableColIndices,
+  nullText,
+  editable,
+  isRowActive,
+  selectedCol,
+  isRowGutterSelected,
+  editingCell,
+  findOpen,
+  findQuery,
+  activeMatchCol,
+  onGutterClick,
+  onCellClick,
+  onCellDoubleClick,
+  onCellContextMenu,
+  onEditDraftChange,
+  onEditCommit,
+  onEditCancel,
+}: GridRowProps) {
+  const rowDirty = !!rowEdits && Object.keys(rowEdits).length > 0;
+  return (
+    <div
+      className={
+        "grid__row" +
+        (displayPos % 2 === 1 ? " grid__row--zebra" : "") +
+        (isRowActive ? " grid__row--active" : "") +
+        (isRowGutterSelected ? " grid__row--rowsel" : "") +
+        (rowDirty ? " grid__row--dirty" : "")
+      }
+      style={gridStyle}
+    >
+      <div
+        className="grid__gutter"
+        title="Click to select the row · Shift-click for a range · ⌘/Ctrl-click to add · ⌘C copies, ⌘V pastes/duplicates"
+        onClick={(e) => onGutterClick(e, r)}
+      >
+        {displayPos + 1}
+      </div>
+      {order.map((colIndex) => {
+        const original = row[colIndex];
+        const draftEdit = rowEdits?.[colIndex];
+        const value = draftEdit !== undefined ? draftEdit : original;
+        const isDirty = draftEdit !== undefined;
+        const isPk = pkColIndices.has(colIndex);
+        const nav = navByColumn?.[colIndex];
+        const isFk =
+          !!nav &&
+          original !== null &&
+          (nav.references.length > 0 || nav.referencedBy.length > 0);
+        // Right-clickable to set NULL only if the column is editable,
+        // nullable, and not already null.
+        const canSetNull = editable && nullableColIndices.has(colIndex) && value !== null;
+        // Exclude `isNew` edits: a draft row shares the same numeric index
+        // as an existing row, so without this an existing row would also
+        // render an edit input for a draft cell — two autofocus inputs
+        // would fight for focus and immediately cancel the edit. (Handled
+        // by the caller: `editingCell` is only non-null here for a
+        // non-draft edit — see the `<GridRow>` call site.)
+        const isEditing = editingCell !== null && editingCell.col === colIndex;
+        return (
+          <GridCell
+            key={colIndex}
+            r={r}
+            colIndex={colIndex}
+            value={value}
+            isDirty={isDirty}
+            isSelected={isRowActive && selectedCol === colIndex}
+            isColActive={selectedCol === colIndex}
+            isPk={isPk}
+            isFk={isFk}
+            nav={nav}
+            canSetNull={canSetNull}
+            numeric={numericCols[colIndex]}
+            editable={editable}
+            nullText={nullText}
+            isEditing={isEditing}
+            editDraft={isEditing ? editingCell!.draft : ""}
+            findOpen={findOpen}
+            findQuery={findQuery}
+            isActiveFindMatch={activeMatchCol === colIndex}
+            onCellClick={onCellClick}
+            onCellDoubleClick={onCellDoubleClick}
+            onCellContextMenu={onCellContextMenu}
+            onEditDraftChange={onEditDraftChange}
+            onEditCommit={onEditCommit}
+            onEditCancel={onEditCancel}
+          />
+        );
+      })}
+    </div>
+  );
+});
+
+interface GridNewRowProps {
+  ni: number;
+  draft: Array<string | null>;
+  gridStyle: React.CSSProperties;
+  order: number[];
+  numericCols: boolean[];
+  isRowGutterSelected: boolean;
+  editingCell: { col: number; draft: string } | null;
+  onGutterClick: (e: React.MouseEvent, ni: number) => void;
+  onNewCellClick: (ni: number, col: number, currentValue: string | null) => void;
+  onEditDraftChange: (r: number, col: number, draft: string, isNew?: boolean) => void;
+  onEditCommit: (r: number, col: number, draft: string, isNew?: boolean) => void;
+  onEditCancel: () => void;
+}
+
+/**
+ * One draft (uncommitted, not-yet-inserted) row. Simpler than `GridRow` —
+ * draft cells don't participate in the selected-cell "crosshair" (no
+ * `col-active`/`selected` styling), so a single row-level `memo()` is
+ * enough; no need for the extra per-cell split `GridRow` needs.
+ */
+const GridNewRow = memo(function GridNewRow({
+  ni,
+  draft,
+  gridStyle,
+  order,
+  numericCols,
+  isRowGutterSelected,
+  editingCell,
+  onGutterClick,
+  onNewCellClick,
+  onEditDraftChange,
+  onEditCommit,
+  onEditCancel,
+}: GridNewRowProps) {
+  return (
+    <div
+      className={"grid__row grid__row--new" + (isRowGutterSelected ? " grid__row--rowsel" : "")}
+      style={gridStyle}
+    >
+      <div
+        className="grid__gutter grid__gutter--new"
+        title="New row — commit with Update to insert it"
+        onClick={(e) => onGutterClick(e, ni)}
+      >
+        +
+      </div>
+      {order.map((colIndex) => {
+        const value = draft[colIndex];
+        const isEditing = editingCell !== null && editingCell.col === colIndex;
+        if (isEditing) {
+          return (
+            <div
+              key={colIndex}
+              className={
+                "grid__cell grid__cell--editing" +
+                (numericCols[colIndex] ? " grid__cell--num" : "")
+              }
+            >
+              <input
+                className="grid__cell-input mono"
+                autoFocus
+                value={editingCell!.draft}
+                onFocus={(e) => e.target.select()}
+                onChange={(e) => onEditDraftChange(ni, colIndex, e.target.value, true)}
+                onBlur={() => onEditCommit(ni, colIndex, editingCell!.draft, true)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    onEditCommit(ni, colIndex, editingCell!.draft, true);
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    onEditCancel();
+                  }
+                }}
+              />
+            </div>
+          );
+        }
+        return (
+          <div
+            key={colIndex}
+            className={
+              "grid__cell grid__cell--newcell" +
+              (numericCols[colIndex] ? " grid__cell--num mono" : "") +
+              (value === null ? " grid__cell--null" : "")
+            }
+            title={value ?? "Click to edit (empty leaves the column default)"}
+            // A single click on a draft cell starts editing right away — no
+            // double-click needed. (Select the whole row via its gutter.)
+            onClick={() => onNewCellClick(ni, colIndex, value)}
+          >
+            {value === null ? "default" : value}
+          </div>
+        );
+      })}
+    </div>
+  );
+});
 
 /** Tooltip describing a cell's foreign-key navigation. */
 function fkTooltip(nav: ColNav): string {
