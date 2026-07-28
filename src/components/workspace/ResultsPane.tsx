@@ -265,6 +265,13 @@ type RowSelection = { kind: "existing" | "new"; index: number };
 /** Width of the left row-number / selection gutter. */
 const GUTTER_W = 48;
 
+/** Below this many rows, render everything — small results are already fast
+ *  and this keeps the simple path simple. */
+const VIRTUALIZE_MIN_ROWS = 80;
+/** Rows rendered beyond each edge of the viewport, so a fast scroll doesn't
+ *  show blank space before the next render lands. */
+const VIRTUALIZE_OVERSCAN = 12;
+
 function ResultsGrid({
   tab,
   result,
@@ -286,6 +293,8 @@ function ResultsGrid({
   const nullDisplay = useStore((s) => s.nullDisplay);
   const nullText = NULL_DISPLAY_LABELS[nullDisplay];
   const rowCopyDelimiter = useStore((s) => s.rowCopyDelimiter);
+  const tableRowHeight = useStore((s) => s.tableRowHeight);
+  const tableWrapText = useStore((s) => s.tableWrapText);
   const setCellEdit = useStore((s) => s.setCellEdit);
   const setNewCellEdit = useStore((s) => s.setNewCellEdit);
   const overwriteRow = useStore((s) => s.overwriteRow);
@@ -644,6 +653,101 @@ function ResultsGrid({
   }, [order, widths]);
   const dragWidth = drag ? widths[order[drag.fromPos]] : 0;
 
+  // --- Row virtualization ---------------------------------------------------
+  // A full page is `PAGE_SIZE` (500) rows; on a wide table that's tens of
+  // thousands of grid cells in the DOM at once, which makes *the whole app*
+  // sluggish (hover, typing, clicking) because every style recalc/layout the
+  // browser does has to walk them all — memoizing React's own re-renders
+  // doesn't help, since the cost is the browser's, not React's. So only the
+  // rows actually in view (plus a small overscan) are rendered, with plain
+  // spacer divs standing in for the rest so the scrollbar still reflects the
+  // full page.
+  //
+  // Fixed-height math: `box-sizing: border-box` is global and a non-wrapping
+  // row is exactly `--h-grid-row` (= the `tableRowHeight` setting) tall. That
+  // stops being true when "wrap long text" is on (rows grow to fit), so
+  // virtualization is skipped in that mode rather than mispositioning rows —
+  // see `virtualizeEnabled`.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const headRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportH, setViewportH] = useState(0);
+  const [headH, setHeadH] = useState(30);
+  // Trust the setting for layout math, but correct from the DOM once painted
+  // (guards against theme/font tweaks changing the effective row box).
+  const [measuredRowH, setMeasuredRowH] = useState<number | null>(null);
+  const rowH = measuredRowH ?? tableRowHeight;
+
+  const totalRows = sortedRowIndices.length;
+  const virtualizeEnabled = !tableWrapText && totalRows > VIRTUALIZE_MIN_ROWS;
+
+  // Track the scroll viewport's size, and its scroll offset.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const sync = () => {
+      setViewportH(el.clientHeight);
+      if (headRef.current) setHeadH(headRef.current.offsetHeight);
+    };
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Re-measure a real row's height whenever the geometry inputs change.
+  useEffect(() => {
+    const el = scrollRef.current?.querySelector<HTMLElement>(".grid__row");
+    if (el) {
+      const h = el.getBoundingClientRect().height;
+      if (h > 0) setMeasuredRowH(h);
+    }
+  }, [tableRowHeight, tableWrapText, result]);
+
+  const onScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    setScrollTop(e.currentTarget.scrollTop);
+  }, []);
+
+  const { startIdx, endIdx } = useMemo(() => {
+    if (!virtualizeEnabled || rowH <= 0) {
+      return { startIdx: 0, endIdx: totalRows };
+    }
+    // Before the first measurement (or if the pane is hidden and layout
+    // reports 0) fall back to a generous viewport rather than rendering
+    // almost nothing, so the grid never paints blank.
+    const vh = viewportH > 0 ? viewportH : 900;
+    const first = Math.floor((scrollTop - headH) / rowH) - VIRTUALIZE_OVERSCAN;
+    const last = Math.ceil((scrollTop - headH + vh) / rowH) + VIRTUALIZE_OVERSCAN;
+    return {
+      startIdx: Math.max(0, Math.min(first, totalRows)),
+      endIdx: Math.max(0, Math.min(last, totalRows)),
+    };
+  }, [virtualizeEnabled, rowH, scrollTop, headH, viewportH, totalRows]);
+
+  const topSpacer = startIdx * rowH;
+  const bottomSpacer = Math.max(0, (totalRows - endIdx) * rowH);
+
+  /** Scroll a display position into view even if it isn't currently rendered
+   *  (virtualization means `querySelector` alone can't find it). Updates the
+   *  window state directly rather than waiting for the resulting `scroll`
+   *  event, so the target row is rendered on the very next paint — the event
+   *  round-trip would otherwise leave a frame where the row still doesn't
+   *  exist for the follow-up `scrollIntoView` to find. */
+  const scrollDisplayPosIntoView = useCallback(
+    (displayPos: number) => {
+      const el = scrollRef.current;
+      if (!el || !virtualizeEnabled) return;
+      const top = headH + displayPos * rowH;
+      const bottom = top + rowH;
+      if (top < el.scrollTop || bottom > el.scrollTop + el.clientHeight) {
+        const next = Math.max(0, top - el.clientHeight / 2);
+        el.scrollTop = next;
+        setScrollTop(next);
+      }
+    },
+    [virtualizeEnabled, headH, rowH],
+  );
+
   const startResize = (colIndex: number) => (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -798,9 +902,18 @@ function ResultsGrid({
     const m = findMatches[Math.min(findIndex, findMatches.length - 1)];
     if (!m) return;
     setSelected({ r: m.r, col: m.col });
-    document
-      .querySelector(`[data-cell="${m.r}-${m.col}"]`)
-      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    // Vertical first, by arithmetic: the matched row may be outside the
+    // rendered window, in which case there's no element to `scrollIntoView`
+    // yet. Scrolling by position brings it into the window, and the
+    // follow-up frame (once it has rendered) handles horizontal scrolling to
+    // the matched column.
+    scrollDisplayPosIntoView(sortedRowIndices.indexOf(m.r));
+    const raf = requestAnimationFrame(() => {
+      document
+        .querySelector(`[data-cell="${m.r}-${m.col}"]`)
+        ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    });
+    return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [findIndex, findMatches]);
 
@@ -997,8 +1110,8 @@ function ResultsGrid({
           </button>
         </div>
       )}
-      <div className="grid__scroll">
-        <div className="grid__head" style={gridStyle}>
+      <div className="grid__scroll" ref={scrollRef} onScroll={onScroll}>
+        <div className="grid__head" style={gridStyle} ref={headRef}>
           <div className="grid__gutter grid__gutter--head" />
           {order.map((colIndex, pos) => (
             <div
@@ -1033,12 +1146,15 @@ function ResultsGrid({
         {result.rows.length === 0 && (
           <div className="results__note results__note--sub">No rows returned.</div>
         )}
+        {topSpacer > 0 && <div style={{ height: topSpacer }} aria-hidden />}
         {(() => {
           // Hoisted out of the row loop — the same for every row, just
           // compared against each row's own `r` below.
           const activeMatch = findMatches[findIndex];
           const selectedColGlobal = selected?.col ?? null;
-          return sortedRowIndices.map((r, displayPos) => (
+          return sortedRowIndices.slice(startIdx, endIdx).map((r, i) => {
+            const displayPos = startIdx + i;
+            return (
             <GridRow
               key={r}
               r={r}
@@ -1072,8 +1188,10 @@ function ResultsGrid({
               onEditCommit={onEditCommit}
               onEditCancel={onEditCancel}
             />
-          ));
+            );
+          });
         })()}
+        {bottomSpacer > 0 && <div style={{ height: bottomSpacer }} aria-hidden />}
         {isTable &&
           (tab.newRows ?? []).map((draft, ni) => (
             <GridNewRow

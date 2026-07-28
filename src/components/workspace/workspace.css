@@ -1084,8 +1084,15 @@
   transition: background var(--transition);
 }
 /* Hovering a row's gutter previews it as selectable — makes it obvious you can
-   click the number to highlight (and then copy) the whole row. */
-.grid__row:has(> .grid__gutter:hover) {
+   click the number to highlight (and then copy) the whole row. Scoped to just
+   the gutter cell rather than styling the whole row via `:has()`: `:has()` is
+   a relational selector that WebKit (the Tauri app's actual renderer on
+   macOS, unlike a Chrome-based dev preview) has historically invalidated
+   more conservatively/broadly than a plain hover rule for a large sibling
+   count — every row shares this selector, so on a wide, fully-paged
+   production table that adds up to real per-interaction cost that a small
+   test table would never surface. */
+.grid__gutter:hover {
   background: var(--border-faint);
 }
 .grid__row--zebra {
