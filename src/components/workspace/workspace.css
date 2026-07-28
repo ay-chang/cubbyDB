@@ -1127,6 +1127,17 @@
   overflow-wrap: break-word;
   text-overflow: ellipsis;
   min-width: 0;
+  /* Row virtualization only windows *vertically*; a wide table still paints
+     every column of every rendered row, which is what made horizontal
+     scrolling stutter. This lets the browser skip style/layout/paint for
+     cells scrolled off to the side, natively and synchronously — no React
+     round-trip, so unlike JS windowing it can't lag a frame behind. Safe
+     here because a cell's box doesn't depend on its content: width comes
+     from the grid track and height from the row, so skipping a cell can't
+     shift the layout. `auto` lets the browser reuse each cell's real size
+     once painted, which keeps the row height setting free to change. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 120px auto var(--h-grid-row);
 }
 /* The clicked cell — stronger accent tint + ring. */
 .grid__cell--selected {

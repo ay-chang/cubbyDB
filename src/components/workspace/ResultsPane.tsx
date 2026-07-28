@@ -268,9 +268,16 @@ const GUTTER_W = 48;
 /** Below this many rows, render everything — small results are already fast
  *  and this keeps the simple path simple. */
 const VIRTUALIZE_MIN_ROWS = 80;
-/** Rows rendered beyond each edge of the viewport, so a fast scroll doesn't
- *  show blank space before the next render lands. */
-const VIRTUALIZE_OVERSCAN = 12;
+/**
+ * Rows rendered beyond each edge of the viewport. This is the buffer that
+ * decides whether a fast scroll shows blank space: the browser scrolls and
+ * repaints on its own (compositor) timeline, while React only catches up a
+ * frame or more later via the `scroll` event — so anything the user flings
+ * past within that gap must already be rendered. At the default 32px row
+ * that's ~960px of runway in each direction, which covers a hard trackpad
+ * fling; the cost is just ~60 extra rows of cheap, memoized markup.
+ */
+const VIRTUALIZE_OVERSCAN = 30;
 
 function ResultsGrid({
   tab,
