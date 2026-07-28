@@ -191,3 +191,433 @@
   --shadow-card: 0 12px 40px -18px rgba(0, 0, 0, 0.6);
   --shadow-button: 0 1px 2px rgba(0, 0, 0, 0.4);
 }
+
+/*
+ * Additional theme variants — same token contract as Light/Dark above, each
+ * applied by its own `data-theme` value. "Paper" is a warm-neutral sibling of
+ * Light; "Midnight" / "Charcoal" / "Slate" are siblings of Dark (cool-black,
+ * warm-graphite, and steel-blue respectively). Each reuses its family's
+ * accent/status colors verbatim (those are tuned for light-vs-dark legibility,
+ * not per-theme) and only changes surfaces/borders/text/shadow — the actual
+ * "feel" of a theme. The accent block here is only the pre-JS fallback: the
+ * user's actual accent-color choice is applied over it as inline styles by
+ * `applyAccentColor` in state/store.ts.
+ */
+
+/* Paper — warm parchment neutrals instead of Light's cool grays. */
+:root[data-theme="paper"] {
+  color-scheme: light;
+
+  --app-bg: #f7f5f0;
+  --surface: #fffefb;
+  --surface-raised: #fbf9f4;
+  --surface-header: #faf8f2;
+  --table-zebra: var(--surface-raised);
+
+  --border: #e9e5db;
+  --border-strong: #ddd7c8;
+  --border-faint: #f0ede4;
+  --border-row: #f2efe7;
+  --border-cell: #f5f2ea;
+  --table-border-row: var(--border-row);
+  --table-border-cell: var(--border-cell);
+
+  --pill-bg: #f1eee6;
+  --sidebar-bg: #efece3;
+  --tree-hover: #e6e1d4;
+  --scrollbar-thumb: #ddd7c8;
+  --scrollbar-thumb-hover: #cbc3ae;
+  --on-accent: #ffffff;
+
+  --text: #1c1a15;
+  --text-muted: #635d4d;
+  --text-faint: #948c76;
+  --text-fainter: #a89f87;
+  --text-placeholder: #b6ac91;
+  --text-ghost: #cbc2a8;
+
+  --accent: #5e6ad2;
+  --accent-hover: #5460c6;
+  --accent-tint: #eeeffb;
+  --accent-tint-text: #4a54b8;
+  --accent-glow: rgba(94, 106, 210, 0.12);
+  --accent-glow-soft: rgba(94, 106, 210, 0.08);
+
+  --success: #1f9d57;
+  --success-bg: #eaf7ef;
+  --success-text: #157a43;
+  --success-border: #bce3cc;
+
+  --error: #e5484d;
+  --error-text: #b4282c;
+  --error-bg: #fcecec;
+  --error-border: #f3c6c7;
+  --error-mono: #c0555a;
+
+  --amber: #b45309;
+  --amber-bg: #fdf7ec;
+  --amber-border: #f0dfc4;
+  --amber-text: #96591a;
+
+  --syntax-keyword: var(--accent);
+  --syntax-string: #1f9d57;
+  --syntax-number: #b45309;
+  --syntax-comment: #9c9480;
+
+  --shadow-card: 0 12px 40px -18px rgba(40, 32, 10, 0.22);
+  --shadow-button: 0 1px 2px rgba(40, 32, 10, 0.1);
+}
+
+/* Midnight — deeper, cooler near-black than Dark, slight blue undertone. */
+:root[data-theme="midnight"] {
+  color-scheme: dark;
+
+  --app-bg: #06070a;
+  --surface: #0d0e12;
+  --surface-raised: #111319;
+  --surface-header: #0f1015;
+  --table-zebra: var(--surface-raised);
+
+  --border: #1c1f28;
+  --border-strong: #262a35;
+  --border-faint: #171922;
+  --border-row: #16181f;
+  --border-cell: #14161c;
+  --table-border-row: var(--border-row);
+  --table-border-cell: var(--border-cell);
+
+  --pill-bg: #171a22;
+  --sidebar-bg: #0a0b10;
+  --tree-hover: #1a1d26;
+  --scrollbar-thumb: #262a35;
+  --scrollbar-thumb-hover: #333846;
+  --on-accent: #ffffff;
+
+  --text: #e4e6ea;
+  --text-muted: #9298a3;
+  --text-faint: #6c7280;
+  --text-fainter: #575d6b;
+  --text-placeholder: #4a505c;
+  --text-ghost: #3a3f4a;
+
+  --accent: #6e79db;
+  --accent-hover: #808ae2;
+  --accent-tint: #21243a;
+  --accent-tint-text: #a7aef0;
+  --accent-glow: rgba(110, 121, 219, 0.22);
+  --accent-glow-soft: rgba(110, 121, 219, 0.12);
+
+  --success: #35b972;
+  --success-bg: #10271b;
+  --success-text: #52c98a;
+  --success-border: #1f3f2c;
+
+  --error: #ef575c;
+  --error-text: #f4787c;
+  --error-bg: #2a1517;
+  --error-border: #4a2427;
+  --error-mono: #e0888c;
+
+  --amber: #cf8324;
+  --amber-bg: #2a1f0e;
+  --amber-border: #493819;
+  --amber-text: #e0a34f;
+
+  --syntax-keyword: var(--accent);
+  --syntax-string: #52c98a;
+  --syntax-number: #e0a34f;
+  --syntax-comment: #5d6472;
+
+  --shadow-card: 0 12px 40px -18px rgba(0, 0, 0, 0.7);
+  --shadow-button: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+
+/* Charcoal — warm neutral graphite, no blue tint, softer contrast than Dark. */
+:root[data-theme="charcoal"] {
+  color-scheme: dark;
+
+  --app-bg: #131211;
+  --surface: #1a1918;
+  --surface-raised: #201f1d;
+  --surface-header: #1d1c1a;
+  --table-zebra: var(--surface-raised);
+
+  --border: #2c2a27;
+  --border-strong: #38352f;
+  --border-faint: #211f1c;
+  --border-row: #201e1b;
+  --border-cell: #1d1b19;
+  --table-border-row: var(--border-row);
+  --table-border-cell: var(--border-cell);
+
+  --pill-bg: #232120;
+  --sidebar-bg: #100f0e;
+  --tree-hover: #282623;
+  --scrollbar-thumb: #38352f;
+  --scrollbar-thumb-hover: #46423a;
+  --on-accent: #ffffff;
+
+  --text: #ebe8e3;
+  --text-muted: #a39d92;
+  --text-faint: #7d766a;
+  --text-fainter: #675f54;
+  --text-placeholder: #565046;
+  --text-ghost: #46403a;
+
+  --accent: #6e79db;
+  --accent-hover: #808ae2;
+  --accent-tint: #21243a;
+  --accent-tint-text: #a7aef0;
+  --accent-glow: rgba(110, 121, 219, 0.22);
+  --accent-glow-soft: rgba(110, 121, 219, 0.12);
+
+  --success: #35b972;
+  --success-bg: #10271b;
+  --success-text: #52c98a;
+  --success-border: #1f3f2c;
+
+  --error: #ef575c;
+  --error-text: #f4787c;
+  --error-bg: #2a1517;
+  --error-border: #4a2427;
+  --error-mono: #e0888c;
+
+  --amber: #cf8324;
+  --amber-bg: #2a1f0e;
+  --amber-border: #493819;
+  --amber-text: #e0a34f;
+
+  --syntax-keyword: var(--accent);
+  --syntax-string: #52c98a;
+  --syntax-number: #e0a34f;
+  --syntax-comment: #756e60;
+
+  --shadow-card: 0 12px 40px -18px rgba(0, 0, 0, 0.6);
+  --shadow-button: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+/* Slate — cool steel-blue dark, between Dark and Midnight in depth. */
+:root[data-theme="slate"] {
+  color-scheme: dark;
+
+  --app-bg: #10141a;
+  --surface: #171c24;
+  --surface-raised: #1c222b;
+  --surface-header: #191e26;
+  --table-zebra: var(--surface-raised);
+
+  --border: #2a323d;
+  --border-strong: #37404d;
+  --border-faint: #222933;
+  --border-row: #202631;
+  --border-cell: #1a2028;
+  --table-border-row: var(--border-row);
+  --table-border-cell: var(--border-cell);
+
+  --pill-bg: #202834;
+  --sidebar-bg: #131820;
+  --tree-hover: #262f3b;
+  --scrollbar-thumb: #37404d;
+  --scrollbar-thumb-hover: #47515f;
+  --on-accent: #ffffff;
+
+  --text: #e7ebf1;
+  --text-muted: #97a2b0;
+  --text-faint: #707c8c;
+  --text-fainter: #5c6675;
+  --text-placeholder: #4d5763;
+  --text-ghost: #3d4652;
+
+  --accent: #6e79db;
+  --accent-hover: #808ae2;
+  --accent-tint: #21243a;
+  --accent-tint-text: #a7aef0;
+  --accent-glow: rgba(110, 121, 219, 0.22);
+  --accent-glow-soft: rgba(110, 121, 219, 0.12);
+
+  --success: #35b972;
+  --success-bg: #10271b;
+  --success-text: #52c98a;
+  --success-border: #1f3f2c;
+
+  --error: #ef575c;
+  --error-text: #f4787c;
+  --error-bg: #2a1517;
+  --error-border: #4a2427;
+  --error-mono: #e0888c;
+
+  --amber: #cf8324;
+  --amber-bg: #2a1f0e;
+  --amber-border: #493819;
+  --amber-text: #e0a34f;
+
+  --syntax-keyword: var(--accent);
+  --syntax-string: #52c98a;
+  --syntax-number: #e0a34f;
+  --syntax-comment: #6c7684;
+
+  --shadow-card: 0 12px 40px -18px rgba(0, 0, 0, 0.65);
+  --shadow-button: 0 1px 2px rgba(0, 0, 0, 0.42);
+}
+
+/*
+ * "Borrowed" themes — surfaces/text lifted from well-known editor color
+ * themes rather than designed in-house. Sourced from each theme's own
+ * canonical values (Atom's `one-dark-syntax`/the "One Dark Pro" VS Code
+ * extension; the official Dracula spec + its VS Code theme), not
+ * approximated. `--syntax-keyword` still tracks `var(--accent)` like every
+ * other theme here — the app's 10-preset accent color is a deliberately
+ * separate, orthogonal choice from the theme's surfaces (see AccentColor in
+ * state/store.ts) — so pick the Purple accent for the closest look to each
+ * theme's own native keyword color (One Dark's is `#c678dd`, Dracula's is
+ * `#ff79c6`).
+ */
+
+/* One Dark — Atom/VS Code's iconic dark theme. Editor bg (`--surface`) is
+   #23272d (rgb 35, 39, 45) — calibrated against the actual rendered color in
+   DataGrip/IntelliJ's own "One Dark" theme, not just the Atom source (whose
+   editor bg, #282c34, reads slightly lighter/bluer on screen than what these
+   IDEs actually ship). Every other surface/border tone here was shifted by
+   that same delta to stay internally consistent; text/accent/syntax colors
+   are untouched since they don't depend on the exact background shade. */
+:root[data-theme="onedark"] {
+  color-scheme: dark;
+
+  --app-bg: #1c2024;
+  --surface: #23272d;
+  --surface-raised: #272c33;
+  --surface-header: #21262c;
+  --table-zebra: var(--surface-raised);
+
+  --border: #393f4b;
+  --border-strong: #464d5c;
+  --border-faint: #292e35;
+  --border-row: #2e3338;
+  --border-cell: #292e33;
+  --table-border-row: var(--border-row);
+  --table-border-cell: var(--border-cell);
+
+  --pill-bg: #272c33;
+  --sidebar-bg: #1c2024;
+  --tree-hover: #272c33;
+  --scrollbar-thumb: #393f4b;
+  --scrollbar-thumb-hover: #464d5c;
+  --on-accent: #ffffff;
+
+  --text: #abb2bf;
+  --text-muted: #7f848e;
+  --text-faint: #5c6370;
+  /* Brightened from the initial pass, which shifted these by the same delta
+     as the surface/border recalibration above — that preserved their
+     relative gap from the background but left them at ~1.1-1.9:1 contrast,
+     well below every other theme's ~1.6-2.7:1 (NULL cells and placeholder
+     text were essentially invisible). Retuned against `--surface` (#23272d)
+     to land in the same range as Dark's own tiers (~2.0/2.6/3.2:1). */
+  --text-fainter: #6a7590;
+  --text-placeholder: #5a6482;
+  --text-ghost: #4a5470;
+
+  --accent: #6e79db;
+  --accent-hover: #808ae2;
+  --accent-tint: #21243a;
+  --accent-tint-text: #a7aef0;
+  --accent-glow: rgba(110, 121, 219, 0.22);
+  --accent-glow-soft: rgba(110, 121, 219, 0.12);
+
+  --success: #98c379;
+  --success-bg: #172515;
+  --success-text: #98c379;
+  --success-border: #273b22;
+
+  --error: #e06c75;
+  --error-text: #e06c75;
+  --error-bg: #251717;
+  --error-border: #452626;
+  --error-mono: #e0888c;
+
+  --amber: #d19a66;
+  --amber-bg: #291f10;
+  --amber-border: #45351d;
+  --amber-text: #d19a66;
+
+  --syntax-keyword: var(--accent);
+  --syntax-string: #98c379;
+  --syntax-number: #d19a66;
+  --syntax-comment: #5c6370;
+
+  --shadow-card: 0 12px 40px -18px rgba(0, 0, 0, 0.65);
+  --shadow-button: 0 1px 2px rgba(0, 0, 0, 0.42);
+}
+
+/* Dracula — the official spec/VS Code theme's own values: editor bg
+   #282a36, sidebar #21222c, and a third, darkest tier #191a21 (used here for
+   the grid header, mirroring its role as the tab-bar/status-bar tone in the
+   real theme). Per the spec, strings are Yellow (not green) and the keyword
+   color is Pink — Purple is actually the constant/number color, despite
+   being Dracula's more famous "brand" purple. */
+:root[data-theme="dracula"] {
+  color-scheme: dark;
+
+  --app-bg: #21222c;
+  --surface: #282a36;
+  --surface-raised: #2d2f3f;
+  --surface-header: #191a21;
+  --table-zebra: var(--surface-raised);
+
+  --border: #44475a;
+  --border-strong: #565973;
+  --border-faint: #33354a;
+  --border-row: #35374a;
+  --border-cell: #2f3142;
+  --table-border-row: var(--border-row);
+  --table-border-cell: var(--border-cell);
+
+  --pill-bg: #2d2f3f;
+  --sidebar-bg: #21222c;
+  --tree-hover: #34364a;
+  --scrollbar-thumb: #44475a;
+  --scrollbar-thumb-hover: #565973;
+  --on-accent: #ffffff;
+
+  --text: #f8f8f2;
+  --text-muted: #9ba0c0;
+  --text-faint: #6272a4;
+  /* Same fix as One Dark above — these were too close to `--surface`
+     (#282a36) for the NULL/placeholder text to actually read; retuned to a
+     similar contrast range as Dark's own tiers, kept in Dracula's
+     purple-blue text family. */
+  --text-fainter: #767db2;
+  --text-placeholder: #666da0;
+  --text-ghost: #535a82;
+
+  --accent: #6e79db;
+  --accent-hover: #808ae2;
+  --accent-tint: #21243a;
+  --accent-tint-text: #a7aef0;
+  --accent-glow: rgba(110, 121, 219, 0.22);
+  --accent-glow-soft: rgba(110, 121, 219, 0.12);
+
+  --success: #50fa7b;
+  --success-bg: #16301f;
+  --success-text: #50fa7b;
+  --success-border: #244a30;
+
+  --error: #ff5555;
+  --error-text: #ff7b7b;
+  --error-bg: #341b1b;
+  --error-border: #55282a;
+  --error-mono: #ff8a8a;
+
+  --amber: #ffb86c;
+  --amber-bg: #332615;
+  --amber-border: #513c22;
+  --amber-text: #ffb86c;
+
+  --syntax-keyword: var(--accent);
+  --syntax-string: #f1fa8c;
+  --syntax-number: #bd93f9;
+  --syntax-comment: #6272a4;
+
+  --shadow-card: 0 12px 40px -18px rgba(0, 0, 0, 0.65);
+  --shadow-button: 0 1px 2px rgba(0, 0, 0, 0.42);
+}

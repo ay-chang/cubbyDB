@@ -182,9 +182,18 @@ code comments or AGENTS.md's architecture section.
 - Any query's result set: resizable columns, drag-to-reorder columns,
   per-column sort (click a header, cycles ascending → descending → none)
 - Numeric columns are auto-detected and right-aligned in monospace
+- A column too narrow for its content truncates with a visible "…" (a value's
+  full text is still one hover away via its tooltip) rather than just
+  clipping silently mid-character
 - Foreign-key navigation: right-click a cell that references (or is
   referenced by) another row to jump straight to it, opening/focusing a table
-  tab
+  tab. The jump's filter column is double-quoted, so mixed-case column names
+  (e.g. `employeeContactInformationId`, common with ORM-generated schemas
+  like TypeORM/Prisma) resolve correctly instead of Postgres folding them to
+  lowercase and reporting "column does not exist." The "rows referencing
+  this" list is wide enough for most schema/table/column paths to read on one
+  line and never wraps or silently truncates a name — anything still too
+  long to fit is reachable by scrolling the list horizontally
 - CSV export, with a configurable field delimiter
 - **Find in results** (Cmd/Ctrl+F): a query box scoped to the active grid,
   matching case-insensitively against every existing-row cell. Matches are
@@ -192,8 +201,8 @@ code comments or AGENTS.md's architecture section.
   the find bar jump between them, scrolling the grid as needed. Draft/new
   rows aren't searched — they're few and already on-screen
 - Font, font size, row height, zebra striping, cell borders (gridlines),
-  text wrap-vs-truncate, and how NULL renders (literal text / dash / blank)
-  are all configurable (Settings → Appearance → Table)
+  header-row shading, text wrap-vs-truncate, and how NULL renders (literal
+  text / dash / blank) are all configurable (Settings → Appearance → Table)
 
 ## Table browsing (no SQL required)
 
@@ -265,6 +274,9 @@ code comments or AGENTS.md's architecture section.
   (duplicate-a-row flow)
 - Copy is layered (copy-event injection, then a backend OS-clipboard
   command) so it works reliably inside the Tauri webview
+- Selecting rows only shows the row-tint highlight — cell text itself never
+  picks up the browser's native text-selection box, even when dragging across
+  several rows (copy/paste still work exactly the same either way)
 
 ## Query history
 
@@ -294,18 +306,28 @@ code comments or AGENTS.md's architecture section.
 
 ## Settings
 
-Two top-level tabs: **General** (behavior) and **Appearance** (with
-**Interface** / **Table** / **Editor** sub-tabs). Every setting applies live
-and is persisted (no restart needed for anything in here — it's all
-frontend-only).
+Three top-level tabs: **General** (behavior), **Appearance** (with
+**Interface** / **Table** / **Editor** sub-tabs), and **Keyboard Shortcuts**.
+Every setting applies live and is persisted (no restart needed for anything in
+here — it's all frontend-only).
 
 - **General**: restore tabs on launch, starter SQL template, auto-refresh
   schema on connect, query-history display limit, CSV export delimiter,
   row-copy delimiter
-- **Appearance → Interface**: light/dark theme, compact top bar
+- **Appearance → Interface**: theme (8 presets — 2 light: Light, Paper; 6
+  dark: Dark, Midnight, Charcoal, Slate, and two lifted from popular editor
+  themes, One Dark and Dracula), accent color (10 presets — Indigo, Blue,
+  Cyan, Teal, Green, Amber, Orange, Red, Pink, Purple; drives buttons, active
+  states, and SQL keyword highlighting), compact top bar
 - **Appearance → Table**: font, font size, row height, zebra striping, cell
-  borders, wrap-vs-truncate long text, NULL display style
+  borders, header-row shading (a subtle darkening so the column-header row
+  stands out from the data below), wrap-vs-truncate long text, NULL display
+  style
 - **Appearance → Editor**: font, font size, line-wrap
+- **Keyboard Shortcuts**: a read-only catalog of every shortcut CubbyDB
+  supports, grouped by where it's active (General, SQL editor, Table filter,
+  Results grid, Command palette, Connection screen, Saved queries panel) —
+  not yet configurable, just documented
 
 ## Error handling
 
@@ -317,6 +339,19 @@ frontend-only).
 
 ## Design / appearance
 
-- Full light/dark theme, switches instantly, persists across launches
-- A single token-driven design system (indigo accent, hairline borders, 4px
-  base unit) — see AGENTS.md's Design System section for exact values
+- 8 full themes, switches instantly, persists across launches — 2 light
+  (Light, the warmer Paper) and 6 dark (Dark, the cooler-black Midnight, the
+  warm-graphite Charcoal, the steel-blue Slate, and two lifted from popular
+  editor themes — **One Dark** and **Dracula**, matched to each theme's own
+  sourced values, not approximated). Each is a complete surfaces/borders/text
+  palette, not just a filter over one base theme; accent colors carry one
+  tuned variant per light/dark family (not per individual theme), applied
+  over whichever of the 8 is active — pick the Purple accent for the closest
+  match to One Dark's or Dracula's own native keyword color. One Dark's
+  background is calibrated to DataGrip/IntelliJ's own rendering (`#23272d`),
+  not just the Atom source, which reads slightly lighter/bluer on screen
+- Every theme's faintest text tiers (NULL cells, placeholders) stay legible —
+  One Dark and Dracula initially inherited too little contrast from their
+  first pass and were retuned to match the other themes' readability
+- A single token-driven design system (hairline borders, 4px base unit) — see
+  AGENTS.md's Design System section for exact values

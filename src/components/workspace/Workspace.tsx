@@ -31,7 +31,7 @@ export function Workspace() {
 
   const { saveDialogOpen, openSaveDialog, closeSaveDialog } = useGlobalRunShortcut();
 
-  const [sidebarWidth, setSidebarWidth] = useState(246);
+  const [sidebarWidth, setSidebarWidth] = useState(280);
   const [editorHeight, setEditorHeight] = useState(280);
   const mainRef = useRef<HTMLDivElement>(null);
 

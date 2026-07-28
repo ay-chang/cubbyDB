@@ -115,8 +115,303 @@ export interface ConnectionSlot {
 
 type View = "connection" | "workspace";
 
-/** The active color theme. Persisted across launches. */
-export type Theme = "light" | "dark";
+/** The active color theme. Persisted across launches. Each is a full
+ *  surfaces/borders/text palette (see `tokens.css`) belonging to one of two
+ *  families — light or dark — tracked separately by `ThemeMode` below. */
+export type Theme =
+  | "light"
+  | "paper"
+  | "dark"
+  | "midnight"
+  | "charcoal"
+  | "slate"
+  | "onedark"
+  | "dracula";
+
+/** `Theme` options in display order — light family first, then dark. */
+export const THEME_OPTIONS: Theme[] = [
+  "light",
+  "paper",
+  "dark",
+  "midnight",
+  "charcoal",
+  "slate",
+  "onedark",
+  "dracula",
+];
+
+/** Whether a theme belongs to the light or dark family. Accent-color
+ *  palettes (see `ACCENT_PALETTES` below) are only tuned per family, not per
+ *  individual theme, so this is what picks which variant applies. */
+export type ThemeMode = "light" | "dark";
+
+export const THEME_MODE: Record<Theme, ThemeMode> = {
+  light: "light",
+  paper: "light",
+  dark: "dark",
+  midnight: "dark",
+  charcoal: "dark",
+  slate: "dark",
+  onedark: "dark",
+  dracula: "dark",
+};
+
+/** The accent color used for buttons, active states, and SQL keyword
+ *  highlighting. Persisted across launches. */
+export type AccentColor =
+  | "indigo"
+  | "blue"
+  | "cyan"
+  | "teal"
+  | "green"
+  | "amber"
+  | "orange"
+  | "red"
+  | "pink"
+  | "purple";
+
+/** `AccentColor` options in display order. */
+export const ACCENT_COLOR_OPTIONS: AccentColor[] = [
+  "indigo",
+  "blue",
+  "cyan",
+  "teal",
+  "green",
+  "amber",
+  "orange",
+  "red",
+  "pink",
+  "purple",
+];
+
+export const ACCENT_COLOR_LABELS: Record<AccentColor, string> = {
+  indigo: "Indigo",
+  blue: "Blue",
+  cyan: "Cyan",
+  teal: "Teal",
+  green: "Green",
+  amber: "Amber",
+  orange: "Orange",
+  red: "Red",
+  pink: "Pink",
+  purple: "Purple",
+};
+
+/** The longstanding default — existing users see no visual change. */
+export const DEFAULT_ACCENT_COLOR: AccentColor = "indigo";
+
+interface AccentPalette {
+  accent: string;
+  accentHover: string;
+  accentTint: string;
+  accentTintText: string;
+  accentGlow: string;
+  accentGlowSoft: string;
+}
+
+/** The swatch color shown for each option in the Settings picker — always the
+ *  light-mode `accent` value, so swatches read consistently regardless of the
+ *  active theme. */
+export const ACCENT_COLOR_SWATCH: Record<AccentColor, string> = {
+  indigo: "#5e6ad2",
+  blue: "#3b82f6",
+  cyan: "#0891b2",
+  teal: "#0d9488",
+  green: "#16a34a",
+  amber: "#d97706",
+  orange: "#ea580c",
+  red: "#e11d3f",
+  pink: "#db2777",
+  purple: "#7c3aed",
+};
+
+/** Light/dark variants of every accent color, in the same token shape as the
+ *  original indigo tokens in `tokens.css` (accent / hover / tint / tint-text /
+ *  glow / glow-soft). Applied as inline CSS custom properties on `<html>`, so
+ *  they override whichever theme block is active without touching the
+ *  stylesheet itself. */
+const ACCENT_PALETTES: Record<AccentColor, { light: AccentPalette; dark: AccentPalette }> = {
+  indigo: {
+    light: {
+      accent: "#5e6ad2",
+      accentHover: "#5460c6",
+      accentTint: "#eeeffb",
+      accentTintText: "#4a54b8",
+      accentGlow: "rgba(94, 106, 210, 0.12)",
+      accentGlowSoft: "rgba(94, 106, 210, 0.08)",
+    },
+    dark: {
+      accent: "#6e79db",
+      accentHover: "#808ae2",
+      accentTint: "#21243a",
+      accentTintText: "#a7aef0",
+      accentGlow: "rgba(110, 121, 219, 0.22)",
+      accentGlowSoft: "rgba(110, 121, 219, 0.12)",
+    },
+  },
+  blue: {
+    light: {
+      accent: "#3b82f6",
+      accentHover: "#2f6fe0",
+      accentTint: "#eaf1fe",
+      accentTintText: "#2657b0",
+      accentGlow: "rgba(59, 130, 246, 0.12)",
+      accentGlowSoft: "rgba(59, 130, 246, 0.08)",
+    },
+    dark: {
+      accent: "#5b93f5",
+      accentHover: "#74a4f7",
+      accentTint: "#17233a",
+      accentTintText: "#9dc0fb",
+      accentGlow: "rgba(91, 147, 245, 0.22)",
+      accentGlowSoft: "rgba(91, 147, 245, 0.12)",
+    },
+  },
+  cyan: {
+    light: {
+      accent: "#0891b2",
+      accentHover: "#08809c",
+      accentTint: "#e6f6f9",
+      accentTintText: "#0b6f86",
+      accentGlow: "rgba(8, 145, 178, 0.12)",
+      accentGlowSoft: "rgba(8, 145, 178, 0.08)",
+    },
+    dark: {
+      accent: "#22b8d8",
+      accentHover: "#4bcbe6",
+      accentTint: "#112a30",
+      accentTintText: "#7fdcee",
+      accentGlow: "rgba(34, 184, 216, 0.22)",
+      accentGlowSoft: "rgba(34, 184, 216, 0.12)",
+    },
+  },
+  teal: {
+    light: {
+      accent: "#0d9488",
+      accentHover: "#0b8377",
+      accentTint: "#e6f5f3",
+      accentTintText: "#0a6d63",
+      accentGlow: "rgba(13, 148, 136, 0.12)",
+      accentGlowSoft: "rgba(13, 148, 136, 0.08)",
+    },
+    dark: {
+      accent: "#22b8a4",
+      accentHover: "#45cab8",
+      accentTint: "#0f2926",
+      accentTintText: "#7de9db",
+      accentGlow: "rgba(34, 184, 164, 0.22)",
+      accentGlowSoft: "rgba(34, 184, 164, 0.12)",
+    },
+  },
+  green: {
+    light: {
+      accent: "#16a34a",
+      accentHover: "#128a3f",
+      accentTint: "#e9f8ee",
+      accentTintText: "#0f7a37",
+      accentGlow: "rgba(22, 163, 74, 0.12)",
+      accentGlowSoft: "rgba(22, 163, 74, 0.08)",
+    },
+    dark: {
+      accent: "#34c765",
+      accentHover: "#55d17e",
+      accentTint: "#12291a",
+      accentTintText: "#86e6a4",
+      accentGlow: "rgba(52, 199, 101, 0.22)",
+      accentGlowSoft: "rgba(52, 199, 101, 0.12)",
+    },
+  },
+  amber: {
+    light: {
+      accent: "#d97706",
+      accentHover: "#bd6605",
+      accentTint: "#fdf3e3",
+      accentTintText: "#9a5b09",
+      accentGlow: "rgba(217, 119, 6, 0.12)",
+      accentGlowSoft: "rgba(217, 119, 6, 0.08)",
+    },
+    dark: {
+      accent: "#d99a3f",
+      accentHover: "#e4ac5c",
+      accentTint: "#2a2010",
+      accentTintText: "#f0c37e",
+      accentGlow: "rgba(217, 154, 63, 0.22)",
+      accentGlowSoft: "rgba(217, 154, 63, 0.12)",
+    },
+  },
+  orange: {
+    light: {
+      accent: "#ea580c",
+      accentHover: "#cf4c09",
+      accentTint: "#fdece1",
+      accentTintText: "#ad4008",
+      accentGlow: "rgba(234, 88, 12, 0.12)",
+      accentGlowSoft: "rgba(234, 88, 12, 0.08)",
+    },
+    dark: {
+      accent: "#f2793a",
+      accentHover: "#f68f5a",
+      accentTint: "#2c1c10",
+      accentTintText: "#f7ae82",
+      accentGlow: "rgba(242, 121, 58, 0.22)",
+      accentGlowSoft: "rgba(242, 121, 58, 0.12)",
+    },
+  },
+  red: {
+    light: {
+      accent: "#e11d3f",
+      accentHover: "#c31836",
+      accentTint: "#fdeaee",
+      accentTintText: "#a8123a",
+      accentGlow: "rgba(225, 29, 63, 0.12)",
+      accentGlowSoft: "rgba(225, 29, 63, 0.08)",
+    },
+    dark: {
+      accent: "#f0506d",
+      accentHover: "#f37088",
+      accentTint: "#2c1219",
+      accentTintText: "#f6a0b2",
+      accentGlow: "rgba(240, 80, 109, 0.22)",
+      accentGlowSoft: "rgba(240, 80, 109, 0.12)",
+    },
+  },
+  pink: {
+    light: {
+      accent: "#db2777",
+      accentHover: "#c11f68",
+      accentTint: "#fdeaf3",
+      accentTintText: "#a01c62",
+      accentGlow: "rgba(219, 39, 119, 0.12)",
+      accentGlowSoft: "rgba(219, 39, 119, 0.08)",
+    },
+    dark: {
+      accent: "#ef5da3",
+      accentHover: "#f27fb6",
+      accentTint: "#2c1521",
+      accentTintText: "#f7a8ce",
+      accentGlow: "rgba(239, 93, 163, 0.22)",
+      accentGlowSoft: "rgba(239, 93, 163, 0.12)",
+    },
+  },
+  purple: {
+    light: {
+      accent: "#7c3aed",
+      accentHover: "#6c2bd9",
+      accentTint: "#f1eafe",
+      accentTintText: "#5b21b6",
+      accentGlow: "rgba(124, 58, 237, 0.12)",
+      accentGlowSoft: "rgba(124, 58, 237, 0.08)",
+    },
+    dark: {
+      accent: "#9d6df0",
+      accentHover: "#af88f3",
+      accentTint: "#211a33",
+      accentTintText: "#c9aefa",
+      accentGlow: "rgba(157, 109, 240, 0.22)",
+      accentGlowSoft: "rgba(157, 109, 240, 0.12)",
+    },
+  },
+};
 
 /** The results-grid data font. Persisted across launches. */
 export type TableFont = "sans" | "mono" | "serif" | "system";
@@ -249,6 +544,8 @@ interface AppStore {
 
   /** Active color theme, applied to the document root. */
   theme: Theme;
+  /** Active accent color, applied to the document root. */
+  accentColor: AccentColor;
   /** Results-grid data font, applied to the document root. */
   tableFont: TableFont;
   /** Results-grid data font size, applied to the document root. */
@@ -259,6 +556,9 @@ interface AppStore {
   tableZebra: boolean;
   /** Whether the results grid shows row/cell divider lines. */
   tableCellBorders: boolean;
+  /** Whether the results-grid column-header row is shaded slightly darker,
+   *  so it stands out more from the data rows below. */
+  tableHeaderShade: boolean;
   /** Whether long cell text wraps instead of truncating with an ellipsis. */
   tableWrapText: boolean;
   /** How SQL NULL renders in results-grid cells. */
@@ -433,11 +733,13 @@ interface AppStore {
   // --- appearance / settings ---
   setTheme: (theme: Theme) => void;
   toggleTheme: () => void;
+  setAccentColor: (color: AccentColor) => void;
   setTableFont: (font: TableFont) => void;
   setTableFontSize: (size: TableFontSize) => void;
   setTableRowHeight: (height: TableRowHeight) => void;
   setTableZebra: (enabled: boolean) => void;
   setTableCellBorders: (enabled: boolean) => void;
+  setTableHeaderShade: (enabled: boolean) => void;
   setTableWrapText: (enabled: boolean) => void;
   setNullDisplay: (display: NullDisplay) => void;
   setEditorFont: (font: TableFont) => void;
@@ -494,11 +796,13 @@ function makeTab(opts?: {
 
 const TABS_KEY = "cubbydb:openTabs";
 const THEME_KEY = "cubbydb:theme";
+const ACCENT_COLOR_KEY = "cubbydb:accentColor";
 const TABLE_FONT_KEY = "cubbydb:tableFont";
 const TABLE_FONT_SIZE_KEY = "cubbydb:tableFontSize";
 const TABLE_ROW_HEIGHT_KEY = "cubbydb:tableRowHeight";
 const TABLE_ZEBRA_KEY = "cubbydb:tableZebra";
 const TABLE_CELL_BORDERS_KEY = "cubbydb:tableCellBorders";
+const TABLE_HEADER_SHADE_KEY = "cubbydb:tableHeaderShade";
 const TABLE_WRAP_TEXT_KEY = "cubbydb:tableWrapText";
 const NULL_DISPLAY_KEY = "cubbydb:nullDisplay";
 const EDITOR_FONT_KEY = "cubbydb:editorFont";
@@ -515,7 +819,8 @@ const ROW_COPY_DELIMITER_KEY = "cubbydb:rowCopyDelimiter";
 /** Read the saved theme, defaulting to light. */
 function loadTheme(): Theme {
   try {
-    return localStorage.getItem(THEME_KEY) === "dark" ? "dark" : "light";
+    const saved = localStorage.getItem(THEME_KEY);
+    return saved && (THEME_OPTIONS as string[]).includes(saved) ? (saved as Theme) : "light";
   } catch {
     return "light";
   }
@@ -530,6 +835,43 @@ function applyTheme(theme: Theme) {
   }
   try {
     localStorage.setItem(THEME_KEY, theme);
+  } catch {
+    // Storage unavailable — non-fatal.
+  }
+}
+
+/** Read the saved accent color, defaulting to indigo. */
+function loadAccentColor(): AccentColor {
+  try {
+    const saved = localStorage.getItem(ACCENT_COLOR_KEY);
+    return saved && (ACCENT_COLOR_OPTIONS as string[]).includes(saved)
+      ? (saved as AccentColor)
+      : DEFAULT_ACCENT_COLOR;
+  } catch {
+    return DEFAULT_ACCENT_COLOR;
+  }
+}
+
+/** Reflect the accent color onto the accent-family CSS variables (for the
+ *  given theme's light/dark family) and persist it. Re-run with the new theme
+ *  whenever the theme itself changes, since every accent color carries
+ *  distinct light/dark variants (not one per individual theme — Paper reuses
+ *  Light's family, Midnight/Charcoal/Slate reuse Dark's). */
+function applyAccentColor(color: AccentColor, theme: Theme) {
+  const palette = ACCENT_PALETTES[color][THEME_MODE[theme]];
+  try {
+    const root = document.documentElement.style;
+    root.setProperty("--accent", palette.accent);
+    root.setProperty("--accent-hover", palette.accentHover);
+    root.setProperty("--accent-tint", palette.accentTint);
+    root.setProperty("--accent-tint-text", palette.accentTintText);
+    root.setProperty("--accent-glow", palette.accentGlow);
+    root.setProperty("--accent-glow-soft", palette.accentGlowSoft);
+  } catch {
+    // No document (e.g. non-DOM context) — non-fatal.
+  }
+  try {
+    localStorage.setItem(ACCENT_COLOR_KEY, color);
   } catch {
     // Storage unavailable — non-fatal.
   }
@@ -662,6 +1004,36 @@ function applyTableCellBorders(enabled: boolean) {
   }
   try {
     localStorage.setItem(TABLE_CELL_BORDERS_KEY, String(enabled));
+  } catch {
+    // Storage unavailable — non-fatal.
+  }
+}
+
+/** Read the saved header-shade preference, defaulting to off (existing users
+ *  see no visual change). */
+function loadTableHeaderShade(): boolean {
+  try {
+    return localStorage.getItem(TABLE_HEADER_SHADE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+/** Reflect header-shading onto the `--table-head-shade` CSS variable (a 0-1
+ *  alpha `.grid__head` blends a black wash at) and persist it. A flat alpha
+ *  works the same way in every theme — light or dark — unlike a fixed color,
+ *  which would need its own tuned value per theme. */
+function applyTableHeaderShade(enabled: boolean) {
+  try {
+    document.documentElement.style.setProperty(
+      "--table-head-shade",
+      enabled ? "0.1" : "0",
+    );
+  } catch {
+    // No document (e.g. non-DOM context) — non-fatal.
+  }
+  try {
+    localStorage.setItem(TABLE_HEADER_SHADE_KEY, String(enabled));
   } catch {
     // Storage unavailable — non-fatal.
   }
@@ -901,11 +1273,13 @@ function saveDelimiter(key: string, delimiter: Delimiter) {
 // /editor font/editor size as early as possible (on module load) so there's no
 // flash of the wrong appearance before the store mounts.
 applyTheme(loadTheme());
+applyAccentColor(loadAccentColor(), loadTheme());
 applyTableFont(loadTableFont());
 applyTableFontSize(loadTableFontSize());
 applyTableRowHeight(loadTableRowHeight());
 applyTableZebra(loadTableZebra());
 applyTableCellBorders(loadTableCellBorders());
+applyTableHeaderShade(loadTableHeaderShade());
 applyTableWrapText(loadTableWrapText());
 applyEditorFont(loadEditorFont());
 applyEditorFontSize(loadEditorFontSize());
@@ -1090,11 +1464,13 @@ export const useStore = create<AppStore>((set, get) => {
     pendingColumnHighlight: null,
     confirmDialog: null,
     theme: loadTheme(),
+    accentColor: loadAccentColor(),
     tableFont: loadTableFont(),
     tableFontSize: loadTableFontSize(),
     tableRowHeight: loadTableRowHeight(),
     tableZebra: loadTableZebra(),
     tableCellBorders: loadTableCellBorders(),
+    tableHeaderShade: loadTableHeaderShade(),
     tableWrapText: loadTableWrapText(),
     nullDisplay: loadNullDisplay(),
     editorFont: loadEditorFont(),
@@ -2291,13 +2667,22 @@ export const useStore = create<AppStore>((set, get) => {
 
     setTheme(theme) {
       applyTheme(theme);
+      applyAccentColor(get().accentColor, theme);
       set({ theme });
     },
 
     toggleTheme() {
-      const next: Theme = get().theme === "dark" ? "light" : "dark";
+      // With 6 themes across 2 families, "toggle" switches family (to that
+      // family's primary theme) rather than cycling through every variant.
+      const next: Theme = THEME_MODE[get().theme] === "dark" ? "light" : "dark";
       applyTheme(next);
+      applyAccentColor(get().accentColor, next);
       set({ theme: next });
+    },
+
+    setAccentColor(color) {
+      applyAccentColor(color, get().theme);
+      set({ accentColor: color });
     },
 
     setTableFont(font) {
@@ -2323,6 +2708,11 @@ export const useStore = create<AppStore>((set, get) => {
     setTableCellBorders(enabled) {
       applyTableCellBorders(enabled);
       set({ tableCellBorders: enabled });
+    },
+
+    setTableHeaderShade(enabled) {
+      applyTableHeaderShade(enabled);
+      set({ tableHeaderShade: enabled });
     },
 
     setTableWrapText(enabled) {

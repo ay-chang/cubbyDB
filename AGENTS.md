@@ -130,6 +130,13 @@ in `src-tauri/` are Rust-side.
   detail belongs in code comments or this file's architecture sections).
   FEATURES.md is the source of truth for "what does CubbyDB do"; don't let it
   drift like the old inline status list did.
+- **Document every keyboard shortcut in Settings > Keyboard Shortcuts.** When
+  you add, change, or remove a shortcut anywhere in the app, update
+  `SHORTCUT_GROUPS` in `src/components/common/SettingsDialog.tsx` in the same
+  change — add it to whichever group matches its scope (General, SQL editor,
+  Results grid, Command palette, ...), or start a new group if it doesn't fit
+  an existing one. That list is meant to be the complete, always-current
+  catalog of every shortcut CubbyDB supports; don't let it drift.
 - Rust ↔ TS types are serialized **camelCase** (`#[serde(rename_all =
   "camelCase")]`). Keep `types.ts` in sync with `db/mod.rs` and the stores.
 - Tauri command args map JS camelCase ↔ Rust snake_case automatically.

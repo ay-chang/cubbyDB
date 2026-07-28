@@ -3,6 +3,9 @@ import { useState } from "react";
 import { useStore } from "../../state/store";
 import type { Delimiter, TableFont, Theme } from "../../state/store";
 import {
+  ACCENT_COLOR_LABELS,
+  ACCENT_COLOR_OPTIONS,
+  ACCENT_COLOR_SWATCH,
   DEFAULT_EDITOR_FONT_SIZE,
   DEFAULT_HISTORY_LIMIT,
   DEFAULT_TABLE_FONT_SIZE,
@@ -18,12 +21,13 @@ import {
 } from "../../state/store";
 import type { NullDisplay } from "../../state/store";
 
-/** Top-level settings tabs. The rail is built to grow beyond these two. */
-type TopSection = "general" | "appearance";
+/** Top-level settings tabs. The rail is built to grow beyond these three. */
+type TopSection = "general" | "appearance" | "shortcuts";
 
 const TOP_SECTIONS: { id: TopSection; label: string }[] = [
   { id: "general", label: "General" },
   { id: "appearance", label: "Appearance" },
+  { id: "shortcuts", label: "Keyboard Shortcuts" },
 ];
 
 /** Sub-tabs within the Appearance section. */
@@ -111,6 +115,7 @@ export function SettingsDialog() {
           )}
           {section === "appearance" && appearanceSub === "table" && <TableSection />}
           {section === "appearance" && appearanceSub === "editor" && <EditorSection />}
+          {section === "shortcuts" && <ShortcutsSection />}
         </div>
       </div>
     </div>
@@ -255,12 +260,20 @@ function GeneralSection() {
 
 const THEMES: { id: Theme; label: string; hint: string }[] = [
   { id: "light", label: "Light", hint: "Bright surfaces" },
+  { id: "paper", label: "Paper", hint: "Warm, soft neutrals" },
   { id: "dark", label: "Dark", hint: "Dim, low-glare" },
+  { id: "midnight", label: "Midnight", hint: "Deep, cool black" },
+  { id: "charcoal", label: "Charcoal", hint: "Warm graphite gray" },
+  { id: "slate", label: "Slate", hint: "Cool steel blue" },
+  { id: "onedark", label: "One Dark", hint: "Atom/VS Code's classic dark" },
+  { id: "dracula", label: "Dracula", hint: "Vivid purple, pink & yellow" },
 ];
 
 function InterfaceSection() {
   const theme = useStore((s) => s.theme);
   const setTheme = useStore((s) => s.setTheme);
+  const accentColor = useStore((s) => s.accentColor);
+  const setAccentColor = useStore((s) => s.setAccentColor);
   const compactTopBar = useStore((s) => s.compactTopBar);
   const setCompactTopBar = useStore((s) => s.setCompactTopBar);
 
@@ -291,6 +304,36 @@ function InterfaceSection() {
                 <span className="theme-choice__hint">{t.hint}</span>
               </span>
               {theme === t.id && <span className="theme-choice__check">✓</span>}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="settings-field settings-field--spaced">
+        <div className="settings-field__label">Accent color</div>
+        <div className="settings-field__desc">
+          Pick the color used for buttons, active states, and SQL keyword
+          highlighting.
+        </div>
+        <div className="accent-choices">
+          {ACCENT_COLOR_OPTIONS.map((c) => (
+            <button
+              key={c}
+              className={
+                "accent-choice" +
+                (accentColor === c ? " accent-choice--active" : "")
+              }
+              onClick={() => setAccentColor(c)}
+              aria-pressed={accentColor === c}
+              title={ACCENT_COLOR_LABELS[c]}
+            >
+              <span
+                className="accent-choice__swatch"
+                style={{ background: ACCENT_COLOR_SWATCH[c] }}
+              >
+                {accentColor === c && <span className="accent-choice__check">✓</span>}
+              </span>
+              <span className="accent-choice__label">{ACCENT_COLOR_LABELS[c]}</span>
             </button>
           ))}
         </div>
@@ -342,6 +385,8 @@ function TableSection() {
   const setTableZebra = useStore((s) => s.setTableZebra);
   const tableCellBorders = useStore((s) => s.tableCellBorders);
   const setTableCellBorders = useStore((s) => s.setTableCellBorders);
+  const tableHeaderShade = useStore((s) => s.tableHeaderShade);
+  const setTableHeaderShade = useStore((s) => s.setTableHeaderShade);
   const tableWrapText = useStore((s) => s.tableWrapText);
   const setTableWrapText = useStore((s) => s.setTableWrapText);
   const nullDisplay = useStore((s) => s.nullDisplay);
@@ -455,6 +500,20 @@ function TableSection() {
         <Toggle
           on={tableCellBorders}
           onToggle={() => setTableCellBorders(!tableCellBorders)}
+        />
+      </div>
+
+      <div className="settings-field settings-field--spaced settings-toggle-row">
+        <div>
+          <div className="settings-field__label">Shade header row</div>
+          <div className="settings-field__desc">
+            Slightly darken the column-header row so it stands out more from
+            the data below.
+          </div>
+        </div>
+        <Toggle
+          on={tableHeaderShade}
+          onToggle={() => setTableHeaderShade(!tableHeaderShade)}
         />
       </div>
 
@@ -574,6 +633,122 @@ function EditorSection() {
           onToggle={() => setEditorLineWrap(!editorLineWrap)}
         />
       </div>
+    </div>
+  );
+}
+
+/**
+ * The full catalog of keyboard shortcuts, grouped by where they're active.
+ * Read-only for now — this documents current behavior, it doesn't configure
+ * it. `⌘` doubles as Ctrl on Windows/Linux (every shortcut is bound to
+ * `metaKey || ctrlKey`, not Mac-only).
+ *
+ * Keep this in sync whenever a shortcut is added, changed, or removed — see
+ * the "keyboard shortcuts" convention in AGENTS.md.
+ */
+const SHORTCUT_GROUPS: { title: string; shortcuts: { keys: string[]; desc: string }[] }[] = [
+  {
+    title: "General",
+    shortcuts: [
+      { keys: ["⌘", "⏎"], desc: "Run the active tab's query" },
+      { keys: ["⎋"], desc: "Cancel the running query" },
+      { keys: ["⌘", "T"], desc: "New query tab" },
+      { keys: ["⌘", "W"], desc: "Close the active tab" },
+      { keys: ["⌘", "K"], desc: "Open the command palette" },
+      {
+        keys: ["⌘", "S"],
+        desc: "Save the current query — or, on a table tab with unsaved cell edits, commit those edits",
+      },
+    ],
+  },
+  {
+    title: "SQL editor",
+    shortcuts: [
+      { keys: ["⌘", "⏎"], desc: "Run the statement under the cursor, or the current selection" },
+      { keys: ["⌘", "⇧", "⏎"], desc: "Run the entire buffer, regardless of cursor/selection" },
+      { keys: ["⌘", "⇧", "E"], desc: "Run EXPLAIN on the statement under the cursor" },
+      { keys: ["⌘", "⇧", "A"], desc: "Run EXPLAIN ANALYZE on the statement under the cursor" },
+      { keys: ["⇥"], desc: "Accept the highlighted autocomplete suggestion, else indent" },
+      { keys: ["⇧", "⇥"], desc: "Dedent the current line" },
+      { keys: ["⌘", "Z"], desc: "Undo" },
+      { keys: ["⌘", "⇧", "Z"], desc: "Redo" },
+      { keys: ["⌘", "F"], desc: "Open the editor's own find & replace" },
+      { keys: ["Ctrl", "Space"], desc: "Open autocomplete suggestions" },
+    ],
+  },
+  {
+    title: "Table filter (WHERE bar)",
+    shortcuts: [
+      { keys: ["⏎"], desc: "Apply the typed filter" },
+      { keys: ["⇥"], desc: "Accept the highlighted autocomplete suggestion" },
+    ],
+  },
+  {
+    title: "Results grid",
+    shortcuts: [
+      { keys: ["Click", "row #"], desc: "Select that row" },
+      { keys: ["⇧", "Click row #"], desc: "Select a range of rows" },
+      { keys: ["⌘", "Click row #"], desc: "Add or remove a row from the selection" },
+      { keys: ["⌘", "C"], desc: "Copy the selected row(s), or the selected cell" },
+      { keys: ["⌘", "V"], desc: "Paste over the selected row or cell" },
+      { keys: ["⌘", "F"], desc: "Open \"Find in results\"" },
+      { keys: ["⏎"], desc: "In Find: jump to the next match" },
+      { keys: ["⇧", "⏎"], desc: "In Find: jump to the previous match" },
+      { keys: ["⎋"], desc: "Close \"Find in results\"" },
+      { keys: ["⏎"], desc: "While editing a cell: save the edited value" },
+      { keys: ["⎋"], desc: "While editing a cell: cancel the edit" },
+    ],
+  },
+  {
+    title: "Command palette",
+    shortcuts: [
+      { keys: ["⌘", "K"], desc: "Open or close the palette" },
+      { keys: ["⇥"], desc: "Cycle scope forward: All → Tables → Columns" },
+      { keys: ["⇧", "⇥"], desc: "Cycle scope backward" },
+      { keys: ["↑", "↓"], desc: "Move the highlighted result" },
+      { keys: ["⏎"], desc: "Jump to the highlighted result" },
+      { keys: ["⎋"], desc: "Close the palette" },
+    ],
+  },
+  {
+    title: "Connection screen",
+    shortcuts: [
+      { keys: ["⌘", "⏎"], desc: "Connect — or reconnect, if editing a saved connection" },
+    ],
+  },
+  {
+    title: "Saved queries panel",
+    shortcuts: [
+      { keys: ["⏎"], desc: "While renaming a saved query: save the new name" },
+      { keys: ["⎋"], desc: "While renaming a saved query: cancel" },
+    ],
+  },
+];
+
+function ShortcutsSection() {
+  return (
+    <div className="settings-section">
+      <div className="settings-field__desc">
+        Every shortcut CubbyDB currently supports, grouped by where it's
+        active. This list is read-only for now.
+      </div>
+      {SHORTCUT_GROUPS.map((group) => (
+        <div key={group.title} className="shortcut-group">
+          <div className="shortcut-group__title">{group.title}</div>
+          {group.shortcuts.map((s, i) => (
+            <div key={i} className="shortcut-row">
+              <span className="shortcut-row__keys">
+                {s.keys.map((k, ki) => (
+                  <kbd key={ki} className="shortcut-kbd">
+                    {k}
+                  </kbd>
+                ))}
+              </span>
+              <span className="shortcut-row__desc">{s.desc}</span>
+            </div>
+          ))}
+        </div>
+      ))}
     </div>
   );
 }

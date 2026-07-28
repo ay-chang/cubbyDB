@@ -274,12 +274,12 @@ type RowSelection = { kind: "existing" | "new"; index: number };
 const GUTTER_W = 48;
 
 /** Keep-inside-the-viewport geometry for the FK context menu. `FK_MENU_W`
- *  must match `.context-menu`'s `max-width` in workspace.css — the menu is
+ *  must match `.context-menu--fk`'s `max-width` in workspace.css — the menu is
  *  otherwise sized by its content, and clamping against a guessed width lets
  *  a long table name push it off the right edge. */
 const FK_MENU_MARGIN = 12;
 const FK_MENU_MIN_H = 180;
-const FK_MENU_W = 340;
+const FK_MENU_W = 460;
 
 /**
  * Place the FK menu at the click point but always fully on screen. A row can
@@ -320,6 +320,14 @@ const VIRTUALIZE_MIN_COLS = 16;
  */
 const VIRTUALIZE_OVERSCAN = 30;
 const COL_OVERSCAN = 4;
+/** Blank space kept below the last row once scrolled to the bottom, so it
+ *  doesn't sit flush against the window edge. Applied via `.grid__body`'s
+ *  `padding-bottom` when rows render in normal flow; when virtualized, the
+ *  body's height is set explicitly (as `totalRows * rowH`) and CSS padding on
+ *  a `box-sizing: border-box` element with a fixed height doesn't add extra
+ *  scroll room, so this same constant is added straight into that height
+ *  instead — see `bodyStyle` below. */
+const GRID_BOTTOM_PADDING = 40;
 /**
  * The window is snapped to multiples of these, so a scroll only re-renders
  * once it has moved a whole block rather than on every event. The overscan
@@ -956,7 +964,10 @@ function ResultsGrid({
   // height itself. See `.grid__body--virtual` in workspace.css for why that
   // beats the spacer divs this replaced.
   const bodyStyle = useMemo(
-    () => (virtualizeRows ? { height: totalRows * rowH } : undefined),
+    () =>
+      virtualizeRows
+        ? { height: totalRows * rowH + GRID_BOTTOM_PADDING }
+        : undefined,
     [virtualizeRows, totalRows, rowH],
   );
 
@@ -1459,10 +1470,16 @@ function ResultsGrid({
           const literal = (value ?? "").replace(/'/g, "''");
           const openRef = (ref: ForeignKeyRef) => {
             setFkMenu(null);
+            // Double-quote the column name: it's machine-generated from the
+            // schema, not user-typed, and mixed-case identifiers (e.g. from a
+            // TypeORM/Prisma-created table) fold to lowercase and stop
+            // matching if left bare — Postgres then reports the column as
+            // not existing.
+            const col = ref.column.replace(/"/g, '""');
             void openTableWithFilter(
               ref.schema,
               ref.table,
-              `${ref.column} = '${literal}'`,
+              `"${col}" = '${literal}'`,
             );
           };
           const item = (ref: ForeignKeyRef, key: string) => (
@@ -1481,7 +1498,7 @@ function ResultsGrid({
           return (
             <div
               ref={fkMenuRef}
-              className="context-menu"
+              className={"context-menu" + (hasFk ? " context-menu--fk" : "")}
               style={fkMenuStyle(fkMenu.x, fkMenu.y)}
               onClick={(e) => e.stopPropagation()}
             >
@@ -1741,11 +1758,13 @@ const GridCell = memo(function GridCell({
         onCellContextMenu(e, r, colIndex);
       }}
     >
-      {value === null
-        ? nullText
-        : findOpen && findQuery.trim()
-          ? highlightMatches(value, findQuery, isActiveFindMatch)
-          : value}
+      <span className="grid__cell-text">
+        {value === null
+          ? nullText
+          : findOpen && findQuery.trim()
+            ? highlightMatches(value, findQuery, isActiveFindMatch)
+            : value}
+      </span>
     </div>
   );
 });
@@ -2004,7 +2023,7 @@ const GridNewRow = memo(function GridNewRow({
             // double-click needed. (Select the whole row via its gutter.)
             onClick={() => onNewCellClick(ni, colIndex, value)}
           >
-            {value === null ? "default" : value}
+            <span className="grid__cell-text">{value === null ? "default" : value}</span>
           </div>
         );
       })}

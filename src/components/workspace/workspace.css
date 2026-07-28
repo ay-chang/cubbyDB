@@ -383,8 +383,6 @@
   position: fixed;
   z-index: 100;
   min-width: 168px;
-  /* Bounded so `FK_MENU_W` in ResultsPane.tsx can keep the menu inside the
-     right edge without measuring it first. Keep the two in sync. */
   max-width: 340px;
   background: var(--surface);
   border: 1px solid var(--border-strong);
@@ -397,6 +395,18 @@
      list from chaining into the grid underneath. */
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+/* The FK jump/reference list specifically (not the plain 2-3-item cell menu,
+   which never needs this): wider by default, since a schema/table/column
+   path is often longer than a generic menu item, and horizontally
+   scrollable rather than clipping — `.context-menu__fk-name`/`__sub` below
+   don't ellipsis or wrap, so anything that still doesn't fit at this width
+   is reachable by scrolling instead of silently truncated. `FK_MENU_W` in
+   ResultsPane.tsx must match this `max-width` — it sizes the menu's
+   viewport-clamping math without measuring the (variable-width) content. */
+.context-menu--fk {
+  max-width: 460px;
+  overflow-x: auto;
 }
 .context-menu__label {
   padding: 6px 10px 4px;
@@ -432,17 +442,26 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  /* Slightly shorter than the base `.context-menu__item` row (7px 10px) —
+     this list is often long (a row referenced by dozens of tables), so a
+     touch more density goes a long way. */
+  padding: 5px 10px;
 }
-/* A table name longer than the capped width ellipsises rather than pushing the
-   menu past the window edge; the item's `title` still has it in full. */
+/* Neither span shrinks or wraps — a table name and a long qualified path
+   together used to fight for space (the name has `min-width: 0`, so it lost
+   and could get squeezed down to nothing), and without `white-space: nowrap`
+   a long path could wrap onto a second line, making row height inconsistent.
+   Now every row is exactly one line, and if the full content is wider than
+   the menu, `.context-menu--fk`'s `overflow-x: auto` makes it reachable by
+   scrolling instead of clipping or squeezing. The item's `title` still has
+   the full schema/table/column path regardless. */
 .context-menu__fk-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex: none;
   white-space: nowrap;
 }
 .context-menu__sub {
   flex: none;
+  white-space: nowrap;
   font-size: 10.5px;
   color: var(--text-faint);
 }
@@ -1037,12 +1056,23 @@
   z-index: 1;
   height: 30px;
   border-bottom: 1px solid var(--border);
-  background: var(--surface-header);
+  /* The gradient is a flat black wash at `--table-head-shade` alpha (0 by
+     default — user-toggleable in Settings > Table) layered over the actual
+     surface color, rather than a separate hardcoded color per theme. It only
+     darkens the background paint, not the header text/icons above it. */
+  background: linear-gradient(
+      rgba(0, 0, 0, var(--table-head-shade, 0)),
+      rgba(0, 0, 0, var(--table-head-shade, 0))
+    ),
+    var(--surface-header);
   font-family: var(--font-mono);
   font-size: 10.5px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--text-faint);
+  /* One tier brighter than the longstanding `--text-faint` — column names are
+     the grid's own labels, not incidental chrome, and read too close to the
+     background (especially in dark themes) at the fainter tier. */
+  color: var(--text-muted);
 }
 .grid__hcell {
   position: relative;
@@ -1056,7 +1086,7 @@
   user-select: none;
 }
 .grid__hcell:hover {
-  color: var(--text-muted);
+  color: var(--text);
 }
 .grid__hlabel {
   white-space: nowrap;
@@ -1099,6 +1129,12 @@
    list each time. Now the rows that stay put cost nothing to keep. */
 .grid__body {
   position: relative;
+  /* Keeps the last row from sitting flush against the window edge when
+     scrolled to the bottom. A no-op for `.grid__body--virtual`, whose height
+     is set explicitly in JS (`bodyStyle` in ResultsPane.tsx) — under
+     `box-sizing: border-box` that fixed height caps the box regardless of
+     padding, so the equivalent space is added there instead. */
+  padding-bottom: 40px;
 }
 .grid__body--virtual > .grid__row {
   position: absolute;
@@ -1125,8 +1161,13 @@
      picked up its own highlight box on top of the row tint — two competing
      "this is selected" signals for one action. Cells aren't a text surface
      anyway: ⌘C copies the cell or row (NULLs intact, which a text selection
-     can't represent) and double-click opens the real editor. */
+     can't represent) and double-click opens the real editor.
+     `-webkit-user-select` alongside the unprefixed property: the Tauri app's
+     actual renderer on macOS is WKWebView, which needs the prefix for this to
+     reliably suppress the native selection box — without it, a drag across
+     rows still paints per-glyph highlight boxes on top of the tint below. */
   user-select: none;
+  -webkit-user-select: none;
 }
 /* Hovering a row's gutter previews it as selectable — makes it obvious you can
    click the number to highlight (and then copy) the whole row. Scoped to just
@@ -1167,11 +1208,23 @@
   align-items: center;
   padding: 0 12px;
   border-right: 1px solid var(--table-border-cell);
+  overflow-wrap: break-word;
+  min-width: 0;
+}
+/* The actual truncatable text lives in this inner span, not directly on
+   `.grid__cell` — a raw text node dropped straight into a `display: flex`
+   container becomes an anonymous flex item, and `text-overflow: ellipsis`
+   doesn't reliably apply to that (it clips, but paints no "…"). Wrapping the
+   value in its own block-ish child is what makes the ellipsis actually
+   render. `min-width: 0` here is the flex-shrink fix, distinct from the
+   `min-width: 0` above (that one only defeats `.grid__cell`'s own grid-item
+   auto-sizing as a child of `.grid__row`). */
+.grid__cell-text {
+  min-width: 0;
+  flex: 1 1 auto;
   white-space: var(--table-white-space);
   overflow: var(--table-cell-overflow);
-  overflow-wrap: break-word;
   text-overflow: ellipsis;
-  min-width: 0;
 }
 /* Wrap mode is the one path with no windowing on either axis — row heights
    become content-driven, and a row's height depends on columns scrolled off
@@ -1224,6 +1277,7 @@
    so editing a value behaves like any other input. */
 .grid__cell-input {
   user-select: text;
+  -webkit-user-select: text;
   width: 100%;
   height: 100%;
   border: 1.5px solid var(--accent);
@@ -1272,6 +1326,7 @@
   border-right: 1px solid var(--border);
   cursor: pointer;
   user-select: none;
+  -webkit-user-select: none;
   transition: background var(--transition), color var(--transition);
 }
 .grid__gutter:hover {
@@ -1738,7 +1793,7 @@
   font-size: 10.5px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--text-faint);
+  color: var(--text-muted);
 }
 .structure-table__row {
   font-size: 12.5px;
