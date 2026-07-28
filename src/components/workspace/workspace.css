@@ -383,11 +383,20 @@
   position: fixed;
   z-index: 100;
   min-width: 168px;
+  /* Bounded so `FK_MENU_W` in ResultsPane.tsx can keep the menu inside the
+     right edge without measuring it first. Keep the two in sync. */
+  max-width: 340px;
   background: var(--surface);
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   box-shadow: 0 8px 28px -8px rgba(20, 24, 40, 0.24);
   padding: 4px;
+  /* A row referenced by dozens of tables makes a menu taller than the window.
+     `fkMenuStyle()` caps it to the space it has; this is what makes the
+     overflow reachable. `contain` stops a scroll that runs off the end of the
+     list from chaining into the grid underneath. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .context-menu__label {
   padding: 6px 10px 4px;
@@ -424,7 +433,16 @@
   justify-content: space-between;
   gap: 12px;
 }
+/* A table name longer than the capped width ellipsises rather than pushing the
+   menu past the window edge; the item's `title` still has it in full. */
+.context-menu__fk-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .context-menu__sub {
+  flex: none;
   font-size: 10.5px;
   color: var(--text-faint);
 }
@@ -1074,6 +1092,26 @@
   background: var(--surface-header);
   box-shadow: 0 6px 16px -6px rgba(20, 24, 40, 0.3);
 }
+/* Holds the windowed rows. When virtualizing it reserves the full scroll
+   height itself and the rows inside are taken out of flow, positioned by
+   transform. That replaces the pair of spacer divs this used to use: their
+   heights changed on every window update, which relaid out the entire sibling
+   list each time. Now the rows that stay put cost nothing to keep. */
+.grid__body {
+  position: relative;
+}
+.grid__body--virtual > .grid__row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  /* Layout containment only — it isolates each row's internal layout without
+     `paint`'s clipping, which would fight the sticky gutter. */
+  contain: layout style;
+}
+/* Empty grid tracks standing in for the columns windowed off each side. */
+.grid__spacer {
+  pointer-events: none;
+}
 .grid__row {
   display: grid;
   min-height: var(--h-grid-row);
@@ -1082,6 +1120,13 @@
   font-size: var(--table-font-size);
   color: var(--text);
   transition: background var(--transition);
+  /* Selecting a range of rows (shift-click in the gutter) otherwise also
+     drags a native text selection across every cell it passes, so each value
+     picked up its own highlight box on top of the row tint — two competing
+     "this is selected" signals for one action. Cells aren't a text surface
+     anyway: ⌘C copies the cell or row (NULLs intact, which a text selection
+     can't represent) and double-click opens the real editor. */
+  user-select: none;
 }
 /* Hovering a row's gutter previews it as selectable — makes it obvious you can
    click the number to highlight (and then copy) the whole row. Scoped to just
@@ -1127,15 +1172,15 @@
   overflow-wrap: break-word;
   text-overflow: ellipsis;
   min-width: 0;
-  /* Row virtualization only windows *vertically*; a wide table still paints
-     every column of every rendered row, which is what made horizontal
-     scrolling stutter. This lets the browser skip style/layout/paint for
-     cells scrolled off to the side, natively and synchronously — no React
-     round-trip, so unlike JS windowing it can't lag a frame behind. Safe
-     here because a cell's box doesn't depend on its content: width comes
-     from the grid track and height from the row, so skipping a cell can't
-     shift the layout. `auto` lets the browser reuse each cell's real size
-     once painted, which keeps the row height setting free to change. */
+}
+/* Wrap mode is the one path with no windowing on either axis — row heights
+   become content-driven, and a row's height depends on columns scrolled off
+   to the side, so neither can be skipped. There the browser's own culling
+   still earns its keep. Everywhere else the columns are windowed in JS and
+   these cells simply don't exist, which beats existing-but-skipped: at ~100
+   columns the engine was running a per-frame relevance check on every one of
+   ~8,000 cells, on the main thread, on the scroll path. */
+.grid__scroll[data-wrap="on"] .grid__cell {
   content-visibility: auto;
   contain-intrinsic-size: auto 120px auto var(--h-grid-row);
 }
@@ -1175,7 +1220,10 @@
 .grid__cell--editing {
   padding: 3px;
 }
+/* The one place inside a row that *is* a text surface — re-enable selection
+   so editing a value behaves like any other input. */
 .grid__cell-input {
+  user-select: text;
   width: 100%;
   height: 100%;
   border: 1.5px solid var(--accent);
@@ -1813,6 +1861,38 @@
 }
 .cmdk-input::placeholder {
   color: var(--text-placeholder);
+}
+/* Scope strip between the input and the results — Tab/Shift+Tab cycle it. */
+.cmdk-scopes {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.cmdk-scope {
+  padding: 4px 11px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-faint);
+  transition: background var(--transition), color var(--transition);
+}
+.cmdk-scope:hover {
+  background: var(--tree-hover);
+  color: var(--text-muted);
+}
+.cmdk-scope--active,
+.cmdk-scope--active:hover {
+  background: var(--accent-tint);
+  color: var(--accent-tint-text);
+}
+.cmdk-scopes__hint {
+  margin-left: auto;
+  padding-right: 2px;
+  font-size: 10.5px;
+  color: var(--text-ghost);
 }
 .cmdk-list {
   overflow-y: auto;

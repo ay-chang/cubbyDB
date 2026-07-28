@@ -1,4 +1,12 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import type { CopyResult } from "../../api/backend";
 import { copyToClipboard, readClipboard } from "../../api/backend";
@@ -265,19 +273,95 @@ type RowSelection = { kind: "existing" | "new"; index: number };
 /** Width of the left row-number / selection gutter. */
 const GUTTER_W = 48;
 
+/** Keep-inside-the-viewport geometry for the FK context menu. `FK_MENU_W`
+ *  must match `.context-menu`'s `max-width` in workspace.css — the menu is
+ *  otherwise sized by its content, and clamping against a guessed width lets
+ *  a long table name push it off the right edge. */
+const FK_MENU_MARGIN = 12;
+const FK_MENU_MIN_H = 180;
+const FK_MENU_W = 340;
+
+/**
+ * Place the FK menu at the click point but always fully on screen. A row can
+ * be referenced by dozens of tables (a `businessId` fanning out across a
+ * schema is the normal case, not the pathological one), so the menu is capped
+ * to the space it actually has — it flips to open upward when there's more
+ * room above the click — and scrolls internally past that, rather than
+ * running off the bottom of the window where the rest is unreachable.
+ */
+function fkMenuStyle(x: number, y: number): React.CSSProperties {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const left = Math.max(FK_MENU_MARGIN, Math.min(x, vw - FK_MENU_W - FK_MENU_MARGIN));
+  const below = vh - y - FK_MENU_MARGIN;
+  const above = y - FK_MENU_MARGIN;
+  if (below < FK_MENU_MIN_H && above > below) {
+    return { left, bottom: vh - y, maxHeight: above };
+  }
+  return { left, top: y, maxHeight: below };
+}
+/** `.grid__head`'s CSS height, used only as a pre-measurement fallback. */
+const HEAD_H = 30;
+
 /** Below this many rows, render everything — small results are already fast
  *  and this keeps the simple path simple. */
 const VIRTUALIZE_MIN_ROWS = 80;
+/** Likewise for columns: a narrow table's cells all fit on screen anyway, so
+ *  windowing them would only add spacer-track bookkeeping. */
+const VIRTUALIZE_MIN_COLS = 16;
 /**
- * Rows rendered beyond each edge of the viewport. This is the buffer that
- * decides whether a fast scroll shows blank space: the browser scrolls and
- * repaints on its own (compositor) timeline, while React only catches up a
- * frame or more later via the `scroll` event — so anything the user flings
+ * Rows/columns rendered beyond each edge of the viewport. This is the buffer
+ * that decides whether a fast scroll shows blank space: the browser scrolls
+ * and repaints on its own (compositor) timeline, while React only catches up
+ * a frame or more later via the `scroll` event — so anything the user flings
  * past within that gap must already be rendered. At the default 32px row
- * that's ~960px of runway in each direction, which covers a hard trackpad
- * fling; the cost is just ~60 extra rows of cheap, memoized markup.
+ * that's ~960px of vertical runway in each direction, which covers a hard
+ * trackpad fling.
  */
 const VIRTUALIZE_OVERSCAN = 30;
+const COL_OVERSCAN = 4;
+/**
+ * The window is snapped to multiples of these, so a scroll only re-renders
+ * once it has moved a whole block rather than on every event. The overscan
+ * above covers the block, and this is what keeps a slow drag-scroll from
+ * re-rendering ~60 times a second.
+ */
+const ROW_BLOCK = 8;
+const COL_BLOCK = 4;
+
+/** The rendered slice of the grid: rows `[startIdx, endIdx)` in display order,
+ *  columns `[startCol, endCol)` in display order. */
+type Win = { startIdx: number; endIdx: number; startCol: number; endCol: number };
+
+function sameWin(a: Win, b: Win): boolean {
+  return (
+    a.startIdx === b.startIdx &&
+    a.endIdx === b.endIdx &&
+    a.startCol === b.startCol &&
+    a.endCol === b.endCol
+  );
+}
+
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(v, hi));
+const snapDown = (v: number, block: number) => Math.floor(v / block) * block;
+const snapUp = (v: number, block: number) => Math.ceil(v / block) * block;
+
+/**
+ * Display position of the column whose span contains `x`, where `starts` is
+ * the prefix-sum of column widths (length = column count + 1). Binary search
+ * rather than a scan because this runs on the scroll path.
+ */
+function colAt(starts: number[], x: number): number {
+  let lo = 0;
+  let hi = starts.length - 2;
+  if (hi < 0) return 0;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (starts[mid] <= x) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
 
 function ResultsGrid({
   tab,
@@ -520,15 +604,23 @@ function ResultsGrid({
 
   // Dismiss the FK menu on any outside interaction. Cell/menu clicks stop
   // propagation, so this only fires for clicks elsewhere.
+  const fkMenuRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!fkMenu) return;
     const close = () => setFkMenu(null);
+    // The menu scrolls internally when it has more entries than fit, so a
+    // scroll that started *inside* it must not dismiss it — only one that
+    // moves the grid out from under it should.
+    const onScrollAnywhere = (e: Event) => {
+      if (fkMenuRef.current?.contains(e.target as Node)) return;
+      close();
+    };
     window.addEventListener("click", close);
-    window.addEventListener("scroll", close, true);
+    window.addEventListener("scroll", onScrollAnywhere, true);
     window.addEventListener("resize", close);
     return () => {
       window.removeEventListener("click", close);
-      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("scroll", onScrollAnywhere, true);
       window.removeEventListener("resize", close);
     };
   }, [fkMenu]);
@@ -648,57 +740,119 @@ function ResultsGrid({
     rowCopyDelimiter,
   ]);
 
-  // A fixed row-number/selection gutter precedes the data columns. Memoized
-  // so it keeps the same object reference across renders that don't touch
-  // `order`/`widths` (e.g. a cell click) — passed down to every `GridRow`/
-  // `GridNewRow`, whose `memo()` wrapper needs a stable reference here to
-  // correctly skip re-rendering rows a click didn't actually affect.
-  const gridStyle = useMemo(() => {
-    const template = `${GUTTER_W}px ` + order.map((i) => `${widths[i]}px`).join(" ");
-    const totalWidth = GUTTER_W + order.reduce((sum, i) => sum + widths[i], 0);
-    return { gridTemplateColumns: template, width: totalWidth };
+  // Column geometry in display order: `starts[pos]` is the x offset of the
+  // column at display position `pos` (measured from the first data column,
+  // i.e. after the gutter) and `starts[n]` is the total data width. Drives
+  // both the grid templates and the column-window math below.
+  const colGeom = useMemo(() => {
+    const starts: number[] = [];
+    let acc = 0;
+    for (const i of order) {
+      starts.push(acc);
+      acc += widths[i];
+    }
+    starts.push(acc);
+    return { starts, total: acc };
   }, [order, widths]);
+
   const dragWidth = drag ? widths[order[drag.fromPos]] : 0;
 
-  // --- Row virtualization ---------------------------------------------------
+  // --- Virtualization -------------------------------------------------------
   // A full page is `PAGE_SIZE` (500) rows; on a wide table that's tens of
   // thousands of grid cells in the DOM at once, which makes *the whole app*
   // sluggish (hover, typing, clicking) because every style recalc/layout the
   // browser does has to walk them all — memoizing React's own re-renders
-  // doesn't help, since the cost is the browser's, not React's. So only the
-  // rows actually in view (plus a small overscan) are rendered, with plain
-  // spacer divs standing in for the rest so the scrollbar still reflects the
-  // full page.
+  // doesn't help, since the cost is the browser's, not React's.
   //
-  // Fixed-height math: `box-sizing: border-box` is global and a non-wrapping
-  // row is exactly `--h-grid-row` (= the `tableRowHeight` setting) tall. That
-  // stops being true when "wrap long text" is on (rows grow to fit), so
-  // virtualization is skipped in that mode rather than mispositioning rows —
-  // see `virtualizeEnabled`.
+  // So the grid renders a window on *both* axes. Rows alone weren't enough:
+  // a 100-column table still built every column of every rendered row, which
+  // is ~8x more cells than are actually on screen and was the bulk of the
+  // per-scroll cost. Windowing columns too brings a 100-column table down to
+  // roughly what a 12-column one costs today.
+  //
+  // Fixed-geometry math: `box-sizing: border-box` is global and a
+  // non-wrapping row is exactly `--h-grid-row` (= the `tableRowHeight`
+  // setting) tall, while column widths are explicit pixels in `widths`. Both
+  // stop being true when "wrap long text" is on — rows grow to fit, and a
+  // row's height then depends on columns scrolled off to the side — so
+  // neither axis is windowed in that mode.
   const scrollRef = useRef<HTMLDivElement>(null);
   const headRef = useRef<HTMLDivElement>(null);
-  const [scrollTop, setScrollTop] = useState(0);
-  const [viewportH, setViewportH] = useState(0);
-  const [headH, setHeadH] = useState(30);
+  // Bumped by the ResizeObserver purely to re-trigger the window computation;
+  // the sizes themselves are read live off the DOM, never from state.
+  const [resizeTick, setResizeTick] = useState(0);
   // Trust the setting for layout math, but correct from the DOM once painted
   // (guards against theme/font tweaks changing the effective row box).
   const [measuredRowH, setMeasuredRowH] = useState<number | null>(null);
   const rowH = measuredRowH ?? tableRowHeight;
 
   const totalRows = sortedRowIndices.length;
-  const virtualizeEnabled = !tableWrapText && totalRows > VIRTUALIZE_MIN_ROWS;
+  const totalCols = order.length;
+  const virtualizeRows = !tableWrapText && totalRows > VIRTUALIZE_MIN_ROWS && rowH > 0;
+  const virtualizeCols = !tableWrapText && totalCols > VIRTUALIZE_MIN_COLS;
 
-  // Track the scroll viewport's size, and its scroll offset.
+  const [win, setWin] = useState<Win>({
+    startIdx: 0,
+    endIdx: 0,
+    startCol: 0,
+    endCol: 0,
+  });
+
+  /** The window implied by the scroller's *current* geometry, read straight
+   *  off the DOM so it's never a state-update behind the real scroll offset. */
+  const computeWin = useCallback((): Win => {
+    const el = scrollRef.current;
+    // Before the first layout (or while the pane is hidden and layout reports
+    // 0) fall back to a generous viewport rather than rendering almost
+    // nothing, so the grid never paints blank.
+    const vh = el && el.clientHeight > 0 ? el.clientHeight : 900;
+    const vw = el && el.clientWidth > 0 ? el.clientWidth : 1400;
+    const st = el?.scrollTop ?? 0;
+    const sl = el?.scrollLeft ?? 0;
+    const hh = headRef.current?.offsetHeight ?? HEAD_H;
+
+    let startIdx = 0;
+    let endIdx = totalRows;
+    if (virtualizeRows) {
+      const first = Math.floor((st - hh) / rowH) - VIRTUALIZE_OVERSCAN;
+      const last = Math.ceil((st - hh + vh) / rowH) + VIRTUALIZE_OVERSCAN;
+      startIdx = clamp(snapDown(first, ROW_BLOCK), 0, totalRows);
+      endIdx = clamp(snapUp(last, ROW_BLOCK), 0, totalRows);
+    }
+
+    let startCol = 0;
+    let endCol = totalCols;
+    if (virtualizeCols) {
+      // The gutter is sticky over the left edge, so the first genuinely
+      // visible data pixel is `scrollLeft`, and the last is one viewport
+      // minus the gutter it hides behind.
+      const first = colAt(colGeom.starts, sl) - COL_OVERSCAN;
+      const last = colAt(colGeom.starts, sl + vw - GUTTER_W) + 1 + COL_OVERSCAN;
+      startCol = clamp(snapDown(first, COL_BLOCK), 0, totalCols);
+      endCol = clamp(snapUp(last, COL_BLOCK), 0, totalCols);
+    }
+    return { startIdx, endIdx, startCol, endCol };
+  }, [virtualizeRows, virtualizeCols, rowH, totalRows, totalCols, colGeom]);
+
+  const syncWin = useCallback(() => {
+    setWin((prev) => {
+      const next = computeWin();
+      return sameWin(prev, next) ? prev : next;
+    });
+  }, [computeWin]);
+
+  // Recompute before paint whenever a geometry input changes — mount, a new
+  // result, the row-height/wrap settings, a column resize or reorder, a pane
+  // resize. `useLayoutEffect` (not `useEffect`) so the corrected window is in
+  // the DOM for the same frame; otherwise mount would paint an empty grid.
+  useLayoutEffect(syncWin, [syncWin, resizeTick]);
+
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const sync = () => {
-      setViewportH(el.clientHeight);
-      if (headRef.current) setHeadH(headRef.current.offsetHeight);
-    };
-    sync();
-    const ro = new ResizeObserver(sync);
+    const ro = new ResizeObserver(() => setResizeTick((t) => t + 1));
     ro.observe(el);
+    if (headRef.current) ro.observe(headRef.current);
     return () => ro.disconnect();
   }, []);
 
@@ -711,48 +865,99 @@ function ResultsGrid({
     }
   }, [tableRowHeight, tableWrapText, result]);
 
-  const onScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
-    setScrollTop(e.currentTarget.scrollTop);
-  }, []);
-
-  const { startIdx, endIdx } = useMemo(() => {
-    if (!virtualizeEnabled || rowH <= 0) {
-      return { startIdx: 0, endIdx: totalRows };
-    }
-    // Before the first measurement (or if the pane is hidden and layout
-    // reports 0) fall back to a generous viewport rather than rendering
-    // almost nothing, so the grid never paints blank.
-    const vh = viewportH > 0 ? viewportH : 900;
-    const first = Math.floor((scrollTop - headH) / rowH) - VIRTUALIZE_OVERSCAN;
-    const last = Math.ceil((scrollTop - headH + vh) / rowH) + VIRTUALIZE_OVERSCAN;
-    return {
-      startIdx: Math.max(0, Math.min(first, totalRows)),
-      endIdx: Math.max(0, Math.min(last, totalRows)),
-    };
-  }, [virtualizeEnabled, rowH, scrollTop, headH, viewportH, totalRows]);
-
-  const topSpacer = startIdx * rowH;
-  const bottomSpacer = Math.max(0, (totalRows - endIdx) * rowH);
-
-  /** Scroll a display position into view even if it isn't currently rendered
-   *  (virtualization means `querySelector` alone can't find it). Updates the
-   *  window state directly rather than waiting for the resulting `scroll`
-   *  event, so the target row is rendered on the very next paint — the event
-   *  round-trip would otherwise leave a frame where the row still doesn't
-   *  exist for the follow-up `scrollIntoView` to find. */
-  const scrollDisplayPosIntoView = useCallback(
-    (displayPos: number) => {
-      const el = scrollRef.current;
-      if (!el || !virtualizeEnabled) return;
-      const top = headH + displayPos * rowH;
-      const bottom = top + rowH;
-      if (top < el.scrollTop || bottom > el.scrollTop + el.clientHeight) {
-        const next = Math.max(0, top - el.clientHeight / 2);
-        el.scrollTop = next;
-        setScrollTop(next);
-      }
+  // Scrolling is compositor-driven: by the time this fires the browser has
+  // already moved the content, so the work here must be as small as possible
+  // and must not happen more than once per frame. Coalescing into a single
+  // rAF collapses the burst of scroll events a fling produces into one
+  // window computation, and `sameWin` then drops even that unless the window
+  // actually moved a whole `ROW_BLOCK`/`COL_BLOCK` — so a steady scroll
+  // re-renders roughly once per 8 rows instead of once per event.
+  const rafRef = useRef<number | null>(null);
+  const onScroll = useCallback(() => {
+    if (rafRef.current != null) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      syncWin();
+    });
+  }, [syncWin]);
+  useEffect(
+    () => () => {
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
     },
-    [virtualizeEnabled, headH, rowH],
+    [],
+  );
+
+  const { startIdx, endIdx, startCol, endCol } = win;
+
+  /** Bring a cell into view on both axes even if it isn't currently rendered
+   *  (windowing means `querySelector` alone can't find it). Recomputes the
+   *  window synchronously afterwards rather than waiting for the resulting
+   *  `scroll` event, so the target exists on the very next paint — the event
+   *  round-trip would otherwise leave a frame where a follow-up
+   *  `scrollIntoView` has nothing to find. */
+  const scrollCellIntoView = useCallback(
+    (rowPos: number, colPos: number) => {
+      const el = scrollRef.current;
+      if (!el) return;
+      const hh = headRef.current?.offsetHeight ?? HEAD_H;
+      if (virtualizeRows && rowPos >= 0) {
+        const top = hh + rowPos * rowH;
+        if (top < el.scrollTop + hh || top + rowH > el.scrollTop + el.clientHeight) {
+          el.scrollTop = Math.max(0, top - el.clientHeight / 2);
+        }
+      }
+      if (virtualizeCols && colPos >= 0) {
+        const left = colGeom.starts[colPos];
+        const right = colGeom.starts[colPos + 1];
+        if (left < el.scrollLeft || right + GUTTER_W > el.scrollLeft + el.clientWidth) {
+          el.scrollLeft = Math.max(0, left - el.clientWidth / 2);
+        }
+      }
+      syncWin();
+    },
+    [virtualizeRows, virtualizeCols, rowH, colGeom, syncWin],
+  );
+
+  // The columns actually rendered in each row. Memoized because it's a prop
+  // on every `GridRow`, whose `memo()` needs a stable reference.
+  const visibleOrder = useMemo(
+    () =>
+      startCol === 0 && endCol === totalCols ? order : order.slice(startCol, endCol),
+    [order, startCol, endCol, totalCols],
+  );
+
+  // The header renders every column unwindowed: it's one element per column
+  // (nothing, even at 100+), and it keeps the drag-to-reorder transforms —
+  // which are indexed by absolute display position — working untouched.
+  const headStyle = useMemo(
+    () => ({
+      gridTemplateColumns: `${GUTTER_W}px ` + order.map((i) => `${widths[i]}px`).join(" "),
+      width: GUTTER_W + colGeom.total,
+    }),
+    [order, widths, colGeom],
+  );
+
+  // Rows use the windowed template, with a track at each end standing in for
+  // the columns scrolled off to the left and right. That lands the rendered
+  // cells at exactly the same x as the header's without any per-cell grid
+  // placement, and keeps the row's total width driving the h-scrollbar.
+  // Memoized for the same `memo()` reason as `visibleOrder`.
+  const rowStyle = useMemo(() => {
+    const left = colGeom.starts[startCol];
+    const right = colGeom.total - colGeom.starts[endCol];
+    const mid = visibleOrder.map((i) => `${widths[i]}px`).join(" ");
+    return {
+      gridTemplateColumns: `${GUTTER_W}px ${left}px ${mid} ${right}px`,
+      width: GUTTER_W + colGeom.total,
+    };
+  }, [colGeom, startCol, endCol, visibleOrder, widths]);
+
+  // Virtualized rows come out of flow, so the body reserves the full scroll
+  // height itself. See `.grid__body--virtual` in workspace.css for why that
+  // beats the spacer divs this replaced.
+  const bodyStyle = useMemo(
+    () => (virtualizeRows ? { height: totalRows * rowH } : undefined),
+    [virtualizeRows, totalRows, rowH],
   );
 
   const startResize = (colIndex: number) => (e: React.MouseEvent) => {
@@ -909,12 +1114,12 @@ function ResultsGrid({
     const m = findMatches[Math.min(findIndex, findMatches.length - 1)];
     if (!m) return;
     setSelected({ r: m.r, col: m.col });
-    // Vertical first, by arithmetic: the matched row may be outside the
-    // rendered window, in which case there's no element to `scrollIntoView`
-    // yet. Scrolling by position brings it into the window, and the
-    // follow-up frame (once it has rendered) handles horizontal scrolling to
-    // the matched column.
-    scrollDisplayPosIntoView(sortedRowIndices.indexOf(m.r));
+    // By arithmetic on both axes: the match may be outside the rendered
+    // window on either one — with columns windowed too, an off-screen column
+    // has no element to `scrollIntoView` any more than an off-screen row
+    // does. This brings it into the window; the follow-up frame (once it has
+    // rendered) only nudges it the last few pixels.
+    scrollCellIntoView(sortedRowIndices.indexOf(m.r), order.indexOf(m.col));
     const raf = requestAnimationFrame(() => {
       document
         .querySelector(`[data-cell="${m.r}-${m.col}"]`)
@@ -1117,8 +1322,13 @@ function ResultsGrid({
           </button>
         </div>
       )}
-      <div className="grid__scroll" ref={scrollRef} onScroll={onScroll}>
-        <div className="grid__head" style={gridStyle} ref={headRef}>
+      <div
+        className="grid__scroll"
+        ref={scrollRef}
+        onScroll={onScroll}
+        data-wrap={tableWrapText ? "on" : "off"}
+      >
+        <div className="grid__head" style={headStyle} ref={headRef}>
           <div className="grid__gutter grid__gutter--head" />
           {order.map((colIndex, pos) => (
             <div
@@ -1153,7 +1363,10 @@ function ResultsGrid({
         {result.rows.length === 0 && (
           <div className="results__note results__note--sub">No rows returned.</div>
         )}
-        {topSpacer > 0 && <div style={{ height: topSpacer }} aria-hidden />}
+        <div
+          className={"grid__body" + (virtualizeRows ? " grid__body--virtual" : "")}
+          style={bodyStyle}
+        >
         {(() => {
           // Hoisted out of the row loop — the same for every row, just
           // compared against each row's own `r` below.
@@ -1166,10 +1379,11 @@ function ResultsGrid({
               key={r}
               r={r}
               displayPos={displayPos}
+              offsetY={virtualizeRows ? displayPos * rowH : null}
               row={result.rows[r]}
               rowEdits={tab.pendingEdits?.[r]}
-              gridStyle={gridStyle}
-              order={order}
+              rowStyle={rowStyle}
+              order={visibleOrder}
               numericCols={numericCols}
               navByColumn={navByColumn}
               pkColIndices={pkColIndices}
@@ -1198,15 +1412,15 @@ function ResultsGrid({
             );
           });
         })()}
-        {bottomSpacer > 0 && <div style={{ height: bottomSpacer }} aria-hidden />}
+        </div>
         {isTable &&
           (tab.newRows ?? []).map((draft, ni) => (
             <GridNewRow
               key={`new-${ni}`}
               ni={ni}
               draft={draft}
-              gridStyle={gridStyle}
-              order={order}
+              rowStyle={rowStyle}
+              order={visibleOrder}
               numericCols={numericCols}
               isRowGutterSelected={isRowSelected("new", ni)}
               editingCell={
@@ -1255,9 +1469,10 @@ function ResultsGrid({
             <button
               key={key}
               className="context-menu__item context-menu__item--fk"
+              title={`${ref.schema}.${ref.table}.${ref.column}`}
               onClick={() => openRef(ref)}
             >
-              <span>{ref.table}</span>
+              <span className="context-menu__fk-name">{ref.table}</span>
               <span className="context-menu__sub mono">
                 {ref.schema}.{ref.column}
               </span>
@@ -1265,8 +1480,9 @@ function ResultsGrid({
           );
           return (
             <div
+              ref={fkMenuRef}
               className="context-menu"
-              style={{ left: fkMenu.x, top: fkMenu.y }}
+              style={fkMenuStyle(fkMenu.x, fkMenu.y)}
               onClick={(e) => e.stopPropagation()}
             >
               {hasFk && nav!.references.length > 0 && (
@@ -1537,9 +1753,12 @@ const GridCell = memo(function GridCell({
 interface GridRowProps {
   r: number;
   displayPos: number;
+  /** Y offset within the virtualized body, or null when rows are in flow. */
+  offsetY: number | null;
   row: Array<string | null>;
   rowEdits: Record<number, string | null> | undefined;
-  gridStyle: React.CSSProperties;
+  rowStyle: React.CSSProperties;
+  /** The *windowed* display order — only the columns currently on screen. */
   order: number[];
   numericCols: boolean[];
   navByColumn: ColNav[] | null;
@@ -1579,9 +1798,10 @@ interface GridRowProps {
 const GridRow = memo(function GridRow({
   r,
   displayPos,
+  offsetY,
   row,
   rowEdits,
-  gridStyle,
+  rowStyle,
   order,
   numericCols,
   navByColumn,
@@ -1605,6 +1825,15 @@ const GridRow = memo(function GridRow({
   onEditCancel,
 }: GridRowProps) {
   const rowDirty = !!rowEdits && Object.keys(rowEdits).length > 0;
+  // Merged here rather than by the parent so `rowStyle` stays a single shared
+  // object across every row (the `memo()` above compares it by reference).
+  const style = useMemo(
+    () =>
+      offsetY == null
+        ? rowStyle
+        : { ...rowStyle, transform: `translateY(${offsetY}px)` },
+    [rowStyle, offsetY],
+  );
   return (
     <div
       className={
@@ -1614,7 +1843,7 @@ const GridRow = memo(function GridRow({
         (isRowGutterSelected ? " grid__row--rowsel" : "") +
         (rowDirty ? " grid__row--dirty" : "")
       }
-      style={gridStyle}
+      style={style}
     >
       <div
         className="grid__gutter"
@@ -1623,6 +1852,8 @@ const GridRow = memo(function GridRow({
       >
         {displayPos + 1}
       </div>
+      {/* Stand-ins for the columns windowed off each side — see `rowStyle`. */}
+      <div className="grid__spacer" aria-hidden />
       {order.map((colIndex) => {
         const original = row[colIndex];
         const draftEdit = rowEdits?.[colIndex];
@@ -1674,6 +1905,7 @@ const GridRow = memo(function GridRow({
           />
         );
       })}
+      <div className="grid__spacer" aria-hidden />
     </div>
   );
 });
@@ -1681,7 +1913,8 @@ const GridRow = memo(function GridRow({
 interface GridNewRowProps {
   ni: number;
   draft: Array<string | null>;
-  gridStyle: React.CSSProperties;
+  rowStyle: React.CSSProperties;
+  /** The *windowed* display order — only the columns currently on screen. */
   order: number[];
   numericCols: boolean[];
   isRowGutterSelected: boolean;
@@ -1702,7 +1935,7 @@ interface GridNewRowProps {
 const GridNewRow = memo(function GridNewRow({
   ni,
   draft,
-  gridStyle,
+  rowStyle,
   order,
   numericCols,
   isRowGutterSelected,
@@ -1716,7 +1949,7 @@ const GridNewRow = memo(function GridNewRow({
   return (
     <div
       className={"grid__row grid__row--new" + (isRowGutterSelected ? " grid__row--rowsel" : "")}
-      style={gridStyle}
+      style={rowStyle}
     >
       <div
         className="grid__gutter grid__gutter--new"
@@ -1725,6 +1958,7 @@ const GridNewRow = memo(function GridNewRow({
       >
         +
       </div>
+      <div className="grid__spacer" aria-hidden />
       {order.map((colIndex) => {
         const value = draft[colIndex];
         const isEditing = editingCell !== null && editingCell.col === colIndex;
@@ -1774,6 +2008,7 @@ const GridNewRow = memo(function GridNewRow({
           </div>
         );
       })}
+      <div className="grid__spacer" aria-hidden />
     </div>
   );
 });
