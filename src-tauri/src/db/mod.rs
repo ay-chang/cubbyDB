@@ -271,6 +271,42 @@ pub struct ResultColumn {
     pub name: String,
 }
 
+/// Rows in one other table that reference the row(s) about to be deleted,
+/// via one foreign key constraint — the "delete impact" preview shown before
+/// a delete that would otherwise just fail with a raw FK-violation error.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DependentRowsPreview {
+    pub schema: String,
+    pub table: String,
+    pub fk_constraint: String,
+    /// This dependent table's own columns, in the order `sample_rows` uses —
+    /// its primary key first, then a few more for context.
+    pub columns: Vec<String>,
+    pub sample_rows: Vec<Vec<Option<String>>>,
+    /// The real count — may be larger than `sample_rows.len()`.
+    pub total_count: i64,
+    /// True when `total_count` exceeds the sample shown.
+    pub truncated: bool,
+    /// Rows that reference *these* dependent rows, one level deeper (e.g.
+    /// `order_items` depending on `orders` depending on the deleted
+    /// `customer`). Empty if nothing references this table, or the walk was
+    /// cut off — see [`DeleteImpact::incomplete`].
+    pub children: Vec<DependentRowsPreview>,
+}
+
+/// Everything that would need to be deleted alongside the row(s) the user
+/// asked to delete, discovered by walking the foreign-key graph.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteImpact {
+    pub dependents: Vec<DependentRowsPreview>,
+    /// True if the walk hit its depth or row-count safety cap before fully
+    /// resolving — the real impact may be larger than what's shown. Never
+    /// silently truncated without this being set.
+    pub incomplete: bool,
+}
+
 /// The outcome of running a statement from the editor.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -363,6 +399,30 @@ pub trait DbSession: Send + Sync {
         table: &str,
         primary_key: &[ColumnValue],
     ) -> Result<(), DbError>;
+
+    /// Read-only preview of what deleting `primary_keys` would cascade into
+    /// — every row in every other table that references one of them,
+    /// walked transitively. `primary_keys` is a list (not one row) so a
+    /// multi-row delete can be checked in a single call.
+    async fn delete_impact(
+        &self,
+        schema: &str,
+        table: &str,
+        primary_keys: &[Vec<ColumnValue>],
+    ) -> Result<DeleteImpact, DbError>;
+
+    /// Delete `primary_keys` and everything [`delete_impact`] would report
+    /// for them, in one transaction — dependents deepest-first, the
+    /// requested rows last, so nothing is ever left half-cascaded. Returns
+    /// the total number of rows deleted (dependents + the requested rows).
+    ///
+    /// [`delete_impact`]: DbSession::delete_impact
+    async fn delete_row_cascade(
+        &self,
+        schema: &str,
+        table: &str,
+        primary_keys: &[Vec<ColumnValue>],
+    ) -> Result<u64, DbError>;
 
     /// Column, index, and check-constraint details for one table — the "View
     /// structure" panel.

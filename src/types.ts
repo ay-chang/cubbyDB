@@ -133,6 +133,33 @@ export interface ResultColumn {
   name: string;
 }
 
+/** Rows in one other table that reference the row(s) about to be deleted,
+ *  via one foreign key constraint — shown before a delete that would
+ *  otherwise just fail with a raw FK-violation error. */
+export interface DependentRowsPreview {
+  schema: string;
+  table: string;
+  fkConstraint: string;
+  /** This dependent table's own columns, in the order `sampleRows` uses. */
+  columns: string[];
+  sampleRows: Array<Array<string | null>>;
+  /** The real count — may be larger than `sampleRows.length`. */
+  totalCount: number;
+  /** True when `totalCount` exceeds the sample shown. */
+  truncated: boolean;
+  /** Rows that reference *these* dependent rows, one level deeper. */
+  children: DependentRowsPreview[];
+}
+
+/** Everything that would need to be deleted alongside the row(s) requested,
+ *  discovered by walking the foreign-key graph. */
+export interface DeleteImpact {
+  dependents: DependentRowsPreview[];
+  /** True if the walk hit its safety cap before fully resolving — the real
+   *  impact may be larger than what's shown. */
+  incomplete: boolean;
+}
+
 export interface QueryResult {
   columns: ResultColumn[];
   rows: Array<Array<string | null>>;

@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 
 import { ConfirmDialog } from "./components/common/ConfirmDialog";
+import { DeleteImpactDialog } from "./components/common/DeleteImpactDialog";
 import { ErrorBoundary } from "./components/common/ErrorBoundary";
 import { SettingsDialog } from "./components/common/SettingsDialog";
 import { Spinner } from "./components/common/Spinner";
@@ -41,6 +42,7 @@ export function App() {
         </ErrorBoundary>
       )}
       <ConfirmDialog />
+      <DeleteImpactDialog />
       <SettingsDialog />
     </>
   );

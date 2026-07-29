@@ -4,19 +4,19 @@
 //! read with `simple_query`, which returns every value in its canonical text
 //! representation, so we never need per-type conversion code in the grid path.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
 use async_trait::async_trait;
 use tokio_postgres::error::ErrorPosition;
-use tokio_postgres::{Config, SimpleQueryMessage};
+use tokio_postgres::{Client, Config, SimpleQueryMessage};
 
 use super::{
     CheckConstraintDetail, ColumnNode, ColumnValue, ConnectionInfo, ConnectionParams,
-    DatabaseDriver, DbError, DbErrorKind, DbSession, Engine, ForeignKeyRef, FunctionDefinition,
-    FunctionKind, FunctionNode, IndexDetail, QueryCanceller, QueryResult, ResultColumn,
-    SchemaNode, SequenceDetails, SequenceNode, SequenceOwner, StructureColumn, TableKind,
-    TableNode, TableStructure, TypeNode,
+    DatabaseDriver, DbError, DbErrorKind, DbSession, DeleteImpact, DependentRowsPreview, Engine,
+    ForeignKeyRef, FunctionDefinition, FunctionKind, FunctionNode, IndexDetail, QueryCanceller,
+    QueryResult, ResultColumn, SchemaNode, SequenceDetails, SequenceNode, SequenceOwner,
+    StructureColumn, TableKind, TableNode, TableStructure, TypeNode,
 };
 
 /// Stateless factory for Postgres sessions.
@@ -497,6 +497,54 @@ impl DbSession for PostgresSession {
         Ok(())
     }
 
+    async fn delete_impact(
+        &self,
+        schema: &str,
+        table: &str,
+        primary_keys: &[Vec<ColumnValue>],
+    ) -> Result<DeleteImpact, DbError> {
+        let Some((pk_columns, pk_values)) = flatten_primary_keys(primary_keys) else {
+            return Ok(DeleteImpact { dependents: Vec::new(), incomplete: false });
+        };
+        compute_delete_impact(&self.client, schema, table, &pk_columns, &pk_values).await
+    }
+
+    async fn delete_row_cascade(
+        &self,
+        schema: &str,
+        table: &str,
+        primary_keys: &[Vec<ColumnValue>],
+    ) -> Result<u64, DbError> {
+        let Some((pk_columns, pk_values)) = flatten_primary_keys(primary_keys) else {
+            return Err(DbError::new(
+                DbErrorKind::Internal,
+                "Cannot delete a row without a primary key.",
+            ));
+        };
+
+        // Manual BEGIN/COMMIT/ROLLBACK (rather than `Client::transaction()`,
+        // which needs `&mut Client`) so this stays a `&self` method like
+        // every other one on this trait — `AppState.active`'s mutex already
+        // guarantees exclusive access to this connection for a command's
+        // whole duration (see its doc comment in `state.rs`), so there's no
+        // risk of another query interleaving with these statements.
+        self.client.batch_execute("BEGIN").await.map_err(map_query_err)?;
+        let result = delete_cascade_within_transaction(&self.client, schema, table, &pk_columns, &pk_values).await;
+        match result {
+            Ok(total) => {
+                self.client.batch_execute("COMMIT").await.map_err(map_query_err)?;
+                Ok(total)
+            }
+            Err(e) => {
+                // Best-effort — if the rollback itself fails (e.g. the
+                // connection dropped), the original error is still what
+                // gets surfaced, not this one.
+                let _ = self.client.batch_execute("ROLLBACK").await;
+                Err(e)
+            }
+        }
+    }
+
     async fn table_structure(&self, schema: &str, table: &str) -> Result<TableStructure, DbError> {
         let col_rows = self
             .client
@@ -743,6 +791,467 @@ fn quote_ident(name: &str) -> String {
 /// since 9.1, so backslashes need no special handling.
 fn quote_literal(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
+}
+
+// --- Delete impact / cascade -----------------------------------------------
+//
+// Before deleting a row, walk the foreign-key graph to find every other row
+// that references it (transitively — dependents of dependents), so the
+// frontend can show what would cascade instead of the delete just failing
+// with a raw FK-violation error. Bounded by `MAX_DEPTH`/`MAX_TOTAL_ROWS` so
+// it can never turn into an unbounded walk or an unbounded delete.
+//
+// Scope limitation: only handles foreign keys that reference a table's
+// *primary key* (checked via `reorder_values_for` matching the FK's
+// referenced columns against the level's PK column set exactly) — a FK
+// referencing some other unique constraint is skipped. This covers the
+// overwhelming majority of real schemas without needing to enumerate every
+// unique constraint too.
+
+/// Below this many cascade levels, or above this many total dependent rows
+/// examined, the walk stops rather than continuing indefinitely.
+const MAX_DEPTH: usize = 5;
+const MAX_TOTAL_ROWS: i64 = 500;
+/// How many example rows are fetched per dependent table for the preview —
+/// deliberately small; `total_count` (a real `count(*)`) carries the true
+/// number regardless of how many rows are sampled.
+const SAMPLE_LIMIT: i64 = 10;
+
+/// Every FK constraint pointing *at* one table, grouped by constraint (not
+/// unnested per-column like `FOREIGN_KEYS_SQL`) so composite keys stay
+/// associated as a unit.
+const CONSTRAINTS_REFERENCING_SQL: &str = "
+    SELECT
+        fns.nspname                                  AS dep_schema,
+        fcl.relname                                  AS dep_table,
+        con.conname                                  AS constraint_name,
+        array_agg(att.attname ORDER BY k.ord)        AS dep_columns,
+        array_agg(ratt.attname ORDER BY k.ord)        AS ref_columns
+    FROM pg_catalog.pg_constraint con
+    JOIN pg_catalog.pg_class cl ON cl.oid = con.confrelid
+    JOIN pg_catalog.pg_namespace ns ON ns.oid = cl.relnamespace
+    JOIN pg_catalog.pg_class fcl ON fcl.oid = con.conrelid
+    JOIN pg_catalog.pg_namespace fns ON fns.oid = fcl.relnamespace
+    JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS k(dep_attnum, ref_attnum, ord)
+        ON true
+    JOIN pg_catalog.pg_attribute att
+        ON att.attrelid = con.conrelid AND att.attnum = k.dep_attnum
+    JOIN pg_catalog.pg_attribute ratt
+        ON ratt.attrelid = con.confrelid AND ratt.attnum = k.ref_attnum
+    WHERE con.contype = 'f' AND ns.nspname = $1 AND cl.relname = $2
+    GROUP BY fns.nspname, fcl.relname, con.conname
+    ORDER BY fns.nspname, fcl.relname
+";
+
+/// A table's own primary-key columns, in index-key order — reused for every
+/// table encountered while walking the graph (both the root table and every
+/// dependent table found along the way).
+const TABLE_PRIMARY_KEY_SQL: &str = "
+    SELECT a.attname
+    FROM pg_catalog.pg_index i
+    JOIN pg_catalog.pg_class c ON c.oid = i.indrelid
+    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(i.indkey)
+    WHERE n.nspname = $1 AND c.relname = $2 AND i.indisprimary
+    ORDER BY array_position(i.indkey, a.attnum)
+";
+
+struct FkConstraintInfo {
+    dep_schema: String,
+    dep_table: String,
+    constraint_name: String,
+    dep_columns: Vec<String>,
+    ref_columns: Vec<String>,
+}
+
+async fn constraints_referencing(
+    client: &Client,
+    schema: &str,
+    table: &str,
+) -> Result<Vec<FkConstraintInfo>, DbError> {
+    let rows = client
+        .query(CONSTRAINTS_REFERENCING_SQL, &[&schema, &table])
+        .await
+        .map_err(map_query_err)?;
+    Ok(rows
+        .iter()
+        .map(|r| FkConstraintInfo {
+            dep_schema: r.get(0),
+            dep_table: r.get(1),
+            constraint_name: r.get(2),
+            dep_columns: r.get(3),
+            ref_columns: r.get(4),
+        })
+        .collect())
+}
+
+async fn table_primary_key_columns(
+    client: &Client,
+    schema: &str,
+    table: &str,
+) -> Result<Vec<String>, DbError> {
+    let rows = client
+        .query(TABLE_PRIMARY_KEY_SQL, &[&schema, &table])
+        .await
+        .map_err(map_query_err)?;
+    Ok(rows.iter().map(|r| r.get(0)).collect())
+}
+
+/// Flattens the frontend's per-row `Vec<ColumnValue>` primary keys into a
+/// shared column-name list plus one value-tuple per row — `None` if any row
+/// has no primary key at all (deletion is gated on a detected PK elsewhere,
+/// but this stays defensive rather than building an unscoped clause).
+fn flatten_primary_keys(
+    primary_keys: &[Vec<ColumnValue>],
+) -> Option<(Vec<String>, Vec<Vec<Option<String>>>)> {
+    if primary_keys.is_empty() || primary_keys.iter().any(|pk| pk.is_empty()) {
+        return None;
+    }
+    let columns = primary_keys[0].iter().map(|c| c.column.clone()).collect();
+    let values = primary_keys
+        .iter()
+        .map(|pk| pk.iter().map(|c| c.value.clone()).collect())
+        .collect();
+    Some((columns, values))
+}
+
+/// Builds `(col1, col2) IN ((v1a,v1b), (v2a,v2b), ...)`, handling single- and
+/// multi-column keys uniformly. Values are inlined via [`quote_literal`]
+/// (matching how `delete_row`/`update_row` already build their WHERE
+/// clauses) rather than bound as query parameters — the sample/discovery
+/// queries this feeds into run over `simple_query`, which returns every
+/// value already as text and doesn't support parameter placeholders at all.
+fn build_row_value_in(columns: &[String], key_sets: &[Vec<Option<String>>]) -> String {
+    let col_list = columns.iter().map(|c| quote_ident(c)).collect::<Vec<_>>().join(", ");
+    let tuples: Vec<String> = key_sets
+        .iter()
+        .map(|row| {
+            let vals: Vec<String> = row
+                .iter()
+                .map(|v| match v {
+                    Some(s) => quote_literal(s),
+                    // A primary-key value is never actually NULL (PK columns
+                    // are NOT NULL by definition) — handled anyway so this
+                    // never silently mis-renders if that ever changes.
+                    None => "NULL".to_string(),
+                })
+                .collect();
+            format!("({})", vals.join(", "))
+        })
+        .collect();
+    format!("({}) IN ({})", col_list, tuples.join(", "))
+}
+
+/// Reorders `values` (tuples matching `key_columns`'s order) to match
+/// `target_order` instead. Returns `None` if `target_order` isn't exactly
+/// the same *set* of columns as `key_columns` — meaning a FK references some
+/// other unique constraint, not the key currently being walked — out of
+/// scope per this module's doc comment, so the caller skips it rather than
+/// matching it incorrectly.
+fn reorder_values_for(
+    key_columns: &[String],
+    target_order: &[String],
+    values: &[Vec<Option<String>>],
+) -> Option<Vec<Vec<Option<String>>>> {
+    if key_columns.len() != target_order.len() {
+        return None;
+    }
+    let mut positions = Vec::with_capacity(target_order.len());
+    for col in target_order {
+        positions.push(key_columns.iter().position(|c| c == col)?);
+    }
+    Some(
+        values
+            .iter()
+            .map(|row| positions.iter().map(|&p| row[p].clone()).collect())
+            .collect(),
+    )
+}
+
+/// Runs `sql` over `simple_query` and returns the first row's first column
+/// as an integer, defaulting to 0 — used for `count(*)` queries, which
+/// always return exactly one row.
+async fn simple_query_scalar_count(client: &Client, sql: &str) -> Result<i64, DbError> {
+    let messages = client.simple_query(sql).await.map_err(map_query_err)?;
+    for message in messages {
+        if let SimpleQueryMessage::Row(row) = message {
+            return Ok(row.get(0).and_then(|s| s.parse().ok()).unwrap_or(0));
+        }
+    }
+    Ok(0)
+}
+
+/// Runs `sql` over `simple_query` and collects its column names and rows —
+/// the same parsing shape `run_query` already uses, factored out so the
+/// delete-impact walk can reuse it.
+async fn simple_query_rows(
+    client: &Client,
+    sql: &str,
+) -> Result<(Vec<String>, Vec<Vec<Option<String>>>), DbError> {
+    let messages = client.simple_query(sql).await.map_err(map_query_err)?;
+    let mut columns: Vec<String> = Vec::new();
+    let mut rows: Vec<Vec<Option<String>>> = Vec::new();
+    for message in messages {
+        match message {
+            SimpleQueryMessage::RowDescription(cols) => {
+                columns = cols.iter().map(|c| c.name().to_string()).collect();
+            }
+            SimpleQueryMessage::Row(row) => {
+                let values = (0..row.len()).map(|i| row.get(i).map(|v| v.to_string())).collect();
+                rows.push(values);
+            }
+            _ => {}
+        }
+    }
+    Ok((columns, rows))
+}
+
+/// Read-only preview: walks the FK graph breadth-first, fetching a small
+/// sample plus a true count at each dependent table, and assembles the
+/// result into the nested tree the frontend renders. The graph walk itself
+/// is iterative (a work queue, not recursion) specifically so it can `.await`
+/// freely without hitting Rust's "recursive async fn" sizing problem; once
+/// all the I/O is done, the flat node list is assembled into a tree via
+/// ordinary *synchronous* recursion (line at the bottom), which has no such
+/// restriction.
+async fn compute_delete_impact(
+    client: &Client,
+    schema: &str,
+    table: &str,
+    pk_columns: &[String],
+    pk_values: &[Vec<Option<String>>],
+) -> Result<DeleteImpact, DbError> {
+    struct Node {
+        parent: Option<usize>,
+        preview: DependentRowsPreview,
+    }
+    let mut nodes: Vec<Node> = Vec::new();
+    let mut queue: VecDeque<(Option<usize>, String, String, Vec<String>, Vec<Vec<Option<String>>>, usize)> =
+        VecDeque::new();
+    queue.push_back((None, schema.to_string(), table.to_string(), pk_columns.to_vec(), pk_values.to_vec(), 0));
+
+    let mut budget: i64 = MAX_TOTAL_ROWS;
+    let mut incomplete = false;
+
+    while let Some((parent, cur_schema, cur_table, cur_pk_cols, cur_pk_vals, depth)) = queue.pop_front() {
+        if cur_pk_vals.is_empty() || cur_pk_cols.is_empty() {
+            continue;
+        }
+        if depth >= MAX_DEPTH {
+            incomplete = true;
+            continue;
+        }
+
+        for fk in constraints_referencing(client, &cur_schema, &cur_table).await? {
+            if budget <= 0 {
+                incomplete = true;
+                break;
+            }
+            let Some(reordered) = reorder_values_for(&cur_pk_cols, &fk.ref_columns, &cur_pk_vals) else {
+                continue;
+            };
+            let in_clause = build_row_value_in(&fk.dep_columns, &reordered);
+
+            let count_sql = format!(
+                "SELECT count(*) FROM {}.{} WHERE {}",
+                quote_ident(&fk.dep_schema),
+                quote_ident(&fk.dep_table),
+                in_clause
+            );
+            let total_count = simple_query_scalar_count(client, &count_sql).await?;
+            if total_count == 0 {
+                continue;
+            }
+
+            let sample_sql = format!(
+                "SELECT * FROM {}.{} WHERE {} LIMIT {SAMPLE_LIMIT}",
+                quote_ident(&fk.dep_schema),
+                quote_ident(&fk.dep_table),
+                in_clause
+            );
+            let (columns, sample_rows) = simple_query_rows(client, &sample_sql).await?;
+            let truncated = total_count > sample_rows.len() as i64;
+            if truncated {
+                // The unsampled remainder's own dependents are never
+                // explored, so anything below this node is an
+                // approximation — reflected honestly rather than hidden.
+                incomplete = true;
+            }
+            budget -= sample_rows.len() as i64;
+
+            let node_idx = nodes.len();
+            nodes.push(Node {
+                parent,
+                preview: DependentRowsPreview {
+                    schema: fk.dep_schema.clone(),
+                    table: fk.dep_table.clone(),
+                    fk_constraint: fk.constraint_name,
+                    columns: columns.clone(),
+                    sample_rows: sample_rows.clone(),
+                    total_count,
+                    truncated,
+                    children: Vec::new(), // filled in once the tree is assembled below
+                },
+            });
+
+            let dep_pk = table_primary_key_columns(client, &fk.dep_schema, &fk.dep_table).await?;
+            if dep_pk.is_empty() {
+                continue; // no usable key to recurse with — this branch ends here
+            }
+            let Some(positions) = dep_pk
+                .iter()
+                .map(|c| columns.iter().position(|x| x == c))
+                .collect::<Option<Vec<_>>>()
+            else {
+                continue;
+            };
+            let next_values: Vec<Vec<Option<String>>> = sample_rows
+                .iter()
+                .map(|row| positions.iter().map(|&p| row[p].clone()).collect())
+                .collect();
+            queue.push_back((Some(node_idx), fk.dep_schema, fk.dep_table, dep_pk, next_values, depth + 1));
+        }
+    }
+
+    fn build_children(nodes: &[Node], parent_idx: Option<usize>) -> Vec<DependentRowsPreview> {
+        nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| n.parent == parent_idx)
+            .map(|(i, n)| {
+                let mut preview = n.preview.clone();
+                preview.children = build_children(nodes, Some(i));
+                preview
+            })
+            .collect()
+    }
+
+    Ok(DeleteImpact { dependents: build_children(&nodes, None), incomplete })
+}
+
+/// One step of an actual cascade delete: every row in `schema.table` whose
+/// `delete_columns` match one of `delete_values` will be deleted.
+struct CascadeStep {
+    schema: String,
+    table: String,
+    delete_columns: Vec<String>,
+    delete_values: Vec<Vec<Option<String>>>,
+}
+
+/// Full (unsampled) discovery pass for an actual cascade delete — same graph
+/// walk as [`compute_delete_impact`], but fetching every matching row's
+/// primary key rather than a capped sample, since a real delete can't skip
+/// rows just because a preview would have. Still bounded by the same
+/// `MAX_DEPTH`/`MAX_TOTAL_ROWS`, but here that means refusing outright
+/// (returning an error, before any `DELETE` is issued) rather than marking
+/// the result `incomplete` — a cascade delete either fully accounts for
+/// everything it's about to remove, or it doesn't run at all.
+async fn discover_full_cascade(
+    client: &Client,
+    schema: &str,
+    table: &str,
+    pk_columns: &[String],
+    pk_values: &[Vec<Option<String>>],
+) -> Result<Vec<CascadeStep>, DbError> {
+    let mut steps: Vec<CascadeStep> = Vec::new();
+    let mut queue: VecDeque<(String, String, Vec<String>, Vec<Vec<Option<String>>>, usize)> = VecDeque::new();
+    queue.push_back((schema.to_string(), table.to_string(), pk_columns.to_vec(), pk_values.to_vec(), 0));
+
+    let mut budget: i64 = MAX_TOTAL_ROWS;
+
+    while let Some((cur_schema, cur_table, cur_pk_cols, cur_pk_vals, depth)) = queue.pop_front() {
+        if cur_pk_vals.is_empty() || cur_pk_cols.is_empty() {
+            continue;
+        }
+        if depth >= MAX_DEPTH {
+            return Err(DbError::new(
+                DbErrorKind::Internal,
+                format!(
+                    "This delete cascades deeper than {MAX_DEPTH} levels — refusing for safety. \
+                     Delete the deepest related rows manually first, then try again."
+                ),
+            ));
+        }
+
+        for fk in constraints_referencing(client, &cur_schema, &cur_table).await? {
+            let Some(reordered) = reorder_values_for(&cur_pk_cols, &fk.ref_columns, &cur_pk_vals) else {
+                continue;
+            };
+            let in_clause = build_row_value_in(&fk.dep_columns, &reordered);
+
+            let dep_pk = table_primary_key_columns(client, &fk.dep_schema, &fk.dep_table).await?;
+            let select_cols = if dep_pk.is_empty() { fk.dep_columns.clone() } else { dep_pk.clone() };
+            let select_list = select_cols.iter().map(|c| quote_ident(c)).collect::<Vec<_>>().join(", ");
+            let sql = format!(
+                "SELECT {} FROM {}.{} WHERE {}",
+                select_list,
+                quote_ident(&fk.dep_schema),
+                quote_ident(&fk.dep_table),
+                in_clause
+            );
+            let (_, rows) = simple_query_rows(client, &sql).await?;
+            if rows.is_empty() {
+                continue;
+            }
+
+            budget -= rows.len() as i64;
+            if budget < 0 {
+                return Err(DbError::new(
+                    DbErrorKind::Internal,
+                    format!(
+                        "This delete would cascade to more than {MAX_TOTAL_ROWS} rows — refusing \
+                         for safety. Narrow the selection or delete related rows manually first."
+                    ),
+                ));
+            }
+
+            steps.push(CascadeStep {
+                schema: fk.dep_schema.clone(),
+                table: fk.dep_table.clone(),
+                delete_columns: fk.dep_columns,
+                delete_values: reordered,
+            });
+
+            if !dep_pk.is_empty() {
+                queue.push_back((fk.dep_schema, fk.dep_table, dep_pk, rows, depth + 1));
+            }
+        }
+    }
+
+    Ok(steps)
+}
+
+/// Runs the discovery pass and issues the actual `DELETE`s, deepest
+/// dependents first and the requested rows last, so nothing is ever
+/// half-cascaded. Assumes a transaction is already open on `client` (see
+/// [`DbSession::delete_row_cascade`]) — this function itself never commits
+/// or rolls back.
+async fn delete_cascade_within_transaction(
+    client: &Client,
+    schema: &str,
+    table: &str,
+    pk_columns: &[String],
+    pk_values: &[Vec<Option<String>>],
+) -> Result<u64, DbError> {
+    let steps = discover_full_cascade(client, schema, table, pk_columns, pk_values).await?;
+
+    let mut total: u64 = 0;
+    for step in steps.iter().rev() {
+        let in_clause = build_row_value_in(&step.delete_columns, &step.delete_values);
+        let sql = format!(
+            "DELETE FROM {}.{} WHERE {}",
+            quote_ident(&step.schema),
+            quote_ident(&step.table),
+            in_clause
+        );
+        total += client.execute(&sql, &[]).await.map_err(map_query_err)?;
+    }
+
+    let root_clause = build_row_value_in(pk_columns, pk_values);
+    let root_sql = format!("DELETE FROM {}.{} WHERE {}", quote_ident(schema), quote_ident(table), root_clause);
+    total += client.execute(&root_sql, &[]).await.map_err(map_query_err)?;
+
+    Ok(total)
 }
 
 /// Map a connection-time Postgres error, preserving SQLSTATE when present.
@@ -1046,6 +1555,63 @@ mod tests {
     fn quotes_identifiers() {
         assert_eq!(quote_ident("public"), "\"public\"");
         assert_eq!(quote_ident("we\"ird"), "\"we\"\"ird\"");
+    }
+
+    #[test]
+    fn row_value_in_single_column() {
+        let cols = vec!["id".to_string()];
+        let sets = vec![vec![Some("1".to_string())], vec![Some("2".to_string())]];
+        assert_eq!(build_row_value_in(&cols, &sets), "(\"id\") IN (('1'), ('2'))");
+    }
+
+    #[test]
+    fn row_value_in_composite_and_null() {
+        let cols = vec!["a".to_string(), "b".to_string()];
+        let sets = vec![vec![Some("1".to_string()), None]];
+        assert_eq!(build_row_value_in(&cols, &sets), "(\"a\", \"b\") IN (('1', NULL))");
+    }
+
+    #[test]
+    fn row_value_in_escapes_literals() {
+        let cols = vec!["name".to_string()];
+        let sets = vec![vec![Some("O'Brien".to_string())]];
+        assert_eq!(build_row_value_in(&cols, &sets), "(\"name\") IN (('O''Brien'))");
+    }
+
+    #[test]
+    fn reorder_matches_permuted_columns() {
+        let key_columns = vec!["a".to_string(), "b".to_string()];
+        let target_order = vec!["b".to_string(), "a".to_string()];
+        let values = vec![vec![Some("1".to_string()), Some("2".to_string())]];
+        let reordered = reorder_values_for(&key_columns, &target_order, &values).unwrap();
+        assert_eq!(reordered, vec![vec![Some("2".to_string()), Some("1".to_string())]]);
+    }
+
+    #[test]
+    fn reorder_rejects_mismatched_column_sets() {
+        // A FK referencing some other unique constraint, not this level's
+        // primary key — out of scope, so this must return `None` rather than
+        // matching the wrong columns.
+        let key_columns = vec!["id".to_string()];
+        let target_order = vec!["email".to_string()];
+        let values = vec![vec![Some("1".to_string())]];
+        assert!(reorder_values_for(&key_columns, &target_order, &values).is_none());
+    }
+
+    #[test]
+    fn flatten_primary_keys_rejects_any_empty_row() {
+        let one_ok = vec![ColumnValue { column: "id".to_string(), value: Some("1".to_string()) }];
+        let empty: Vec<ColumnValue> = Vec::new();
+        assert!(flatten_primary_keys(&[one_ok, empty]).is_none());
+    }
+
+    #[test]
+    fn flatten_primary_keys_collects_columns_and_values() {
+        let row1 = vec![ColumnValue { column: "id".to_string(), value: Some("1".to_string()) }];
+        let row2 = vec![ColumnValue { column: "id".to_string(), value: Some("2".to_string()) }];
+        let (columns, values) = flatten_primary_keys(&[row1, row2]).unwrap();
+        assert_eq!(columns, vec!["id".to_string()]);
+        assert_eq!(values, vec![vec![Some("1".to_string())], vec![Some("2".to_string())]]);
     }
 
     /// Live end-to-end smoke test against a real Postgres. Ignored by default;
@@ -1477,5 +2043,121 @@ mod tests {
             .run_query("DROP TABLE cubbydb_structure_test")
             .await
             .expect("clean up structure table");
+    }
+
+    /// Live end-to-end test for the delete-impact preview and cascade
+    /// delete against a real Postgres, using a genuine two-level FK chain
+    /// (`customers` -> `orders` -> `order_items`) — exactly the shape this
+    /// feature exists for. Ignored by default; same setup as `live_smoke`.
+    #[tokio::test]
+    #[ignore = "requires a running Postgres (set CUBBYDB_TEST_DSN)"]
+    async fn live_delete_cascade() {
+        use super::super::{ConnectionParams, ColumnValue, DatabaseDriver};
+
+        let Ok(dsn) = std::env::var("CUBBYDB_TEST_DSN") else {
+            eprintln!("CUBBYDB_TEST_DSN not set; skipping");
+            return;
+        };
+
+        let driver = PostgresDriver::new();
+        let params = ConnectionParams {
+            connection_string: Some(dsn),
+            ..Default::default()
+        };
+        let session = driver.connect(&params).await.expect("connect");
+
+        for stmt in [
+            "DROP TABLE IF EXISTS cubbydb_cascade_items",
+            "DROP TABLE IF EXISTS cubbydb_cascade_orders",
+            "DROP TABLE IF EXISTS cubbydb_cascade_customers",
+        ] {
+            session.run_query(stmt).await.expect("drop leftover cascade tables");
+        }
+        session
+            .run_query("CREATE TABLE cubbydb_cascade_customers (id serial PRIMARY KEY, name text)")
+            .await
+            .expect("create customers");
+        session
+            .run_query(
+                "CREATE TABLE cubbydb_cascade_orders (
+                    id serial PRIMARY KEY,
+                    customer_id int NOT NULL REFERENCES cubbydb_cascade_customers(id)
+                )",
+            )
+            .await
+            .expect("create orders");
+        session
+            .run_query(
+                "CREATE TABLE cubbydb_cascade_items (
+                    id serial PRIMARY KEY,
+                    order_id int NOT NULL REFERENCES cubbydb_cascade_orders(id)
+                )",
+            )
+            .await
+            .expect("create order_items");
+
+        session
+            .run_query("INSERT INTO cubbydb_cascade_customers (id, name) VALUES (1, 'Alice')")
+            .await
+            .expect("insert customer");
+        session
+            .run_query("INSERT INTO cubbydb_cascade_orders (id, customer_id) VALUES (10, 1), (11, 1)")
+            .await
+            .expect("insert orders");
+        session
+            .run_query(
+                "INSERT INTO cubbydb_cascade_items (id, order_id) VALUES (100, 10), (101, 10), (102, 11)",
+            )
+            .await
+            .expect("insert items");
+
+        // Deleting the customer directly should fail today, same as before
+        // this feature existed — confirms the scenario is real.
+        let direct = session
+            .delete_row(
+                "public",
+                "cubbydb_cascade_customers",
+                &[ColumnValue { column: "id".to_string(), value: Some("1".to_string()) }],
+            )
+            .await;
+        assert!(direct.is_err(), "deleting a row with dependents should still fail without cascading");
+
+        let pk = vec![vec![ColumnValue { column: "id".to_string(), value: Some("1".to_string()) }]];
+        let impact = session
+            .delete_impact("public", "cubbydb_cascade_customers", &pk)
+            .await
+            .expect("delete_impact");
+        eprintln!("{impact:#?}");
+
+        assert!(!impact.incomplete);
+        assert_eq!(impact.dependents.len(), 1, "one directly-dependent table: orders");
+        let orders = &impact.dependents[0];
+        assert_eq!(orders.table, "cubbydb_cascade_orders");
+        assert_eq!(orders.total_count, 2);
+        assert!(!orders.truncated);
+        assert_eq!(orders.children.len(), 1, "one further-dependent table: order_items");
+        let items = &orders.children[0];
+        assert_eq!(items.table, "cubbydb_cascade_items");
+        assert_eq!(items.total_count, 3);
+
+        let deleted = session
+            .delete_row_cascade("public", "cubbydb_cascade_customers", &pk)
+            .await
+            .expect("delete_row_cascade");
+        assert_eq!(deleted, 1 + 2 + 3, "1 customer + 2 orders + 3 items");
+
+        let remaining = session
+            .run_query("SELECT count(*) FROM cubbydb_cascade_items")
+            .await
+            .expect("count remaining items");
+        assert_eq!(remaining.rows[0][0].as_deref(), Some("0"));
+
+        for stmt in [
+            "DROP TABLE cubbydb_cascade_items",
+            "DROP TABLE cubbydb_cascade_orders",
+            "DROP TABLE cubbydb_cascade_customers",
+        ] {
+            session.run_query(stmt).await.expect("clean up cascade tables");
+        }
     }
 }

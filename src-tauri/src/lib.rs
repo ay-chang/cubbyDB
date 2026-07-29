@@ -48,6 +48,8 @@ pub fn run() {
             commands::update_row,
             commands::insert_row,
             commands::delete_row,
+            commands::get_delete_impact,
+            commands::delete_rows_cascade,
             commands::get_table_structure,
             commands::get_function_definition,
             commands::get_sequence_details,

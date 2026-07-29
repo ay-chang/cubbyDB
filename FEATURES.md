@@ -249,6 +249,19 @@ code comments or AGENTS.md's architecture section.
 - **Remove row(s)**: deletes one or more selected existing rows (a single
   confirmation covers a multi-row selection) via a primary-key-scoped
   `DELETE`
+- **Cascading delete preview**: if other rows reference the one(s) you're
+  deleting via a foreign key, deleting shows exactly what else would go
+  instead of just failing with a raw constraint error — every dependent row,
+  grouped by table, walked transitively (dependents of dependents, e.g.
+  deleting a customer also shows their orders *and* those orders' line
+  items) — the same pattern Django's admin panel uses for this. Confirming
+  deletes everything shown in one transaction: fully atomic, and either it
+  all goes or none of it does. Capped at 5 levels deep / 500 total rows for
+  safety — if a delete would exceed that, it's refused outright rather than
+  run partially, with a message explaining why. Only handles foreign keys
+  that reference a table's primary key (the overwhelming majority in
+  practice); one that references some other unique constraint falls back to
+  today's plain "delete this row?" confirmation
 - **Import CSV**: "⇪ Import CSV" in a table tab's toolbar parses a CSV file
   client-side and adds its rows as draft rows — the exact same flow as Add
   row / paste, so nothing is inserted until you review them and hit Update.

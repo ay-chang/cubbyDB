@@ -106,6 +106,89 @@
   gap: 10px;
 }
 
+/* --- Delete-impact dialog (cascading delete confirm) --- */
+.delete-impact-card {
+  width: 480px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 22px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-card);
+  box-shadow: 0 24px 60px -16px rgba(20, 24, 40, 0.4);
+}
+.delete-impact-card__head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.delete-impact-card__title {
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--text);
+}
+.delete-impact-card__subtitle {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.delete-impact-card__list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 2px;
+}
+.delete-impact-card__warning {
+  font-size: 11.5px;
+  color: var(--amber);
+  line-height: 1.4;
+}
+.delete-impact-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  padding: 8px 10px;
+}
+.delete-impact-group + .delete-impact-group,
+.delete-impact-group__sample + .delete-impact-group {
+  margin-top: 8px;
+}
+.delete-impact-group__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.delete-impact-group__table {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text);
+}
+.delete-impact-group__count {
+  font-size: 11px;
+  color: var(--text-faint);
+  flex: none;
+}
+.delete-impact-group__sample {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-faint);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.delete-impact-group__row {
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* --- Settings modal --- */
 .settings-overlay {
   position: fixed;

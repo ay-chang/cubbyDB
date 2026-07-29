@@ -15,6 +15,7 @@ import type {
   ColumnValue,
   ConnectionParams,
   DbError,
+  DeleteImpact,
   HistoryEntry,
   LastConnection,
   QueryResult,
@@ -507,6 +508,20 @@ interface ConfirmDialogState {
   onCancel: () => void;
 }
 
+/** Shown instead of the plain `ConfirmDialogState` when a delete would
+ *  cascade into other tables — same "decision, not an error, worth
+ *  blocking on" precedent, just with a structured impact to render rather
+ *  than a single message string. */
+interface DeleteImpactDialogState {
+  impact: DeleteImpact;
+  /** How many rows were directly requested to be deleted (before cascading) —
+   *  carried alongside `impact` so the dialog can say "deleting N rows will
+   *  also delete M related rows" instead of just the dependent count. */
+  rootCount: number;
+  onConfirm: () => void;
+  onCancel: () => void;
+}
+
 interface AppStore {
   view: View;
   /** True while attempting to auto-reconnect on launch. */
@@ -541,6 +556,9 @@ interface AppStore {
 
   /** When set, a "leave without saving?" confirmation is shown. */
   confirmDialog: ConfirmDialogState | null;
+  /** When set, the delete-impact dialog is shown instead of the plain
+   *  `confirmDialog` — a delete that would cascade into other tables. */
+  deleteImpactDialog: DeleteImpactDialogState | null;
 
   /** Active color theme, applied to the document root. */
   theme: Theme;
@@ -1339,6 +1357,28 @@ function mapSlotTabs(
   return patchSlot(connections, connectionId, (slot) => ({ tabs: mapper(slot.tabs) }));
 }
 
+/** Removes `rowIndices` from a table tab's result set, re-indexing any
+ *  pending edits around the gaps they leave — shared by the plain
+ *  one-row-at-a-time delete path and the atomic cascade-delete path. */
+function removeRowsFromTab(t: QueryTab, rowIndices: number[]): QueryTab {
+  if (!t.result || rowIndices.length === 0) return t;
+  const removed = new Set(rowIndices);
+  const rows = t.result.rows.filter((_, i) => !removed.has(i));
+  const pendingEdits: Record<number, Record<number, string | null>> = {};
+  for (const [k, v] of Object.entries(t.pendingEdits ?? {})) {
+    const ri = Number(k);
+    if (removed.has(ri)) continue;
+    const shift = rowIndices.filter((r) => r < ri).length;
+    pendingEdits[ri - shift] = v;
+  }
+  return {
+    ...t,
+    result: { ...t.result, rows, rowCount: Math.max(0, t.result.rowCount - rowIndices.length) },
+    pendingEdits,
+    updateError: null,
+  };
+}
+
 /** Persist just enough to restore the open tabs (not their results). */
 function persistTabs(tabs: QueryTab[], activeTabId: string | null) {
   try {
@@ -1416,6 +1456,143 @@ export const useStore = create<AppStore>((set, get) => {
     });
   }
 
+  /** Same shape as `requestConfirm`, but for a delete that would cascade
+   *  into other tables — shows the structured `DeleteImpactDialog` instead
+   *  of a plain message. */
+  function requestDeleteImpactConfirm(impact: DeleteImpact, rootCount: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      set({
+        deleteImpactDialog: {
+          impact,
+          rootCount,
+          onConfirm: () => {
+            set({ deleteImpactDialog: null });
+            resolve(true);
+          },
+          onCancel: () => {
+            set({ deleteImpactDialog: null });
+            resolve(false);
+          },
+        },
+      });
+    });
+  }
+
+  /**
+   * Shared by `deleteExistingRow`/`deleteExistingRows`: resolves each row's
+   * primary key, previews the delete's impact, confirms (plain or
+   * impact-aware, depending on what the preview found), then actually
+   * deletes.
+   *
+   * The two resulting paths differ deliberately: a plain delete (no known
+   * dependents) still goes one row at a time, reflecting each success in
+   * the grid immediately — so a mid-loop failure leaves whatever was
+   * already deleted removed from view too, matching the database. A
+   * cascade delete is one backend transaction (all-or-nothing), so local
+   * state only needs updating once, on success.
+   */
+  async function performRowDeletion(
+    connectionId: string,
+    tabId: string,
+    sessionId: string,
+    schema: string,
+    table: string,
+    pkCols: string[],
+    rowIndices: number[],
+  ): Promise<void> {
+    const fresh = get().connections[connectionId]?.tabs.find((t) => t.id === tabId);
+    if (!fresh?.result) return;
+
+    const resolvedIndices: number[] = [];
+    const primaryKeys: ColumnValue[][] = [];
+    for (const rowIndex of rowIndices) {
+      const row = fresh.result.rows[rowIndex];
+      if (!row) continue;
+      resolvedIndices.push(rowIndex);
+      primaryKeys.push(
+        pkCols.map((pkCol) => {
+          const ci = fresh.result!.columns.findIndex((c) => c.name === pkCol);
+          return { column: pkCol, value: row[ci] ?? null };
+        }),
+      );
+    }
+    if (primaryKeys.length === 0) return;
+
+    let impact: DeleteImpact;
+    try {
+      impact = await api.getDeleteImpact(sessionId, schema, table, primaryKeys);
+    } catch {
+      // Preview failed (e.g. a transient hiccup) — fall back to the plain
+      // confirm rather than blocking the delete outright; a real FK
+      // violation still surfaces normally from the delete itself if there
+      // turns out to be one.
+      impact = { dependents: [], incomplete: false };
+    }
+
+    const n = resolvedIndices.length;
+    const hasImpact = impact.dependents.length > 0;
+    const ok = hasImpact
+      ? await requestDeleteImpactConfirm(impact, n)
+      : await requestConfirm(
+          n === 1
+            ? "Delete this row? This permanently removes it from the database."
+            : `Delete ${n} rows? This permanently removes them from the database.`,
+          "Delete",
+        );
+    if (!ok) return;
+
+    const toDbError = (err: unknown): DbError =>
+      isDbError(err)
+        ? err
+        : { message: errorMessage(err), code: null, hint: null, position: null, kind: "internal" };
+    const setError = (dbError: DbError) => {
+      set((s) => ({
+        connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+          tabs.map((t) => (t.id === tabId ? { ...t, updateError: dbError } : t)),
+        ),
+      }));
+    };
+
+    if (hasImpact) {
+      try {
+        await api.deleteRowsCascade(sessionId, schema, table, primaryKeys);
+        set((s) => ({
+          connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+            tabs.map((t) => (t.id === tabId ? removeRowsFromTab(t, resolvedIndices) : t)),
+          ),
+        }));
+      } catch (err) {
+        setError(toDbError(err));
+      }
+      return;
+    }
+
+    // Highest index first, so removing one doesn't shift the indices of
+    // rows not yet handled; re-resolve each row fresh right before
+    // deleting it, since an earlier iteration may have changed the tab.
+    const sorted = [...resolvedIndices].sort((a, b) => b - a);
+    for (const rowIndex of sorted) {
+      const current = get().connections[connectionId]?.tabs.find((t) => t.id === tabId);
+      const row = current?.result?.rows[rowIndex];
+      if (!current?.result || !row) continue;
+      const primaryKey = pkCols.map((pkCol) => {
+        const ci = current.result!.columns.findIndex((c) => c.name === pkCol);
+        return { column: pkCol, value: row[ci] ?? null };
+      });
+      try {
+        await api.deleteRow(sessionId, schema, table, primaryKey);
+        set((s) => ({
+          connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+            tabs.map((t) => (t.id === tabId ? removeRowsFromTab(t, [rowIndex]) : t)),
+          ),
+        }));
+      } catch (err) {
+        setError(toDbError(err));
+        return;
+      }
+    }
+  }
+
   /**
    * Change a connection's active tab, first confirming if its current tab
    * has unsaved cell edits. Returns whether the switch actually happened.
@@ -1463,6 +1640,7 @@ export const useStore = create<AppStore>((set, get) => {
     commandPaletteOpen: false,
     pendingColumnHighlight: null,
     confirmDialog: null,
+    deleteImpactDialog: null,
     theme: loadTheme(),
     accentColor: loadAccentColor(),
     tableFont: loadTableFont(),
@@ -2354,55 +2532,15 @@ export const useStore = create<AppStore>((set, get) => {
       const pkCols = schemaTable?.columns.filter((c) => c.isPrimaryKey).map((c) => c.name) ?? [];
       if (pkCols.length === 0) return; // deletion is gated on a detected primary key
 
-      const ok = await requestConfirm(
-        "Delete this row? This permanently removes it from the database.",
-        "Delete",
+      await performRowDeletion(
+        connectionId,
+        tabId,
+        slot.sessionId,
+        tab.source.schema,
+        tab.source.table,
+        pkCols,
+        [rowIndex],
       );
-      if (!ok) return;
-
-      // Re-resolve the row after the async confirm (it may have shifted).
-      const fresh = get().connections[connectionId]?.tabs.find((t) => t.id === tabId);
-      const row = fresh?.result?.rows[rowIndex];
-      if (!fresh || !fresh.result || !row) return;
-
-      const primaryKey: ColumnValue[] = pkCols.map((pkCol) => {
-        const ci = fresh.result!.columns.findIndex((c) => c.name === pkCol);
-        return { column: pkCol, value: row[ci] ?? null };
-      });
-
-      try {
-        await api.deleteRow(slot.sessionId, tab.source.schema, tab.source.table, primaryKey);
-        set((s) => ({
-          connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
-            tabs.map((t) => {
-              if (t.id !== tabId || !t.result) return t;
-              const rows = t.result.rows.filter((_, i) => i !== rowIndex);
-              // Re-index pending edits around the removed row.
-              const pendingEdits: Record<number, Record<number, string | null>> = {};
-              for (const [k, v] of Object.entries(t.pendingEdits ?? {})) {
-                const ri = Number(k);
-                if (ri === rowIndex) continue;
-                pendingEdits[ri > rowIndex ? ri - 1 : ri] = v;
-              }
-              return {
-                ...t,
-                result: { ...t.result, rows, rowCount: Math.max(0, t.result.rowCount - 1) },
-                pendingEdits,
-                updateError: null,
-              };
-            }),
-          ),
-        }));
-      } catch (err) {
-        const dbError: DbError = isDbError(err)
-          ? err
-          : { message: errorMessage(err), code: null, hint: null, position: null, kind: "internal" };
-        set((s) => ({
-          connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
-            tabs.map((t) => (t.id === tabId ? { ...t, updateError: dbError } : t)),
-          ),
-        }));
-      }
     },
 
     async deleteExistingRows(tabId, rowIndices) {
@@ -2417,63 +2555,15 @@ export const useStore = create<AppStore>((set, get) => {
       const pkCols = schemaTable?.columns.filter((c) => c.isPrimaryKey).map((c) => c.name) ?? [];
       if (pkCols.length === 0) return;
 
-      const n = rowIndices.length;
-      const ok = await requestConfirm(
-        n === 1
-          ? "Delete this row? This permanently removes it from the database."
-          : `Delete ${n} rows? This permanently removes them from the database.`,
-        "Delete",
+      await performRowDeletion(
+        connectionId,
+        tabId,
+        slot.sessionId,
+        tab.source.schema,
+        tab.source.table,
+        pkCols,
+        [...new Set(rowIndices)],
       );
-      if (!ok) return;
-
-      // Delete from the highest index down so each removal doesn't shift the
-      // indices of rows we haven't handled yet. Stop at the first failure and
-      // surface it (rows already deleted stay deleted).
-      const sorted = [...new Set(rowIndices)].sort((a, b) => b - a);
-      for (const rowIndex of sorted) {
-        const fresh = get().connections[connectionId]?.tabs.find((t) => t.id === tabId);
-        const row = fresh?.result?.rows[rowIndex];
-        if (!fresh || !fresh.result || !row) continue;
-
-        const primaryKey: ColumnValue[] = pkCols.map((pkCol) => {
-          const ci = fresh.result!.columns.findIndex((c) => c.name === pkCol);
-          return { column: pkCol, value: row[ci] ?? null };
-        });
-
-        try {
-          await api.deleteRow(slot.sessionId, tab.source.schema, tab.source.table, primaryKey);
-          set((s) => ({
-            connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
-              tabs.map((t) => {
-                if (t.id !== tabId || !t.result) return t;
-                const rows = t.result.rows.filter((_, i) => i !== rowIndex);
-                const pendingEdits: Record<number, Record<number, string | null>> = {};
-                for (const [k, v] of Object.entries(t.pendingEdits ?? {})) {
-                  const ri = Number(k);
-                  if (ri === rowIndex) continue;
-                  pendingEdits[ri > rowIndex ? ri - 1 : ri] = v;
-                }
-                return {
-                  ...t,
-                  result: { ...t.result, rows, rowCount: Math.max(0, t.result.rowCount - 1) },
-                  pendingEdits,
-                  updateError: null,
-                };
-              }),
-            ),
-          }));
-        } catch (err) {
-          const dbError: DbError = isDbError(err)
-            ? err
-            : { message: errorMessage(err), code: null, hint: null, position: null, kind: "internal" };
-          set((s) => ({
-            connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
-              tabs.map((t) => (t.id === tabId ? { ...t, updateError: dbError } : t)),
-            ),
-          }));
-          return;
-        }
-      }
     },
 
     overwriteRow(tabId, rowIndex, values, editableColIndices) {

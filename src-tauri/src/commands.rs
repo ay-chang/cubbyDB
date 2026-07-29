@@ -9,8 +9,8 @@ use tauri::State;
 
 use crate::connections::{LastConnection, SavedConnection};
 use crate::db::{
-    driver_for, ColumnValue, ConnectionInfo, ConnectionParams, DbError, DbErrorKind, Engine,
-    FunctionDefinition, QueryResult, SchemaNode, SequenceDetails, TableStructure,
+    driver_for, ColumnValue, ConnectionInfo, ConnectionParams, DbError, DbErrorKind, DeleteImpact,
+    Engine, FunctionDefinition, QueryResult, SchemaNode, SequenceDetails, TableStructure,
     DEFAULT_ROW_LIMIT,
 };
 use crate::history::{now_millis, HistoryEntry};
@@ -463,6 +463,62 @@ pub async fn delete_row(
         .ok_or_else(DbError::not_connected)?
         .session
         .delete_row(&schema, &table, &primary_key)
+        .await
+}
+
+/// Read-only preview of what deleting `primary_keys` would cascade into —
+/// every row in other tables that references one of them, walked
+/// transitively. Shown before a delete that would otherwise just fail with a
+/// raw FK-violation error.
+#[tauri::command]
+pub async fn get_delete_impact(
+    state: State<'_, AppState>,
+    session_id: String,
+    schema: String,
+    table: String,
+    primary_keys: Vec<Vec<ColumnValue>>,
+) -> Result<DeleteImpact, DbError> {
+    let mut active = state.active.lock().await;
+    {
+        let session = active.get(&session_id).ok_or_else(DbError::not_connected)?;
+        match session.session.delete_impact(&schema, &table, &primary_keys).await {
+            Err(e) if e.kind == DbErrorKind::Connection => { /* retry below */ }
+            other => return other,
+        }
+    }
+    reconnect_in_place(&mut active, &session_id, &state).await?;
+    active
+        .get(&session_id)
+        .ok_or_else(DbError::not_connected)?
+        .session
+        .delete_impact(&schema, &table, &primary_keys)
+        .await
+}
+
+/// Deletes `primary_keys` and everything `get_delete_impact` would report
+/// for them, in one transaction. Returns the total number of rows deleted.
+#[tauri::command]
+pub async fn delete_rows_cascade(
+    state: State<'_, AppState>,
+    session_id: String,
+    schema: String,
+    table: String,
+    primary_keys: Vec<Vec<ColumnValue>>,
+) -> Result<u64, DbError> {
+    let mut active = state.active.lock().await;
+    {
+        let session = active.get(&session_id).ok_or_else(DbError::not_connected)?;
+        match session.session.delete_row_cascade(&schema, &table, &primary_keys).await {
+            Err(e) if e.kind == DbErrorKind::Connection => { /* retry below */ }
+            other => return other,
+        }
+    }
+    reconnect_in_place(&mut active, &session_id, &state).await?;
+    active
+        .get(&session_id)
+        .ok_or_else(DbError::not_connected)?
+        .session
+        .delete_row_cascade(&schema, &table, &primary_keys)
         .await
 }
 

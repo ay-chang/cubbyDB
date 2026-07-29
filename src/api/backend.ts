@@ -14,6 +14,7 @@ import type {
   ConnectionInfo,
   ConnectionParams,
   DbError,
+  DeleteImpact,
   FunctionDefinition,
   HistoryEntry,
   LastConnection,
@@ -139,6 +140,27 @@ export function deleteRow(
   primaryKey: ColumnValue[],
 ): Promise<void> {
   return invoke("delete_row", { sessionId, schema, table, primaryKey });
+}
+
+/** Read-only preview of what deleting `primaryKeys` would cascade into. */
+export function getDeleteImpact(
+  sessionId: string,
+  schema: string,
+  table: string,
+  primaryKeys: ColumnValue[][],
+): Promise<DeleteImpact> {
+  return invoke("get_delete_impact", { sessionId, schema, table, primaryKeys });
+}
+
+/** Deletes `primaryKeys` and everything `getDeleteImpact` reported for them,
+ *  in one transaction. Resolves with the total number of rows deleted. */
+export function deleteRowsCascade(
+  sessionId: string,
+  schema: string,
+  table: string,
+  primaryKeys: ColumnValue[][],
+): Promise<number> {
+  return invoke("delete_rows_cascade", { sessionId, schema, table, primaryKeys });
 }
 
 /** Column, index, and check-constraint details for one table. */
