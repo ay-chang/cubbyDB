@@ -5,13 +5,19 @@
 //! themselves live in the OS keychain (`crate::keychain`), not in this file.
 //! `upsert`/`set` move whichever form of password a record has (a discrete
 //! `password` field, or one embedded in `connection_string`) into the
-//! keychain before writing, keyed by the record's own id; `list`/`get`
-//! rehydrate it back in-memory when read. A pre-existing plaintext record
-//! (saved before this migration) just keeps working as-is — nothing to
-//! rehydrate, since its password is still sitting in the JSON — until the
-//! next time it's saved, at which point it's moved to the keychain
+//! keychain before writing, keyed by the record's own id. A pre-existing
+//! plaintext record (saved before this migration) just keeps working as-is —
+//! nothing to rehydrate, since its password is still sitting in the JSON —
+//! until the next time it's saved, at which point it's moved to the keychain
 //! automatically. If the keychain is ever unavailable, the password is left
 //! in the JSON rather than lost.
+//!
+//! `list` deliberately does *not* rehydrate passwords — every OS keychain
+//! (macOS in particular) treats each lookup as its own access request,
+//! showing its own authorization prompt, so eagerly resolving every saved
+//! connection's password just to render a picker list turned "open the app"
+//! into a wall of back-to-back password prompts. Only `get` (one specific
+//! connection, right before actually connecting to it) rehydrates.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -53,26 +59,39 @@ impl ConnectionStore {
         }
     }
 
-    /// All saved connections, newest first. Missing file means an empty list.
+    /// Every saved connection's metadata, newest first — passwords are left
+    /// blank (see module docs); callers that need one for real, e.g. to
+    /// connect, should use `get`. Missing file means an empty list.
     pub fn list(&self) -> Result<Vec<SavedConnection>, DbError> {
+        let mut list = self.read_raw()?;
+        list.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        Ok(list)
+    }
+
+    /// One saved connection with its real password rehydrated from the
+    /// keychain — the only place in this store that touches the keychain for
+    /// a *saved* connection, and only for the one actually being used.
+    pub fn get(&self, id: &str) -> Result<Option<SavedConnection>, DbError> {
+        let list = self.read_raw()?;
+        Ok(list.into_iter().find(|c| c.id == id).map(|mut conn| {
+            rehydrate_password(&conn.id, &mut conn.params);
+            conn
+        }))
+    }
+
+    fn read_raw(&self) -> Result<Vec<SavedConnection>, DbError> {
         if !self.path.exists() {
             return Ok(Vec::new());
         }
         let bytes = fs::read(&self.path).map_err(io_err)?;
-        let mut list: Vec<SavedConnection> =
-            serde_json::from_slice(&bytes).map_err(|e| DbError::internal(e.to_string()))?;
-        for conn in &mut list {
-            rehydrate_password(&conn.id, &mut conn.params);
-        }
-        list.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-        Ok(list)
+        serde_json::from_slice(&bytes).map_err(|e| DbError::internal(e.to_string()))
     }
 
     /// Insert or update a connection by id, returning the stored record (with
     /// its real password intact — only the on-disk copy has it moved to the
     /// keychain).
     pub fn upsert(&self, mut conn: SavedConnection) -> Result<SavedConnection, DbError> {
-        let mut list = self.list()?;
+        let mut list = self.read_raw()?;
         if conn.id.is_empty() {
             conn.id = new_id();
             conn.created_at = now_millis();
@@ -92,7 +111,7 @@ impl ConnectionStore {
     }
 
     pub fn delete(&self, id: &str) -> Result<(), DbError> {
-        let mut list = self.list()?;
+        let mut list = self.read_raw()?;
         list.retain(|c| c.id != id);
         self.write(&list)?;
         keychain::delete_password(id);

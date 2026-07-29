@@ -30,6 +30,14 @@ export function listSavedConnections(): Promise<SavedConnection[]> {
   return invoke("list_saved_connections");
 }
 
+/** One saved connection with its real password rehydrated from the OS
+ *  keychain — call right before connecting to (or editing) a saved entry,
+ *  not for the picker list itself (`listSavedConnections` covers that
+ *  without triggering a keychain prompt per entry). */
+export function getSavedConnection(id: string): Promise<SavedConnection | null> {
+  return invoke("get_saved_connection", { id });
+}
+
 export function saveConnection(
   connection: SavedConnection,
 ): Promise<SavedConnection> {

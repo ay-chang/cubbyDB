@@ -31,6 +31,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_saved_connections,
+            commands::get_saved_connection,
             commands::save_connection,
             commands::delete_connection,
             commands::list_saved_queries,

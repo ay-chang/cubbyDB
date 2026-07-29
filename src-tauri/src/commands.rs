@@ -49,6 +49,18 @@ pub async fn list_saved_connections(
     state.connection_store().list()
 }
 
+/// One saved connection with its real password rehydrated from the keychain
+/// — call right before connecting to (or editing) a saved entry, not for
+/// populating the picker list (`list_saved_connections` already covers that,
+/// without the keychain prompt this would trigger).
+#[tauri::command]
+pub async fn get_saved_connection(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Option<SavedConnection>, DbError> {
+    state.connection_store().get(&id)
+}
+
 #[tauri::command]
 pub async fn save_connection(
     state: State<'_, AppState>,
