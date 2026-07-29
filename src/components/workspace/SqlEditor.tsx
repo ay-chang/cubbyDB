@@ -8,6 +8,7 @@ import { buildSqlNamespace, SQL_KEYWORDS, sqlLanguage } from "../../lib/sqlSchem
 import { statementAt } from "../../lib/sqlStatements";
 import { useActiveSchema, useStore } from "../../state/store";
 import { cubbyEditorTheme } from "./editorTheme";
+import { singleQuoteKeymap } from "./smartQuotes";
 
 /**
  * The SQL editor for one tab. CodeMirror 6 with Postgres dialect highlighting
@@ -79,6 +80,7 @@ export function SqlEditor(props: {
           // Falls through (returns false) to normal Tab behavior when no
           // completion popup is open.
           { key: "Tab", run: acceptCompletion },
+          ...singleQuoteKeymap,
         ]),
       ),
       cubbyEditorTheme,

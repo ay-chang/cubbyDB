@@ -9,6 +9,7 @@ import { buildTableNamespace, WHERE_KEYWORDS, sqlLanguage } from "../../lib/sqlS
 import type { QueryTab } from "../../state/store";
 import { useActiveSchema, useStore } from "../../state/store";
 import { cubbyAutocompleteTheme, sqlHighlightStyle } from "./editorTheme";
+import { singleQuoteKeymap } from "./smartQuotes";
 
 /** Compact single-line theme — the box styling (border, height, padding)
  *  comes from the `.filter-bar__input` wrapper div; this just makes
@@ -16,7 +17,12 @@ import { cubbyAutocompleteTheme, sqlHighlightStyle } from "./editorTheme";
 const filterEditorTheme = EditorView.theme({
   "&": { fontSize: "12.5px", backgroundColor: "transparent" },
   ".cm-scroller": { fontFamily: "var(--font-mono)", overflow: "hidden" },
-  ".cm-content": { padding: 0, caretColor: "var(--accent)" },
+  // A couple px of right padding, not 0 — with `overflow: hidden` above, a
+  // cursor sitting exactly at the end of the text (the common case while
+  // typing) has no room to render and gets clipped, invisibly, since typing
+  // itself doesn't depend on the cursor being visible. CodeMirror's own base
+  // theme reserves the same buffer for this exact reason.
+  ".cm-content": { padding: "0 3px 0 0", caretColor: "var(--accent)" },
   ".cm-line": { padding: 0 },
   "&.cm-focused": { outline: "none" },
   ".cm-cursor": { borderLeftColor: "var(--accent)" },
@@ -79,6 +85,7 @@ export function FilterBar({ tab }: { tab: QueryTab }) {
             },
           },
           { key: "Tab", run: acceptCompletion },
+          ...singleQuoteKeymap,
         ]),
       ),
       filterEditorTheme,
@@ -105,7 +112,7 @@ export function FilterBar({ tab }: { tab: QueryTab }) {
               highlightActiveLine: false,
               highlightActiveLineGutter: false,
               bracketMatching: false,
-              closeBrackets: false,
+              closeBrackets: true,
               indentOnInput: false,
             }}
             placeholder="id = '1234'"

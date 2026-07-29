@@ -4,6 +4,16 @@ import { ConnectionScreen } from "../connection/ConnectionScreen";
 import { Spinner } from "../common/Spinner";
 import { useActiveSchemaLoading, useStore } from "../../state/store";
 
+/** True on macOS, where the window is configured (`tauri.conf.json`,
+ *  `titleBarStyle: "Overlay"`) with no native title bar — just the traffic
+ *  lights floating over the webview at `trafficLightPosition` — so the top
+ *  bar needs to leave them room on the left. Windows/Linux keep their normal
+ *  native title bar above this bar entirely, so no reservation is needed
+ *  there. `@tauri-apps/plugin-os` would be the "proper" way to check this,
+ *  but pulling in a whole plugin (Rust dependency + capability grant) isn't
+ *  worth it for one CSS class — the webview's own UA string already says so. */
+const isMacOs = navigator.userAgent.includes("Mac");
+
 /** The 42px application top bar: brand mark, connection switcher, and actions. */
 export function TopBar() {
   const connections = useStore((s) => s.connections);
@@ -41,7 +51,10 @@ export function TopBar() {
   const active = activeConnectionId ? connections[activeConnectionId] : null;
 
   return (
-    <div className="topbar" data-tauri-drag-region>
+    <div
+      className={"topbar" + (isMacOs ? " topbar--inset-traffic-lights" : "")}
+      data-tauri-drag-region
+    >
       <div className="topbar__left">
         <div className="brand-mark" aria-hidden>
           <span />

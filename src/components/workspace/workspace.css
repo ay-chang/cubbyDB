@@ -17,6 +17,14 @@
   border-bottom: 1px solid var(--border);
   background: var(--surface-raised);
 }
+/* macOS only (see `isMacOs` in TopBar.tsx): the window has no native title
+   bar, just the traffic lights overlaid at `trafficLightPosition` from
+   tauri.conf.json — left padding here keeps our own content from sitting
+   underneath them. Matches that config's `x` (16) plus the button group's
+   own width, plus a little breathing room. */
+.topbar--inset-traffic-lights {
+  padding-left: 80px;
+}
 .topbar__left,
 .topbar__right {
   display: flex;
