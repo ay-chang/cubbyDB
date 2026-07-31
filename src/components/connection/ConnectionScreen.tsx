@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 
 import * as api from "../../api/backend";
 import { errorMessage } from "../../api/backend";
@@ -148,19 +148,6 @@ export function ConnectionScreen(props: {
   const [selectedId, setSelectedId] = useState<string | null>(
     editSlot?.current.connectionId ?? null,
   );
-  // Tracks the latest selection synchronously, so an in-flight password
-  // fetch from a previously-clicked card can tell it's been superseded and
-  // skip applying its (now stale) result to the form.
-  const selectedIdRef = useRef(selectedId);
-  // The selected saved connection's *real* params (with password), used for
-  // dirty-tracking below — `savedConnections` (the picker list) never
-  // carries real passwords, so comparing against it directly would always
-  // read as "dirty". `editSlot.params` is already real (a live session's
-  // in-memory params), so it seeds this directly; otherwise `loadSaved`
-  // fills it in once its fetch resolves.
-  const [selectedRealParams, setSelectedRealParams] = useState<ConnectionParams | null>(
-    editSlot?.params ?? null,
-  );
   const [test, setTest] = useState<TestState>({ kind: "idle" });
   const [connectError, setConnectError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
@@ -183,7 +170,7 @@ export function ConnectionScreen(props: {
   // or an explicit "Update" + "Save as new" pair, instead of silently
   // switching between overwrite and create-new on every keystroke.
   const dirty = selected
-    ? !paramsEqual(params, selectedRealParams ?? selected.params) || effectiveName !== selected.name
+    ? !paramsEqual(params, selected.params) || effectiveName !== selected.name
     : false;
 
   function update<K extends keyof FormState>(key: K, value: string) {
@@ -194,29 +181,11 @@ export function ConnectionScreen(props: {
     setConnectError(null);
   }
 
-  /** Selects a saved connection and fills the form from it — `conn.params`
-   *  (from the picker list) never carries the real password, so this fetches
-   *  it fresh, just for this one entry, right when it's actually needed. */
-  async function loadSaved(conn: SavedConnection) {
+  function loadSaved(conn: SavedConnection) {
     setForm(paramsToForm(conn.params, conn.name));
     setSelectedId(conn.id);
-    selectedIdRef.current = conn.id;
-    // Cleared until the fetch below resolves, so `dirty` doesn't compare
-    // against the *previous* selection's real params in the meantime.
-    setSelectedRealParams(null);
     setTest({ kind: "idle" });
     setConnectError(null);
-    try {
-      const full = await api.getSavedConnection(conn.id);
-      // A different card may have been clicked while this was in flight —
-      // don't clobber whatever the user's since selected.
-      if (full && selectedIdRef.current === conn.id) {
-        setForm(paramsToForm(full.params, full.name));
-        setSelectedRealParams(full.params);
-      }
-    } catch (err) {
-      setConnectError(errorMessage(err));
-    }
   }
 
   async function handleTest() {
@@ -286,8 +255,6 @@ export function ConnectionScreen(props: {
     try {
       const saved = await api.saveConnection(record);
       setSelectedId(saved.id);
-      selectedIdRef.current = saved.id;
-      setSelectedRealParams(saved.params);
       await loadSavedConnections();
       // If this saved connection is currently live (in this or another
       // connection's session), reflect the rename in the switcher right
@@ -311,20 +278,17 @@ export function ConnectionScreen(props: {
 
   async function handleDuplicate(conn: SavedConnection, e: React.MouseEvent) {
     e.stopPropagation();
+    const record: SavedConnection = {
+      id: "",
+      name: `${conn.name} copy`,
+      engine: conn.engine,
+      params: conn.params,
+      createdAt: 0,
+    };
     try {
-      // `conn.params` (from the picker list) never carries the real
-      // password — fetch it fresh so the duplicate isn't created passwordless.
-      const full = await api.getSavedConnection(conn.id);
-      const record: SavedConnection = {
-        id: "",
-        name: `${conn.name} copy`,
-        engine: conn.engine,
-        params: full?.params ?? conn.params,
-        createdAt: 0,
-      };
       const saved = await api.saveConnection(record);
       await loadSavedConnections();
-      void loadSaved(saved);
+      loadSaved(saved);
     } catch (err) {
       setConnectError(errorMessage(err));
     }
@@ -538,7 +502,7 @@ export function ConnectionScreen(props: {
                   className={
                     "conn-card" + (selectedId === conn.id ? " conn-card--active" : "")
                   }
-                  onClick={() => void loadSaved(conn)}
+                  onClick={() => loadSaved(conn)}
                 >
                   <span className="conn-card__name">
                     <span

@@ -3,7 +3,7 @@ import { syntaxHighlighting } from "@codemirror/language";
 import { Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import CodeMirror from "@uiw/react-codemirror";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { buildTableNamespace, WHERE_KEYWORDS, sqlLanguage } from "../../lib/sqlSchema";
 import type { QueryTab } from "../../state/store";
@@ -48,6 +48,16 @@ export function FilterBar({ tab }: { tab: QueryTab }) {
   const schema = useActiveSchema();
   const [draft, setDraft] = useState(tab.filter ?? "");
 
+  // `tab.filter` can change out from under this component without a remount
+  // — e.g. FK navigation (`openTableWithFilter`) landing on a table that
+  // already has a tab open reuses that tab rather than creating a new one,
+  // so `key={tab.id}` in ResultsPane doesn't reset the local draft. Without
+  // this, the grid would re-run with the new filter while the bar kept
+  // showing whatever was typed here last.
+  useEffect(() => {
+    setDraft(tab.filter ?? "");
+  }, [tab.filter]);
+
   const applyRef = useRef<() => void>(() => {});
   applyRef.current = () => void setTableFilter(tab.id, draft);
 
@@ -91,6 +101,18 @@ export function FilterBar({ tab }: { tab: QueryTab }) {
       filterEditorTheme,
       cubbyAutocompleteTheme,
       syntaxHighlighting(sqlHighlightStyle),
+      // The placeholder widget (below) appears the instant the doc empties,
+      // but CodeMirror doesn't reliably remeasure the cursor layer against
+      // the widget's own width in that same paint — leaving the cursor
+      // rendered at wherever it was *before* the clear (e.g. after clearing
+      // "test", the cursor stays 4 characters in) until something else
+      // nudges a relayout. A one-off requestMeasure() on exactly that
+      // transition is that nudge.
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged && update.state.doc.length === 0) {
+          requestAnimationFrame(() => update.view.requestMeasure());
+        }
+      }),
     ],
     [sqlNamespace, tab.source?.schema, tab.source?.table],
   );
@@ -114,6 +136,12 @@ export function FilterBar({ tab }: { tab: QueryTab }) {
               bracketMatching: false,
               closeBrackets: true,
               indentOnInput: false,
+              // CodeMirror's own find-in-text panel — unused here (nothing
+              // in this app opens it deliberately) but its default keymap
+              // silently claims Mod-F/Mod-G, colliding with the grid's own
+              // Find (Cmd+F) and jump-to-column (Cmd+G) shortcuts whenever
+              // this editor happens to have focus.
+              searchKeymap: false,
             }}
             placeholder="id = '1234'"
             spellCheck={false}

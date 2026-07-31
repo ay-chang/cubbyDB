@@ -348,6 +348,21 @@
   justify-content: space-between;
   gap: 16px;
 }
+/* "Check for Updates" row: optional status text beside the button. */
+.settings-update-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+}
+.settings-update-status__text {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.settings-update-status__text--error {
+  color: var(--error-text);
+}
 /* Small pill switch, reused for every on/off setting. */
 .toggle {
   flex: none;

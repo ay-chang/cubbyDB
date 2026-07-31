@@ -17,13 +17,13 @@
   border-bottom: 1px solid var(--border);
   background: var(--surface-raised);
 }
-/* macOS only (see `isMacOs` in TopBar.tsx): the window has no native title
-   bar, just the traffic lights overlaid at `trafficLightPosition` from
-   tauri.conf.json — left padding here keeps our own content from sitting
-   underneath them. Matches that config's `x` (16) plus the button group's
-   own width, plus a little breathing room. */
+/* macOS, non-fullscreen only (see `isMacOs`/`useIsFullscreen` in
+   TopBar.tsx): the window has no native title bar, just the traffic lights
+   overlaid at `trafficLightPosition` from tauri.conf.json — left padding
+   here keeps our own content from sitting underneath them. Matches that
+   config's `x` (16) plus the button group's own width, plus breathing room. */
 .topbar--inset-traffic-lights {
-  padding-left: 80px;
+  padding-left: 92px;
 }
 .topbar__left,
 .topbar__right {
@@ -295,6 +295,10 @@
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  /* Breathing room above — it's the start of a new subsection (Functions/
+     Sequences/Types) within the schema, not a continuation of the tables
+     list right above it. */
+  margin-top: 4px;
 }
 .tree__row--group .tree__icon {
   color: var(--text-faint);
@@ -328,6 +332,8 @@
 .tree__icon {
   color: var(--text-faint);
   flex: none;
+  width: 13px;
+  text-align: center;
 }
 .tree__row--table .tree__icon {
   color: var(--text-fainter);
@@ -378,6 +384,19 @@
   background: var(--accent-tint);
   padding: 0 4px;
   border-radius: 3px;
+}
+/* Marks a view among tables in the tree — a small text tag rather than a
+   separate icon, now that table rows don't carry an icon at all. */
+.tree__view-tag {
+  margin-left: 6px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-fainter);
+}
+.tree__row--selected .tree__view-tag {
+  color: rgba(255, 255, 255, 0.7);
 }
 .tree__col-type {
   margin-left: auto;
@@ -930,6 +949,64 @@
   opacity: 0.85;
 }
 
+/* --- Update-available banner, top of the workspace (below the top bar) --- */
+.update-banner {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 38px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--success-border);
+  background: var(--success-bg);
+}
+.update-banner__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  flex: none;
+}
+.update-banner__message {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--success-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.update-banner__actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  flex: none;
+}
+.update-banner__later {
+  height: 26px;
+  padding: 0 12px;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--success-border);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+.update-banner__later:hover {
+  color: var(--text);
+}
+.update-banner__install {
+  height: 26px;
+  padding: 0 12px;
+  border-radius: var(--radius-control);
+  background: var(--success);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+}
+.update-banner__install:hover {
+  opacity: 0.9;
+}
+
 /* --- Results grid --- */
 .grid {
   position: relative;
@@ -1043,6 +1120,75 @@
 }
 .grid-find__nav:disabled {
   color: var(--text-ghost);
+}
+/* Jump-to-column overlay (Cmd/Ctrl+G) — a centered modal like the Cmd/Ctrl+K
+   command palette (`.cmdk-overlay`/`.cmdk-panel`), not anchored to a grid
+   corner: it needs to stay reachable and visible regardless of where in a
+   wide, horizontally-scrolled grid you triggered it from. Sized to match the
+   palette's own width, since it's showing the same kind of content (a list
+   of columns) at similar prominence. */
+.colgo-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 220;
+  background: rgba(22, 24, 29, 0.32);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 14vh;
+}
+.grid-colgo {
+  display: flex;
+  flex-direction: column;
+  width: 560px;
+  max-width: calc(100vw - 48px);
+  max-height: 60vh;
+  border-radius: var(--radius-card);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+.grid-colgo__bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px 5px 10px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+.grid-colgo__input {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  border: none;
+  background: transparent;
+  font-size: 12.5px;
+  color: var(--text);
+  outline: none;
+}
+.grid-colgo__input::placeholder {
+  color: var(--text-placeholder);
+}
+.grid-colgo__list {
+  overflow-y: auto;
+  padding: 4px;
+}
+.grid-colgo__item {
+  padding: 5px 8px;
+  border-radius: 5px;
+  font-size: 12.5px;
+  color: var(--text);
+  cursor: pointer;
+}
+.grid-colgo__item--active {
+  background: var(--tree-hover);
+}
+.grid-colgo__empty {
+  padding: 10px;
+  font-size: 12px;
+  color: var(--text-faint);
+  text-align: center;
 }
 .grid__mark {
   background: var(--amber-bg);

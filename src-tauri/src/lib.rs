@@ -22,6 +22,8 @@ use state::AppState;
 /// Build and run the Tauri application.
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             // The data directory holds connections.json and history.jsonl.
             let data_dir = app.path().app_data_dir()?;
@@ -31,7 +33,6 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_saved_connections,
-            commands::get_saved_connection,
             commands::save_connection,
             commands::delete_connection,
             commands::list_saved_queries,

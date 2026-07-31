@@ -1,3 +1,4 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useRef, useState } from "react";
 
 import { ConnectionScreen } from "../connection/ConnectionScreen";
@@ -7,15 +8,58 @@ import { useActiveSchemaLoading, useStore } from "../../state/store";
 /** True on macOS, where the window is configured (`tauri.conf.json`,
  *  `titleBarStyle: "Overlay"`) with no native title bar — just the traffic
  *  lights floating over the webview at `trafficLightPosition` — so the top
- *  bar needs to leave them room on the left. Windows/Linux keep their normal
- *  native title bar above this bar entirely, so no reservation is needed
- *  there. `@tauri-apps/plugin-os` would be the "proper" way to check this,
- *  but pulling in a whole plugin (Rust dependency + capability grant) isn't
- *  worth it for one CSS class — the webview's own UA string already says so. */
+ *  bar needs to leave them room on the left, *except* in true fullscreen,
+ *  where macOS removes the traffic lights entirely (there's no windowed
+ *  chrome to draw them over) and the reserved space would just be a dead
+ *  gap. Windows/Linux keep their normal native title bar above this bar
+ *  entirely, so no reservation is ever needed there. `@tauri-apps/plugin-os`
+ *  would be the "proper" way to check the OS, but pulling in a whole plugin
+ *  (Rust dependency + capability grant) isn't worth it for one CSS class —
+ *  the webview's own UA string already says so. */
 const isMacOs = navigator.userAgent.includes("Mac");
 
-/** The 42px application top bar: brand mark, connection switcher, and actions. */
+/** Tracks fullscreen state for the traffic-light inset above — `false`
+ *  outside macOS (never checked) and falls back to `false` (no inset) if the
+ *  Tauri window API isn't available, e.g. this component rendering outside
+ *  a real Tauri window. */
+function useIsFullscreen(): boolean {
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  useEffect(() => {
+    if (!isMacOs) return;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    try {
+      const win = getCurrentWindow();
+      const sync = () => {
+        win
+          .isFullscreen()
+          .then((v) => {
+            if (!cancelled) setIsFullscreen(v);
+          })
+          .catch(() => {});
+      };
+      sync();
+      win
+        .onResized(sync)
+        .then((fn) => {
+          if (cancelled) fn();
+          else unlisten = fn;
+        })
+        .catch(() => {});
+    } catch {
+      // Not running inside a real Tauri window (e.g. a plain browser preview).
+    }
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+  return isFullscreen;
+}
+
+/** The 42px application top bar: connection switcher and actions. */
 export function TopBar() {
+  const isFullscreen = useIsFullscreen();
   const connections = useStore((s) => s.connections);
   const activeConnectionId = useStore((s) => s.activeConnectionId);
   const switchConnection = useStore((s) => s.switchConnection);
@@ -50,15 +94,23 @@ export function TopBar() {
   const slots = Object.values(connections);
   const active = activeConnectionId ? connections[activeConnectionId] : null;
 
+  // The traffic lights anchor the top-left corner in windowed mode; true
+  // fullscreen removes them entirely (no windowed chrome to draw them over),
+  // leaving that corner empty — the brand mark fills it back in exactly
+  // when the traffic lights aren't there to do that job themselves.
+  const showBrandMark = !isMacOs || isFullscreen;
+
   return (
     <div
-      className={"topbar" + (isMacOs ? " topbar--inset-traffic-lights" : "")}
+      className={"topbar" + (isMacOs && !isFullscreen ? " topbar--inset-traffic-lights" : "")}
       data-tauri-drag-region
     >
       <div className="topbar__left">
-        <div className="brand-mark" aria-hidden>
-          <span />
-        </div>
+        {showBrandMark && (
+          <div className="brand-mark" aria-hidden>
+            <span />
+          </div>
+        )}
         <div className="conn-switcher">
           {slots.map((slot) => (
             <div

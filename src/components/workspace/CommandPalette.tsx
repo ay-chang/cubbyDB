@@ -95,12 +95,21 @@ export function CommandPalette() {
   const [scope, setScope] = useState<Scope>("all");
   const [selected, setSelected] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  // The browser fires `mouseenter` on whatever list item ends up under an
+  // already-stationary cursor the instant it appears — on open, and again
+  // whenever the list reflows under a typed query — which would otherwise
+  // silently steal the keyboard-driven selection away from row 0. Hover only
+  // starts choosing a row once the mouse has demonstrably moved since the
+  // list last reset, tracked here rather than in state since it never needs
+  // to trigger a render on its own.
+  const mouseArmedRef = useRef(false);
 
   useEffect(() => {
     if (!open) return;
     setQuery("");
     setScope("all");
     setSelected(0);
+    mouseArmedRef.current = false;
     requestAnimationFrame(() => inputRef.current?.focus());
   }, [open]);
 
@@ -205,6 +214,9 @@ export function CommandPalette() {
 
   useEffect(() => {
     setSelected(0);
+    // The result list just reordered — same reasoning as the `open` reset
+    // above, so the same guard against a stationary mouse applies again.
+    mouseArmedRef.current = false;
   }, [query, scope]);
 
   const activate = (item: Item) => {
@@ -282,7 +294,7 @@ export function CommandPalette() {
           ))}
           <span className="cmdk-scopes__hint mono">⇥ / ⇧⇥</span>
         </div>
-        <div className="cmdk-list">
+        <div className="cmdk-list" onMouseMove={() => { mouseArmedRef.current = true; }}>
           {results.length === 0 ? (
             <div className="cmdk-empty">
               {query.trim()
@@ -296,7 +308,9 @@ export function CommandPalette() {
               <div
                 key={item.id}
                 className={"cmdk-item" + (i === selected ? " cmdk-item--active" : "")}
-                onMouseEnter={() => setSelected(i)}
+                onMouseEnter={() => {
+                  if (mouseArmedRef.current) setSelected(i);
+                }}
                 onClick={() => activate(item)}
               >
                 <span className="cmdk-item__icon">

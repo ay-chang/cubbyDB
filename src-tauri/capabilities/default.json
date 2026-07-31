@@ -3,5 +3,10 @@
   "identifier": "default",
   "description": "Capabilities available to the main CubbyDB window.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "updater:default",
+    "process:allow-restart"
+  ]
 }

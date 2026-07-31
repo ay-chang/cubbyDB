@@ -35,6 +35,15 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU3MUI0RDYzQkY5M0Q4RkUKUldUKzJKTy9ZMDBiNTAxM05YM1ZNVVRFRXBLMFgyRkhML2RCdDNXck5ZMlNuWEoxOGJyZjZkS0sK",
+      "endpoints": [
+        "https://github.com/ay-chang/cubbyDB/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

@@ -471,6 +471,22 @@ export const TABLE_ROW_HEIGHT_OPTIONS: { px: number; label: string }[] = [
 /** The longstanding default — existing users see no visual change. */
 export const DEFAULT_TABLE_ROW_HEIGHT: TableRowHeight = 32;
 
+/** The sidebar (schema tree) row height, in px. Persisted across launches. */
+export type SidebarRowHeight = number;
+
+/** Selectable row heights (px) offered in the Settings dropdown, with a
+ *  density label for each — a tighter range than the results grid's, since a
+ *  tree row only ever holds an icon and one line of text. */
+export const SIDEBAR_ROW_HEIGHT_OPTIONS: { px: number; label: string }[] = [
+  { px: 22, label: "Compact" },
+  { px: 24, label: "Cozy" },
+  { px: 27, label: "Comfortable" },
+  { px: 30, label: "Relaxed" },
+  { px: 34, label: "Spacious" },
+];
+
+export const DEFAULT_SIDEBAR_ROW_HEIGHT: SidebarRowHeight = 24;
+
 /** How a SQL NULL renders in the results grid. Persisted across launches. */
 export type NullDisplay = "text" | "dash" | "blank";
 
@@ -570,6 +586,8 @@ interface AppStore {
   tableFontSize: TableFontSize;
   /** Results-grid row height, applied to the document root. */
   tableRowHeight: TableRowHeight;
+  /** Sidebar (schema tree) row height, applied to the document root. */
+  sidebarRowHeight: SidebarRowHeight;
   /** Whether alternating results-grid rows are tinted. */
   tableZebra: boolean;
   /** Whether the results grid shows row/cell divider lines. */
@@ -626,6 +644,12 @@ interface AppStore {
    *  live. Becomes the active (visible) slot. */
   connectTo: (
     connection: Pick<SavedConnection, "params" | "name"> & { id?: string },
+    /** Pass `false` when re-establishing the connection that was *just read*
+     *  from the last-connection store (launch's own auto-reconnect) — no
+     *  need to write the identical record straight back to disk. Defaults to
+     *  `true` for every other caller (a real, possibly new, user-initiated
+     *  connect). */
+    options?: { rememberAsLast?: boolean },
   ) => Promise<void>;
   /** Close one connection (defaults to the active one). If others remain
    *  open, the view stays on the workspace, switched to one of them. */
@@ -755,6 +779,7 @@ interface AppStore {
   setTableFont: (font: TableFont) => void;
   setTableFontSize: (size: TableFontSize) => void;
   setTableRowHeight: (height: TableRowHeight) => void;
+  setSidebarRowHeight: (height: SidebarRowHeight) => void;
   setTableZebra: (enabled: boolean) => void;
   setTableCellBorders: (enabled: boolean) => void;
   setTableHeaderShade: (enabled: boolean) => void;
@@ -818,6 +843,7 @@ const ACCENT_COLOR_KEY = "cubbydb:accentColor";
 const TABLE_FONT_KEY = "cubbydb:tableFont";
 const TABLE_FONT_SIZE_KEY = "cubbydb:tableFontSize";
 const TABLE_ROW_HEIGHT_KEY = "cubbydb:tableRowHeight";
+const SIDEBAR_ROW_HEIGHT_KEY = "cubbydb:sidebarRowHeight";
 const TABLE_ZEBRA_KEY = "cubbydb:tableZebra";
 const TABLE_CELL_BORDERS_KEY = "cubbydb:tableCellBorders";
 const TABLE_HEADER_SHADE_KEY = "cubbydb:tableHeaderShade";
@@ -963,6 +989,30 @@ function applyTableRowHeight(height: TableRowHeight) {
   }
   try {
     localStorage.setItem(TABLE_ROW_HEIGHT_KEY, String(height));
+  } catch {
+    // Storage unavailable — non-fatal.
+  }
+}
+
+/** Read the saved sidebar row height (px), defaulting to the standard height. */
+function loadSidebarRowHeight(): SidebarRowHeight {
+  try {
+    const saved = parseFloat(localStorage.getItem(SIDEBAR_ROW_HEIGHT_KEY) ?? "");
+    return Number.isFinite(saved) ? saved : DEFAULT_SIDEBAR_ROW_HEIGHT;
+  } catch {
+    return DEFAULT_SIDEBAR_ROW_HEIGHT;
+  }
+}
+
+/** Reflect the row height onto the `--h-tree-row` CSS variable and persist it. */
+function applySidebarRowHeight(height: SidebarRowHeight) {
+  try {
+    document.documentElement.style.setProperty("--h-tree-row", `${height}px`);
+  } catch {
+    // No document (e.g. non-DOM context) — non-fatal.
+  }
+  try {
+    localStorage.setItem(SIDEBAR_ROW_HEIGHT_KEY, String(height));
   } catch {
     // Storage unavailable — non-fatal.
   }
@@ -1295,6 +1345,7 @@ applyAccentColor(loadAccentColor(), loadTheme());
 applyTableFont(loadTableFont());
 applyTableFontSize(loadTableFontSize());
 applyTableRowHeight(loadTableRowHeight());
+applySidebarRowHeight(loadSidebarRowHeight());
 applyTableZebra(loadTableZebra());
 applyTableCellBorders(loadTableCellBorders());
 applyTableHeaderShade(loadTableHeaderShade());
@@ -1646,6 +1697,7 @@ export const useStore = create<AppStore>((set, get) => {
     tableFont: loadTableFont(),
     tableFontSize: loadTableFontSize(),
     tableRowHeight: loadTableRowHeight(),
+    sidebarRowHeight: loadSidebarRowHeight(),
     tableZebra: loadTableZebra(),
     tableCellBorders: loadTableCellBorders(),
     tableHeaderShade: loadTableHeaderShade(),
@@ -1687,7 +1739,10 @@ export const useStore = create<AppStore>((set, get) => {
       }
 
       try {
-        await get().connectTo({ params: last.params, name: last.name });
+        await get().connectTo(
+          { params: last.params, name: last.name },
+          { rememberAsLast: false },
+        );
 
         // Restore the tabs that were open last time (without their stale
         // results), unless the user has opted out. Only this one
@@ -1744,8 +1799,13 @@ export const useStore = create<AppStore>((set, get) => {
       }
     },
 
-    async connectTo(connection) {
-      const info = await api.connect(connection.params, connection.name, connection.id ?? null);
+    async connectTo(connection, options) {
+      const info = await api.connect(
+        connection.params,
+        connection.name,
+        connection.id ?? null,
+        options?.rememberAsLast ?? true,
+      );
       const tab = makeTab({ sql: get().starterSql });
       const slot: ConnectionSlot = {
         sessionId: info.sessionId,
@@ -2788,6 +2848,11 @@ export const useStore = create<AppStore>((set, get) => {
     setTableRowHeight(height) {
       applyTableRowHeight(height);
       set({ tableRowHeight: height });
+    },
+
+    setSidebarRowHeight(height) {
+      applySidebarRowHeight(height);
+      set({ sidebarRowHeight: height });
     },
 
     setTableZebra(enabled) {

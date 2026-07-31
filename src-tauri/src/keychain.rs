@@ -1,9 +1,9 @@
-//! OS credential storage for saved-connection passwords — macOS Keychain,
-//! Windows Credential Manager, or Linux Secret Service, via the `keyring`
-//! crate. Every operation here is best-effort and infallible from the
-//! caller's point of view: if the OS store is unavailable (locked,
-//! unsupported, permission denied), callers fall back to leaving the
-//! password in the JSON file rather than losing it — see `connections.rs`.
+//! Read-only access to the OS keychain (macOS Keychain, Windows Credential
+//! Manager, Linux Secret Service, via the `keyring` crate) for saved
+//! connection passwords. This app no longer stores anything *into* the
+//! keychain — see the module docs on `connections.rs` for why — so this
+//! module exists purely so `connections::pull_back_from_keychain` can pull
+//! passwords back out for anyone upgrading from a version that did.
 
 use keyring::Entry;
 
@@ -11,14 +11,6 @@ const SERVICE: &str = "cubbydb";
 
 fn entry(account: &str) -> Option<Entry> {
     Entry::new(SERVICE, account).ok()
-}
-
-/// Store `password` under `account` (a saved connection's id, or a fixed
-/// sentinel for the singleton "last connection" record). `Err` means the
-/// keychain wasn't available — the caller should keep the password in place
-/// rather than treat this as "no password".
-pub fn store_password(account: &str, password: &str) -> Result<(), ()> {
-    entry(account).ok_or(())?.set_password(password).map_err(|_| ())
 }
 
 /// Best-effort lookup — `None` covers both "no keychain entry" and "keychain

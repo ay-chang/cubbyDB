@@ -49,18 +49,6 @@ pub async fn list_saved_connections(
     state.connection_store().list()
 }
 
-/// One saved connection with its real password rehydrated from the keychain
-/// — call right before connecting to (or editing) a saved entry, not for
-/// populating the picker list (`list_saved_connections` already covers that,
-/// without the keychain prompt this would trigger).
-#[tauri::command]
-pub async fn get_saved_connection(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<Option<SavedConnection>, DbError> {
-    state.connection_store().get(&id)
-}
-
 #[tauri::command]
 pub async fn save_connection(
     state: State<'_, AppState>,
@@ -107,6 +95,12 @@ pub async fn test_connection(
 
 /// Open a new session and add it to the pool — never overwrites an existing
 /// one, so connecting to a second database leaves the first live.
+///
+/// `remember_as_last` defaults to `true` (persist this as the connection to
+/// auto-reconnect to next launch). The one exception is launch's own
+/// auto-reconnect: it just *read* this exact connection from the last-used
+/// file to get here, so writing the identical record straight back would be
+/// a pure, avoidable disk write.
 #[tauri::command]
 pub async fn connect(
     state: State<'_, AppState>,
@@ -114,19 +108,22 @@ pub async fn connect(
     name: String,
     engine: Option<Engine>,
     connection_id: Option<String>,
+    remember_as_last: Option<bool>,
 ) -> Result<ActiveConnectionInfo, DbError> {
     let engine = engine.unwrap_or_default();
     let driver = driver_for(engine);
     let session = driver.connect(&params).await?;
     let info = session.info().clone();
 
-    // Remember this connection so the next launch can reconnect automatically.
-    if let Err(e) = state.last_connection_store().set(&LastConnection {
-        name: name.clone(),
-        engine,
-        params: params.clone(),
-    }) {
-        eprintln!("[cubbydb] failed to persist last connection: {e}");
+    if remember_as_last.unwrap_or(true) {
+        // Remember this connection so the next launch can reconnect automatically.
+        if let Err(e) = state.last_connection_store().set(&LastConnection {
+            name: name.clone(),
+            engine,
+            params: params.clone(),
+        }) {
+            eprintln!("[cubbydb] failed to persist last connection: {e}");
+        }
     }
 
     let session_id = new_session_id();

@@ -1,5 +1,8 @@
-import { useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
+import { useEffect, useState } from "react";
+import { check as checkForUpdate, type Update } from "@tauri-apps/plugin-updater";
 
+import { installUpdate } from "../../lib/appUpdate";
 import { useStore } from "../../state/store";
 import type { Delimiter, TableFont, Theme } from "../../state/store";
 import {
@@ -8,6 +11,7 @@ import {
   ACCENT_COLOR_SWATCH,
   DEFAULT_EDITOR_FONT_SIZE,
   DEFAULT_HISTORY_LIMIT,
+  DEFAULT_SIDEBAR_ROW_HEIGHT,
   DEFAULT_TABLE_FONT_SIZE,
   DEFAULT_TABLE_ROW_HEIGHT,
   DELIMITER_LABELS,
@@ -15,6 +19,7 @@ import {
   EDITOR_FONT_SIZE_OPTIONS,
   HISTORY_LIMIT_OPTIONS,
   NULL_DISPLAY_LABELS,
+  SIDEBAR_ROW_HEIGHT_OPTIONS,
   TABLE_FONT_SIZE_OPTIONS,
   TABLE_FONT_STACKS,
   TABLE_ROW_HEIGHT_OPTIONS,
@@ -31,11 +36,12 @@ const TOP_SECTIONS: { id: TopSection; label: string }[] = [
 ];
 
 /** Sub-tabs within the Appearance section. */
-type AppearanceSub = "interface" | "table" | "editor";
+type AppearanceSub = "interface" | "table" | "sidebar" | "editor";
 
 const APPEARANCE_SUBS: { id: AppearanceSub; label: string }[] = [
   { id: "interface", label: "Interface" },
   { id: "table", label: "Table" },
+  { id: "sidebar", label: "Sidebar" },
   { id: "editor", label: "Editor" },
 ];
 
@@ -114,6 +120,7 @@ export function SettingsDialog() {
             <InterfaceSection />
           )}
           {section === "appearance" && appearanceSub === "table" && <TableSection />}
+          {section === "appearance" && appearanceSub === "sidebar" && <SidebarSection />}
           {section === "appearance" && appearanceSub === "editor" && <EditorSection />}
           {section === "shortcuts" && <ShortcutsSection />}
         </div>
@@ -155,6 +162,11 @@ function GeneralSection() {
   const setCsvDelimiter = useStore((s) => s.setCsvDelimiter);
   const rowCopyDelimiter = useStore((s) => s.rowCopyDelimiter);
   const setRowCopyDelimiter = useStore((s) => s.setRowCopyDelimiter);
+
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+  useEffect(() => {
+    void getVersion().then(setAppVersion);
+  }, []);
 
   return (
     <div className="settings-section">
@@ -254,6 +266,92 @@ function GeneralSection() {
           ))}
         </select>
       </div>
+
+      <div className="settings-field settings-field--spaced settings-toggle-row">
+        <div>
+          <div className="settings-field__label">Version</div>
+          <div className="settings-field__desc">
+            {appVersion ? `CubbyDB ${appVersion}` : "…"}
+          </div>
+        </div>
+        <UpdateCheckButton />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Manual counterpart to `UpdateBanner`'s silent launch-time check — same
+ * `check()`/`installUpdate()` calls, but every state (checking, up to date,
+ * available, error) is shown inline here since the user explicitly asked
+ * for it, unlike the banner's silent-on-failure background check.
+ */
+function UpdateCheckButton() {
+  const [state, setState] = useState<
+    | { kind: "idle" }
+    | { kind: "checking" }
+    | { kind: "upToDate" }
+    | { kind: "available"; update: Update }
+    | { kind: "installing" }
+    | { kind: "error"; message: string }
+  >({ kind: "idle" });
+
+  const runCheck = () => {
+    setState({ kind: "checking" });
+    checkForUpdate()
+      .then((update) => {
+        setState(update ? { kind: "available", update } : { kind: "upToDate" });
+      })
+      .catch((e) => {
+        setState({ kind: "error", message: e instanceof Error ? e.message : String(e) });
+      });
+  };
+
+  if (state.kind === "available") {
+    return (
+      <div className="settings-update-status">
+        <span className="settings-update-status__text">
+          v{state.update.version} available
+        </span>
+        <button
+          className="btn btn--primary"
+          onClick={() => {
+            setState({ kind: "installing" });
+            installUpdate(state.update).catch((e) => {
+              setState({
+                kind: "error",
+                message: e instanceof Error ? e.message : String(e),
+              });
+            });
+          }}
+        >
+          Update &amp; Restart
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="settings-update-status">
+      {state.kind === "upToDate" && (
+        <span className="settings-update-status__text">Up to date</span>
+      )}
+      {state.kind === "error" && (
+        <span className="settings-update-status__text settings-update-status__text--error">
+          {state.message}
+        </span>
+      )}
+      <button
+        className="btn btn--outline"
+        onClick={runCheck}
+        disabled={state.kind === "checking" || state.kind === "installing"}
+      >
+        {state.kind === "checking"
+          ? "Checking…"
+          : state.kind === "installing"
+            ? "Installing…"
+            : "Check for Updates"}
+      </button>
     </div>
   );
 }
@@ -546,6 +644,45 @@ function TableSection() {
           </select>
           <span className="settings-select-preview settings-select-preview--null">
             {NULL_DISPLAY_LABELS[nullDisplay] || "(blank)"}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Its own top-level sub-tab (not folded into Table/Interface) since more
+ *  sidebar-specific settings are expected to land here over time. */
+function SidebarSection() {
+  const sidebarRowHeight = useStore((s) => s.sidebarRowHeight);
+  const setSidebarRowHeight = useStore((s) => s.setSidebarRowHeight);
+
+  return (
+    <div className="settings-section">
+      <div className="settings-field">
+        <div className="settings-field__label">Row height</div>
+        <div className="settings-field__desc">
+          Pick the exact row height, in pixels, for the schema tree — shorter
+          rows fit more tables and columns on screen at once.
+        </div>
+        <div className="settings-select-row">
+          <select
+            className="settings-select"
+            value={sidebarRowHeight}
+            onChange={(e) => setSidebarRowHeight(Number(e.target.value))}
+          >
+            {SIDEBAR_ROW_HEIGHT_OPTIONS.map(({ px, label }) => (
+              <option key={px} value={px}>
+                {px}px — {label}
+                {px === DEFAULT_SIDEBAR_ROW_HEIGHT ? " (default)" : ""}
+              </option>
+            ))}
+          </select>
+          <span
+            className="settings-select-preview settings-select-preview--row"
+            style={{ height: sidebarRowHeight }}
+          >
+            Row
           </span>
         </div>
       </div>

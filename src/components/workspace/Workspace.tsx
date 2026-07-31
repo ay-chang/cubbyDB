@@ -13,6 +13,7 @@ import { SequenceDetailsPane } from "./SequenceDetailsPane";
 import { SqlEditor } from "./SqlEditor";
 import { TableStructurePane } from "./TableStructurePane";
 import { TopBar } from "./TopBar";
+import { UpdateBanner } from "./UpdateBanner";
 import "./workspace.css";
 
 const SIDEBAR_MIN = 200;
@@ -53,6 +54,7 @@ export function Workspace() {
   return (
     <div className="workspace">
       <TopBar />
+      <UpdateBanner />
       <div className="workspace__body">
         <div className="workspace__sidebar" style={{ width: sidebarWidth }}>
           <SchemaTree />

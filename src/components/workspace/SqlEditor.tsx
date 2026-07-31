@@ -108,6 +108,12 @@ export function SqlEditor(props: {
           highlightActiveLineGutter: false,
           bracketMatching: true,
           indentOnInput: false,
+          // See the identical note in FilterBar.tsx: CodeMirror's own
+          // find-in-text panel is unused here, but its default keymap
+          // silently claims Mod-F/Mod-G, colliding with the results grid's
+          // Find (Cmd+F) and jump-to-column (Cmd+G) whenever this editor
+          // has focus.
+          searchKeymap: false,
         }}
         height="100%"
         spellCheck={false}

@@ -26,6 +26,10 @@ export function SchemaTree() {
   const [filter, setFilter] = useState("");
   const [expandedSchemas, setExpandedSchemas] = useState<Set<string>>(new Set());
   const [expandedTables, setExpandedTables] = useState<Set<string>>(new Set());
+  // Tables, unlike the groups below, starts open by default (it's the
+  // primary, most-used content) — so this tracks which schemas' Tables
+  // group has been *collapsed*, the inverse of `expandedGroups`.
+  const [collapsedTableGroups, setCollapsedTableGroups] = useState<Set<string>>(new Set());
   // Functions/Sequences/Types group headers, default collapsed — keeps the
   // existing Tables UX untouched and avoids clutter for schemas with many
   // extension-installed functions.
@@ -68,6 +72,9 @@ export function SchemaTree() {
   function toggleTable(key: string) {
     setExpandedTables((prev) => toggle(prev, key));
   }
+  function toggleTablesGroup(key: string) {
+    setCollapsedTableGroups((prev) => toggle(prev, key));
+  }
   function toggleGroup(key: string) {
     setExpandedGroups((prev) => toggle(prev, key));
   }
@@ -98,9 +105,14 @@ export function SchemaTree() {
 
         {filtered.map((s) => {
           const schemaOpen = expandedSchemas.has(s.name) || filtering;
+          const tablesKey = `${s.name}:tables`;
           const functionsKey = `${s.name}:functions`;
           const sequencesKey = `${s.name}:sequences`;
           const typesKey = `${s.name}:types`;
+          // Tables starts open (it's the primary, most-used content), unlike
+          // Functions/Sequences/Types below — so it's tracked as a
+          // *collapsed* set instead, where absence means open.
+          const tablesOpen = !collapsedTableGroups.has(tablesKey) || filtering;
           const functionsOpen = expandedGroups.has(functionsKey) || filtering;
           const sequencesOpen = expandedGroups.has(sequencesKey) || filtering;
           const typesOpen = expandedGroups.has(typesKey) || filtering;
@@ -118,76 +130,91 @@ export function SchemaTree() {
 
               {schemaOpen && (
                 <div className="tree__children">
-                  {s.tables.map((t) => {
-                    const key = `${s.name}.${t.name}`;
-                    const tableOpen = expandedTables.has(key) || filtering;
-                    const isSelected = selected === key;
-                    return (
-                      <div key={key}>
-                        <div
-                          className={
-                            "tree__row tree__row--table" +
-                            (isSelected ? " tree__row--selected" : "")
-                          }
-                          onClick={() => {
-                            setSelected(key);
-                            // Clicking a table opens its rows directly.
-                            void openSelectTop(s.name, t.name);
-                          }}
-                          onContextMenu={(e) => {
-                            e.preventDefault();
-                            setSelected(key);
-                            setMenu({
-                              kind: "table",
-                              x: e.clientX,
-                              y: e.clientY,
-                              schema: s.name,
-                              table: t.name,
-                            });
-                          }}
-                        >
-                          <span
-                            className="tree__chevron tree__chevron--btn"
-                            title={tableOpen ? "Hide columns" : "Show columns"}
-                            onClick={(e) => {
-                              // The chevron is the only way to peek at columns;
-                              // it must not also open the table.
-                              e.stopPropagation();
-                              toggleTable(key);
-                            }}
-                          >
-                            {tableOpen ? "▼" : "▶"}
-                          </span>
-                          <span className="tree__icon">
-                            {t.kind === "view" ? "▨" : "▦"}
-                          </span>
-                          <span className="tree__label">{t.name}</span>
-                          {t.estimatedRows != null && (
-                            <span className="tree__count mono">
-                              {formatCount(t.estimatedRows)}
-                            </span>
-                          )}
-                        </div>
-
-                        {tableOpen && (
-                          <div className="tree__columns">
-                            {t.columns.map((c) => (
-                              <div key={c.name} className="tree__col">
-                                <span className="tree__col-name">{c.name}</span>
-                                {c.isPrimaryKey && (
-                                  <span className="tree__pk" title="Primary key">
-                                    pk
-                                  </span>
+                  <div
+                    className="tree__row tree__row--group"
+                    onClick={() => toggleTablesGroup(tablesKey)}
+                  >
+                    <span className="tree__chevron">{tablesOpen ? "▼" : "▶"}</span>
+                    <span className="tree__icon" aria-hidden />
+                    <span className="tree__label">Tables</span>
+                    <span className="tree__count mono">{s.tables.length}</span>
+                  </div>
+                  {tablesOpen && (
+                    <div className="tree__children">
+                      {s.tables.map((t) => {
+                        const key = `${s.name}.${t.name}`;
+                        const tableOpen = expandedTables.has(key) || filtering;
+                        const isSelected = selected === key;
+                        return (
+                          <div key={key}>
+                            <div
+                              className={
+                                "tree__row tree__row--table" +
+                                (isSelected ? " tree__row--selected" : "")
+                              }
+                              onClick={() => {
+                                setSelected(key);
+                                // Clicking a table opens its rows directly.
+                                void openSelectTop(s.name, t.name);
+                              }}
+                              onContextMenu={(e) => {
+                                e.preventDefault();
+                                setSelected(key);
+                                setMenu({
+                                  kind: "table",
+                                  x: e.clientX,
+                                  y: e.clientY,
+                                  schema: s.name,
+                                  table: t.name,
+                                });
+                              }}
+                            >
+                              <span
+                                className="tree__chevron tree__chevron--btn"
+                                title={tableOpen ? "Hide columns" : "Show columns"}
+                                onClick={(e) => {
+                                  // The chevron is the only way to peek at columns;
+                                  // it must not also open the table.
+                                  e.stopPropagation();
+                                  toggleTable(key);
+                                }}
+                              >
+                                {tableOpen ? "▼" : "▶"}
+                              </span>
+                              <span className="tree__label">
+                                {t.name}
+                                {t.kind === "view" && (
+                                  <span className="tree__view-tag">view</span>
                                 )}
+                              </span>
+                              {t.estimatedRows != null && (
+                                <span className="tree__count mono">
+                                  {formatCount(t.estimatedRows)}
+                                </span>
+                              )}
+                            </div>
+
+                            {tableOpen && (
+                              <div className="tree__columns">
+                                {t.columns.map((c) => (
+                                  <div key={c.name} className="tree__col">
+                                    <span className="tree__col-name">{c.name}</span>
+                                    {c.isPrimaryKey && (
+                                      <span className="tree__pk" title="Primary key">
+                                        pk
+                                      </span>
+                                    )}
+                                  </div>
+                                ))}
                               </div>
-                            ))}
+                            )}
                           </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                  {s.tables.length === 0 && (
-                    <div className="tree__note tree__note--sub">No tables.</div>
+                        );
+                      })}
+                      {s.tables.length === 0 && (
+                        <div className="tree__note tree__note--sub">No tables.</div>
+                      )}
+                    </div>
                   )}
 
                   {s.functions.length > 0 && (
@@ -197,6 +224,7 @@ export function SchemaTree() {
                         onClick={() => toggleGroup(functionsKey)}
                       >
                         <span className="tree__chevron">{functionsOpen ? "▼" : "▶"}</span>
+                        <span className="tree__icon" aria-hidden />
                         <span className="tree__label">Functions</span>
                         <span className="tree__count mono">{s.functions.length}</span>
                       </div>
@@ -250,6 +278,7 @@ export function SchemaTree() {
                         onClick={() => toggleGroup(sequencesKey)}
                       >
                         <span className="tree__chevron">{sequencesOpen ? "▼" : "▶"}</span>
+                        <span className="tree__icon" aria-hidden />
                         <span className="tree__label">Sequences</span>
                         <span className="tree__count mono">{s.sequences.length}</span>
                       </div>
@@ -309,6 +338,7 @@ export function SchemaTree() {
                         onClick={() => toggleGroup(typesKey)}
                       >
                         <span className="tree__chevron">{typesOpen ? "▼" : "▶"}</span>
+                        <span className="tree__icon" aria-hidden />
                         <span className="tree__label">Types</span>
                         <span className="tree__count mono">{s.types.length}</span>
                       </div>

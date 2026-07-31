@@ -1,23 +1,20 @@
 //! Persistence for saved connections.
 //!
-//! Connections are stored as a single JSON array in the app's data directory,
-//! and on Unix the file is created with `0600` permissions — but passwords
-//! themselves live in the OS keychain (`crate::keychain`), not in this file.
-//! `upsert`/`set` move whichever form of password a record has (a discrete
-//! `password` field, or one embedded in `connection_string`) into the
-//! keychain before writing, keyed by the record's own id. A pre-existing
-//! plaintext record (saved before this migration) just keeps working as-is —
-//! nothing to rehydrate, since its password is still sitting in the JSON —
-//! until the next time it's saved, at which point it's moved to the keychain
-//! automatically. If the keychain is ever unavailable, the password is left
-//! in the JSON rather than lost.
+//! Connections — including their passwords — are stored in plaintext as a
+//! single JSON array in the app's data directory; on Unix the file is
+//! created with `0600` permissions as the only real protection. An earlier
+//! version of this app moved passwords into the OS keychain instead, but
+//! every OS keychain (macOS in particular) treats each lookup *and* each
+//! store as its own access request with its own authorization prompt —
+//! connecting to a saved database, or just restarting the app, could mean
+//! two or three separate password prompts in a row. That trade wasn't worth
+//! it, so this version doesn't touch the keychain for anything new.
 //!
-//! `list` deliberately does *not* rehydrate passwords — every OS keychain
-//! (macOS in particular) treats each lookup as its own access request,
-//! showing its own authorization prompt, so eagerly resolving every saved
-//! connection's password just to render a picker list turned "open the app"
-//! into a wall of back-to-back password prompts. Only `get` (one specific
-//! connection, right before actually connecting to it) rehydrates.
+//! For anyone upgrading from that version: `pull_back_from_keychain` is a
+//! one-time migration, run the first time each saved (or last-used)
+//! connection is read here — it pulls the password back out of the keychain
+//! into this plaintext file and deletes the keychain entry, so after that
+//! first read the keychain is never touched again for that connection.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -59,24 +56,22 @@ impl ConnectionStore {
         }
     }
 
-    /// Every saved connection's metadata, newest first — passwords are left
-    /// blank (see module docs); callers that need one for real, e.g. to
-    /// connect, should use `get`. Missing file means an empty list.
+    /// Every saved connection, newest first, real passwords included —
+    /// there's no ongoing cost to that now everything lives in plaintext (see
+    /// module docs). Missing file means an empty list.
     pub fn list(&self) -> Result<Vec<SavedConnection>, DbError> {
         let mut list = self.read_raw()?;
+        let mut dirty = false;
+        for conn in &mut list {
+            if pull_back_from_keychain(&conn.id, &mut conn.params) {
+                dirty = true;
+            }
+        }
+        if dirty {
+            self.write(&list)?;
+        }
         list.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         Ok(list)
-    }
-
-    /// One saved connection with its real password rehydrated from the
-    /// keychain — the only place in this store that touches the keychain for
-    /// a *saved* connection, and only for the one actually being used.
-    pub fn get(&self, id: &str) -> Result<Option<SavedConnection>, DbError> {
-        let list = self.read_raw()?;
-        Ok(list.into_iter().find(|c| c.id == id).map(|mut conn| {
-            rehydrate_password(&conn.id, &mut conn.params);
-            conn
-        }))
     }
 
     fn read_raw(&self) -> Result<Vec<SavedConnection>, DbError> {
@@ -87,9 +82,7 @@ impl ConnectionStore {
         serde_json::from_slice(&bytes).map_err(|e| DbError::internal(e.to_string()))
     }
 
-    /// Insert or update a connection by id, returning the stored record (with
-    /// its real password intact — only the on-disk copy has it moved to the
-    /// keychain).
+    /// Insert or update a connection by id, returning the stored record.
     pub fn upsert(&self, mut conn: SavedConnection) -> Result<SavedConnection, DbError> {
         let mut list = self.read_raw()?;
         if conn.id.is_empty() {
@@ -99,12 +92,10 @@ impl ConnectionStore {
             conn.created_at = existing.created_at;
         }
 
-        let mut to_store = conn.clone();
-        move_password_to_keychain(&to_store.id, &mut to_store.params);
-        if let Some(existing) = list.iter_mut().find(|c| c.id == to_store.id) {
-            *existing = to_store;
+        if let Some(existing) = list.iter_mut().find(|c| c.id == conn.id) {
+            *existing = conn.clone();
         } else {
-            list.push(to_store);
+            list.push(conn.clone());
         }
         self.write(&list)?;
         Ok(conn)
@@ -114,6 +105,8 @@ impl ConnectionStore {
         let mut list = self.read_raw()?;
         list.retain(|c| c.id != id);
         self.write(&list)?;
+        // Best-effort cleanup in case this record was never read (and thus
+        // never migrated) since upgrading off keychain storage.
         keychain::delete_password(id);
         Ok(())
     }
@@ -162,7 +155,9 @@ impl LastConnectionStore {
         // A corrupt file shouldn't wedge startup — treat it as "no last".
         let mut last: Option<LastConnection> = serde_json::from_slice(&bytes).ok();
         if let Some(last) = &mut last {
-            rehydrate_password(LAST_CONNECTION_ACCOUNT, &mut last.params);
+            if pull_back_from_keychain(LAST_CONNECTION_ACCOUNT, &mut last.params) {
+                self.set(last)?;
+            }
         }
         Ok(last)
     }
@@ -171,10 +166,8 @@ impl LastConnectionStore {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(io_err)?;
         }
-        let mut to_store = last.clone();
-        move_password_to_keychain(LAST_CONNECTION_ACCOUNT, &mut to_store.params);
         let json =
-            serde_json::to_vec_pretty(&to_store).map_err(|e| DbError::internal(e.to_string()))?;
+            serde_json::to_vec_pretty(last).map_err(|e| DbError::internal(e.to_string()))?;
         fs::write(&self.path, json).map_err(io_err)?;
         restrict_permissions(&self.path);
         Ok(())
@@ -223,39 +216,16 @@ fn restrict_permissions(path: &Path) {
 #[cfg(not(unix))]
 fn restrict_permissions(_path: &Path) {}
 
-/// Move whichever form of password `params` currently holds (a discrete
-/// `password` field, or one embedded in `connection_string`) into the OS
-/// keychain under `account`, blanking it in `params` on success. Best-effort:
-/// if the keychain write fails, `params` is left untouched so the password
-/// stays in the JSON rather than getting lost. When `connection_string` is
-/// set, it's the only form `build_config` actually uses (see `db/postgres.rs`),
-/// so a discrete `password` alongside it is ignored here too.
-fn move_password_to_keychain(account: &str, params: &mut ConnectionParams) {
-    let connection_string = params
-        .connection_string
-        .as_deref()
-        .filter(|s| !s.trim().is_empty());
-    if let Some(cs) = connection_string {
-        if let Some((stripped, password)) = extract_dsn_password(cs) {
-            if keychain::store_password(account, &password).is_ok() {
-                params.connection_string = Some(stripped);
-            }
-        }
-        return;
-    }
-    if let Some(pw) = params.password.as_deref().filter(|p| !p.is_empty()) {
-        if keychain::store_password(account, pw).is_ok() {
-            params.password = None;
-        }
-    }
-}
-
-/// Inverse of `move_password_to_keychain`: fill in a password from the
-/// keychain if `params` doesn't already have one. A DSN with no password
-/// segment is ambiguous — it might have been blanked by migration, or it
+/// One-time migration off the OS keychain (see module docs): if `params` has
+/// no password but one is still sitting in the keychain under `account` from
+/// a previous version of this app, pulls it into `params` in plaintext and
+/// deletes the keychain entry — so this is the *last* time that account is
+/// ever looked up. Returns `true` if anything was actually pulled back, so
+/// callers know whether the record needs to be re-persisted to disk. A DSN
+/// with no password segment is ambiguous — it might be pre-migration, or it
 /// might genuinely have no password (e.g. trust auth) — so this always tries
 /// the keychain lookup and just no-ops if nothing's stored under `account`.
-fn rehydrate_password(account: &str, params: &mut ConnectionParams) {
+fn pull_back_from_keychain(account: &str, params: &mut ConnectionParams) -> bool {
     let connection_string = params
         .connection_string
         .as_deref()
@@ -265,13 +235,20 @@ fn rehydrate_password(account: &str, params: &mut ConnectionParams) {
         if extract_dsn_password(&cs).is_none() {
             if let Some(pw) = keychain::load_password(account) {
                 params.connection_string = Some(insert_dsn_password(&cs, &pw));
+                keychain::delete_password(account);
+                return true;
             }
         }
-        return;
+        return false;
     }
     if params.password.is_none() {
-        params.password = keychain::load_password(account);
+        if let Some(pw) = keychain::load_password(account) {
+            params.password = Some(pw);
+            keychain::delete_password(account);
+            return true;
+        }
     }
+    false
 }
 
 /// If `dsn` has a `scheme://user:password@...` userinfo segment, returns

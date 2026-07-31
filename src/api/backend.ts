@@ -30,14 +30,6 @@ export function listSavedConnections(): Promise<SavedConnection[]> {
   return invoke("list_saved_connections");
 }
 
-/** One saved connection with its real password rehydrated from the OS
- *  keychain — call right before connecting to (or editing) a saved entry,
- *  not for the picker list itself (`listSavedConnections` covers that
- *  without triggering a keychain prompt per entry). */
-export function getSavedConnection(id: string): Promise<SavedConnection | null> {
-  return invoke("get_saved_connection", { id });
-}
-
 export function saveConnection(
   connection: SavedConnection,
 ): Promise<SavedConnection> {
@@ -56,13 +48,25 @@ export function testConnection(
 
 /** Opens a new session and adds it to the backend's pool — never replaces an
  *  existing one, so connecting to a second database leaves the first live.
- *  Returns the new session's id, used by every call below to address it. */
+ *  Returns the new session's id, used by every call below to address it.
+ *
+ *  `rememberAsLast` (default `true`) persists this as the connection to
+ *  auto-reconnect to on next launch. Pass `false` when re-establishing the
+ *  connection that was *just read* from that same store (launch's own
+ *  auto-reconnect) — writing the identical record straight back would be a
+ *  pure, avoidable disk write. */
 export function connect(
   params: ConnectionParams,
   name: string,
   connectionId?: string | null,
+  rememberAsLast?: boolean,
 ): Promise<ActiveConnectionInfo> {
-  return invoke("connect", { params, name, connectionId: connectionId ?? null });
+  return invoke("connect", {
+    params,
+    name,
+    connectionId: connectionId ?? null,
+    rememberAsLast: rememberAsLast ?? true,
+  });
 }
 
 export function disconnect(sessionId: string): Promise<void> {

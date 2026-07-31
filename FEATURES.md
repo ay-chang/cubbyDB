@@ -57,13 +57,16 @@ code comments or AGENTS.md's architecture section.
 - Disconnecting a connection clears the launch auto-reconnect target only
   once every connection is closed — closing one of several open connections
   leaves the others as the target for next launch
-- **Passwords live in the OS keychain** (macOS Keychain, Windows Credential
-  Manager, Linux Secret Service), not in the saved-connections JSON file —
-  covers both the discrete password field and one embedded in a connection
-  string. A connection saved before this shipped just keeps working as
-  plaintext until the next time it's saved, at which point its password is
-  moved to the keychain automatically. If the keychain is ever unavailable,
-  the password is left in the JSON rather than lost
+- **Passwords are stored in plaintext** in the saved-connections JSON file
+  (`0600` permissions on Unix, the only real protection). An earlier version
+  stored them in the OS keychain instead, but every OS keychain treats each
+  lookup *and* each store as its own access request with its own
+  authorization prompt — connecting to a saved database, or just restarting
+  the app, could mean several password prompts in a row. Anyone upgrading
+  from that version gets a one-time pull-back: the first time each saved (or
+  last-used) connection is read, its password is pulled out of the keychain
+  into this file and the keychain entry is deleted, so it's never touched
+  again after that
 
 ## Schema browser
 
@@ -316,6 +319,24 @@ code comments or AGENTS.md's architecture section.
 - A tab with unsaved cell edits prompts for confirmation before you switch
   away, close it, or re-run its query
 - Per-table column order and width are remembered across sessions
+
+## Installing & updating
+
+- Installers (macOS, Windows, Linux) are built and published to GitHub
+  Releases whenever a version tag is pushed; each release also carries a
+  signed update manifest for the in-app updater
+- On launch, CubbyDB silently checks for a newer release; if one exists, a
+  dismissible top-of-window banner offers **Update** (downloads, installs,
+  and relaunches) or **Later** (checks again next launch). A failed check
+  (offline, unreachable) says nothing — it's a background check the user
+  didn't ask for
+- **Settings → General** also shows the current version with its own
+  **Check for Updates** button, for checking on demand rather than waiting
+  for the next launch
+- Update payloads are signed independently of OS-level code signing — a
+  separate keypair verifies every release before it's installed, regardless
+  of whether that release's installer is also Apple-notarized or
+  Windows-code-signed
 
 ## Settings
 

@@ -11,6 +11,7 @@ import {
 import type { CopyResult } from "../../api/backend";
 import { copyToClipboard, readClipboard } from "../../api/backend";
 import { parseCsv } from "../../lib/csv";
+import { bestMatch } from "../../lib/fuzzyMatch";
 import type { Delimiter, QueryTab } from "../../state/store";
 import { useActiveSchema, useStore } from "../../state/store";
 import { NULL_DISPLAY_LABELS, PAGE_SIZE, tabHasPendingEdits } from "../../state/store";
@@ -32,6 +33,13 @@ export function ResultsPane({ tab }: { tab: QueryTab }) {
   // matching the design (we don't get types back from simple_query).
   const numericCols = useMemo(
     () => (result ? inferNumericColumns(result) : []),
+    [result],
+  );
+
+  // Same inference approach, for displaying Postgres's `t`/`f` boolean text
+  // form as `true`/`false` — see `inferBooleanColumns`'s doc comment.
+  const booleanCols = useMemo(
+    () => (result ? inferBooleanColumns(result) : []),
     [result],
   );
 
@@ -114,6 +122,7 @@ export function ResultsPane({ tab }: { tab: QueryTab }) {
           tab={tab}
           result={result}
           numericCols={numericCols}
+          booleanCols={booleanCols}
           navByColumn={navByColumn}
           editable={editability?.editable ?? false}
           pkColIndices={pkColIndices}
@@ -375,6 +384,7 @@ function ResultsGrid({
   tab,
   result,
   numericCols,
+  booleanCols,
   navByColumn,
   editable,
   pkColIndices,
@@ -383,6 +393,7 @@ function ResultsGrid({
   tab: QueryTab;
   result: QueryResult;
   numericCols: boolean[];
+  booleanCols: boolean[];
   navByColumn: ColNav[] | null;
   editable: boolean;
   pkColIndices: Set<number>;
@@ -458,6 +469,22 @@ function ResultsGrid({
   const [findQuery, setFindQuery] = useState("");
   const [findIndex, setFindIndex] = useState(0);
   const findInputRef = useRef<HTMLInputElement>(null);
+
+  // Jump-to-column (Cmd/Ctrl+G) — scrolls a wide, horizontally-scrolled grid
+  // to bring a named column into view, rather than searching cell values
+  // like Find does. Mutually exclusive with Find (see the shared keydown
+  // handler below) so the two overlays never stack.
+  const [colJumpOpen, setColJumpOpen] = useState(false);
+  const [colJumpQuery, setColJumpQuery] = useState("");
+  const [colJumpSelected, setColJumpSelected] = useState(0);
+  const colJumpInputRef = useRef<HTMLInputElement>(null);
+  // Same reasoning as CommandPalette's mouseArmedRef: on open (and on every
+  // query change that reflows the list), the browser fires `mouseenter` on
+  // whatever row ends up under an already-stationary cursor, which would
+  // otherwise steal the keyboard-driven selection away from row 0. Hover
+  // only starts choosing a row once the mouse has demonstrably moved since
+  // the list last reset.
+  const colJumpMouseArmedRef = useRef(false);
 
   const isRowSelected = (kind: "existing" | "new", index: number) =>
     rowSel.some((s) => s.kind === kind && s.index === index);
@@ -926,6 +953,42 @@ function ResultsGrid({
     [virtualizeRows, virtualizeCols, rowH, colGeom, syncWin],
   );
 
+  /** Scroll a column into view (horizontally only — `rowPos: -1` skips the
+   *  vertical adjustment `scrollCellIntoView` would otherwise do) and
+   *  highlight it via the same crosshair `selected` state a clicked cell
+   *  gets, without changing which row is selected. */
+  const jumpToColumnIndex = useCallback(
+    (colIndex: number) => {
+      scrollCellIntoView(-1, order.indexOf(colIndex));
+      requestAnimationFrame(() => {
+        document
+          .querySelector(`[data-header="${colIndex}"]`)
+          ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      });
+      setSelected((s) => ({ r: s?.r ?? 0, col: colIndex }));
+      setColJumpOpen(false);
+      setColJumpQuery("");
+    },
+    [order, scrollCellIntoView],
+  );
+
+  const colJumpMatches = useMemo(() => {
+    const q = colJumpQuery.trim();
+    if (!q) return result.columns.map((c, i) => ({ index: i, name: c.name }));
+    const scored: Array<{ index: number; name: string; score: number }> = [];
+    result.columns.forEach((c, i) => {
+      const m = bestMatch(q, [c.name]);
+      if (m) scored.push({ index: i, name: c.name, score: m.score });
+    });
+    scored.sort((a, b) => b.score - a.score);
+    return scored;
+  }, [result.columns, colJumpQuery]);
+
+  useEffect(() => {
+    setColJumpSelected(0);
+    colJumpMouseArmedRef.current = false;
+  }, [colJumpQuery]);
+
   // The columns actually rendered in each row. Memoized because it's a prop
   // on every `GridRow`, whose `memo()` needs a stable reference.
   const visibleOrder = useMemo(
@@ -1150,8 +1213,19 @@ function ResultsGrid({
       const mod = e.metaKey || e.ctrlKey;
       if (mod && e.key.toLowerCase() === "f") {
         e.preventDefault();
+        setColJumpOpen(false);
         setFindOpen(true);
         requestAnimationFrame(() => findInputRef.current?.focus());
+        return;
+      }
+      if (mod && e.key.toLowerCase() === "g") {
+        e.preventDefault();
+        setFindOpen(false);
+        setColJumpOpen(true);
+        setColJumpQuery("");
+        setColJumpSelected(0);
+        colJumpMouseArmedRef.current = false;
+        requestAnimationFrame(() => colJumpInputRef.current?.focus());
         return;
       }
       if (!findOpen) return;
@@ -1333,6 +1407,87 @@ function ResultsGrid({
           </button>
         </div>
       )}
+      {colJumpOpen && (
+        <div
+          className="colgo-overlay"
+          onClick={() => {
+            setColJumpOpen(false);
+            setColJumpQuery("");
+          }}
+        >
+          <div className="grid-colgo" onClick={(e) => e.stopPropagation()}>
+            <div className="grid-colgo__bar">
+              <input
+                ref={colJumpInputRef}
+                className="grid-colgo__input"
+                value={colJumpQuery}
+                onChange={(e) => setColJumpQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setColJumpOpen(false);
+                    setColJumpQuery("");
+                  } else if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const max = Math.min(colJumpMatches.length, 20) - 1;
+                    setColJumpSelected((i) => Math.min(i + 1, max));
+                  } else if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setColJumpSelected((i) => Math.max(i - 1, 0));
+                  } else if (e.key === "Enter") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const top = colJumpMatches[colJumpSelected];
+                    if (top) jumpToColumnIndex(top.index);
+                  }
+                }}
+                placeholder="Jump to column…"
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
+              />
+              <button
+                className="grid-find__close"
+                onClick={() => {
+                  setColJumpOpen(false);
+                  setColJumpQuery("");
+                }}
+                title="Close (Esc)"
+              >
+                ×
+              </button>
+            </div>
+            <div
+              className="grid-colgo__list"
+              onMouseMove={() => {
+                colJumpMouseArmedRef.current = true;
+              }}
+            >
+              {colJumpMatches.length === 0 ? (
+                <div className="grid-colgo__empty">No matching columns.</div>
+              ) : (
+                colJumpMatches.slice(0, 20).map((m, i) => (
+                  <div
+                    key={m.index}
+                    className={
+                      "grid-colgo__item" + (i === colJumpSelected ? " grid-colgo__item--active" : "")
+                    }
+                    onMouseEnter={() => {
+                      if (colJumpMouseArmedRef.current) setColJumpSelected(i);
+                    }}
+                    onClick={() => jumpToColumnIndex(m.index)}
+                  >
+                    {m.name}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       <div
         className="grid__scroll"
         ref={scrollRef}
@@ -1344,6 +1499,7 @@ function ResultsGrid({
           {order.map((colIndex, pos) => (
             <div
               key={colIndex}
+              data-header={colIndex}
               className={
                 "grid__hcell" +
                 (numericCols[colIndex] ? " grid__cell--num" : "") +
@@ -1396,6 +1552,7 @@ function ResultsGrid({
               rowStyle={rowStyle}
               order={visibleOrder}
               numericCols={numericCols}
+              booleanCols={booleanCols}
               navByColumn={navByColumn}
               pkColIndices={pkColIndices}
               nullableColIndices={nullableColIndices}
@@ -1655,6 +1812,9 @@ interface GridCellProps {
   nav: ColNav | undefined;
   canSetNull: boolean;
   numeric: boolean;
+  /** True if every non-null value in this column is Postgres's canonical
+   *  boolean text form (`t`/`f`) — displayed as `true`/`false` instead. */
+  isBoolean: boolean;
   editable: boolean;
   nullText: string;
   isEditing: boolean;
@@ -1687,6 +1847,7 @@ const GridCell = memo(function GridCell({
   nav,
   canSetNull,
   numeric,
+  isBoolean,
   editable,
   nullText,
   isEditing,
@@ -1727,6 +1888,13 @@ const GridCell = memo(function GridCell({
     );
   }
 
+  // `t`/`f` is Postgres's canonical boolean text form, not something a user
+  // would recognize at a glance — shown as `true`/`false` instead. Only the
+  // display changes; the underlying value (what editing operates on) is
+  // untouched.
+  const displayValue =
+    isBoolean && value === "t" ? "true" : isBoolean && value === "f" ? "false" : value;
+
   return (
     <div
       data-cell={`${r}-${colIndex}`}
@@ -1745,7 +1913,7 @@ const GridCell = memo(function GridCell({
           ? fkTooltip(nav!)
           : isPk && editable
             ? "Primary key — double-click to edit (changes the row's key)"
-            : value ?? "NULL"
+            : displayValue ?? "NULL"
       }
       onClick={() => onCellClick(r, colIndex)}
       onDoubleClick={() => {
@@ -1759,11 +1927,11 @@ const GridCell = memo(function GridCell({
       }}
     >
       <span className="grid__cell-text">
-        {value === null
+        {displayValue === null
           ? nullText
           : findOpen && findQuery.trim()
-            ? highlightMatches(value, findQuery, isActiveFindMatch)
-            : value}
+            ? highlightMatches(displayValue, findQuery, isActiveFindMatch)
+            : displayValue}
       </span>
     </div>
   );
@@ -1780,6 +1948,7 @@ interface GridRowProps {
   /** The *windowed* display order — only the columns currently on screen. */
   order: number[];
   numericCols: boolean[];
+  booleanCols: boolean[];
   navByColumn: ColNav[] | null;
   pkColIndices: Set<number>;
   nullableColIndices: Set<number>;
@@ -1823,6 +1992,7 @@ const GridRow = memo(function GridRow({
   rowStyle,
   order,
   numericCols,
+  booleanCols,
   navByColumn,
   pkColIndices,
   nullableColIndices,
@@ -1908,6 +2078,7 @@ const GridRow = memo(function GridRow({
             nav={nav}
             canSetNull={canSetNull}
             numeric={numericCols[colIndex]}
+            isBoolean={booleanCols[colIndex]}
             editable={editable}
             nullText={nullText}
             isEditing={isEditing}
@@ -2248,6 +2419,26 @@ function inferNumericColumns(result: QueryResult): boolean[] {
       if (v == null || v === "") continue;
       seen = true;
       if (!NUMERIC_RE.test(v)) return false;
+    }
+    return seen;
+  });
+}
+
+/** Same "infer from the actual values" approach as `inferNumericColumns` —
+ *  and for the same reason: `simple_query` doesn't give us column types.
+ *  `t`/`f` is Postgres's canonical boolean text form (`SELECT true` comes
+ *  back as the single character `t`) and nothing else in Postgres
+ *  serializes to a bare `t`/`f`, so "every non-null value in this column is
+ *  exactly `t` or `f`" is a reliable signal — and, unlike a schema lookup,
+ *  works for ad-hoc query results too, not just table-browse tabs. */
+function inferBooleanColumns(result: QueryResult): boolean[] {
+  return result.columns.map((_, i) => {
+    let seen = false;
+    for (const row of result.rows) {
+      const v = row[i];
+      if (v == null || v === "") continue;
+      seen = true;
+      if (v !== "t" && v !== "f") return false;
     }
     return seen;
   });

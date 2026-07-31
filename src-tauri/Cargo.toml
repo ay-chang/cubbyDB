@@ -22,6 +22,12 @@ tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# In-app update check + install, and the ability to relaunch after installing
+# one. Linux only self-updates from the AppImage bundle target (not .deb) —
+# a Tauri/OS constraint, not something configurable here.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+
 # Async runtime for the database driver.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
 
