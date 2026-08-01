@@ -79,16 +79,21 @@ jobs:
           # required on every platform, unrelated to OS code signing below.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # macOS code signing + notarization. Leave these secrets unset and
-          # tauri-action just builds an unsigned .app/.dmg instead — Gatekeeper
-          # then shows an "unidentified developer" warning, but the build and
-          # the updater signature above are unaffected.
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # macOS code signing + notarization: intentionally not wired up yet.
+          # Tauri's macOS bundler decides whether to codesign based on whether
+          # APPLE_CERTIFICATE is *present* in the environment at all — even set
+          # to an empty string, it still counts as "yes, sign this" and fails
+          # trying to import an empty certificate. A missing GitHub secret
+          # interpolates to an empty string, not an absent variable, so these
+          # keys must stay out of this block entirely until real Apple
+          # credentials exist — don't "helpfully" add them back referencing
+          # not-yet-created secrets. Once Apple signing is set up, add here:
+          #   APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          #   APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          #   APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          #   APPLE_ID: ${{ secrets.APPLE_ID }}
+          #   APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          #   APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "CubbyDB ${{ github.ref_name }}"
