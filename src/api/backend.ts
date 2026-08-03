@@ -10,6 +10,12 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type {
   ActiveConnectionInfo,
+  AiChatResult,
+  AiChatSummary,
+  AiChatThread,
+  AiConfigStatus,
+  AiMessage,
+  AiModelInfo,
   ColumnValue,
   ConnectionInfo,
   ConnectionParams,
@@ -319,6 +325,87 @@ export function queryHistory(limit?: number): Promise<HistoryEntry[]> {
 
 export function clearQueryHistory(): Promise<void> {
   return invoke("clear_query_history");
+}
+
+// --- AI assistant ------------------------------------------------------------
+// Anthropic-only, deliberately — see the backend's `ai_config.rs` module doc.
+
+export function getAiConfig(): Promise<AiConfigStatus> {
+  return invoke("get_ai_config");
+}
+
+export function saveAiConfig(apiKey: string): Promise<AiConfigStatus> {
+  return invoke("save_ai_config", { apiKey });
+}
+
+export function clearAiConfig(): Promise<AiConfigStatus> {
+  return invoke("clear_ai_config");
+}
+
+export function saveAiModel(
+  model: string,
+  supportsEffort: boolean,
+): Promise<AiConfigStatus> {
+  return invoke("save_ai_model", { model, supportsEffort });
+}
+
+/** Live-fetches the models the saved API key currently has access to.
+ *  Rejects if no key is saved yet. */
+export function listAiModels(): Promise<AiModelInfo[]> {
+  return invoke("list_ai_models");
+}
+
+/** One AI turn: `messages` is the whole conversation so far (ending in the
+ *  newest user message) — the backend is stateless across calls except for
+ *  the live DB session, so the full history is resent every time. `schema`
+ *  is the connection's already-fetched schema tree; `activeTable` is the
+ *  active tab's table, if it's a table tab, so the AI knows what's on screen. */
+export function aiChat(
+  sessionId: string,
+  schema: SchemaNode[],
+  activeTable: { schema: string; table: string } | null,
+  messages: AiMessage[],
+): Promise<AiChatResult> {
+  return invoke("ai_chat", {
+    sessionId,
+    schema,
+    activeTable,
+    messages,
+  });
+}
+
+// --- Saved AI chats -----------------------------------------------------------
+// Scoped by connectionId (a *saved* connection's stable id), not sessionId —
+// see the backend's `ai_chats.rs` module doc. Only meaningful for
+// connections that have one; ad-hoc connections never call these.
+
+export function listAiChats(connectionId: string): Promise<AiChatSummary[]> {
+  return invoke("list_ai_chats", { connectionId });
+}
+
+export function getAiChat(id: string): Promise<AiChatThread> {
+  return invoke("get_ai_chat", { id });
+}
+
+/** Creates (`thread.id` == "") or updates (`thread.id` set) a saved chat.
+ *  Pass `title: ""` on every routine turn — an existing title is never
+ *  blanked out by an empty incoming one, so this only actually renames via
+ *  `renameAiChat`. */
+export function upsertAiChat(thread: {
+  id: string;
+  connectionId: string;
+  title: string;
+  messages: AiMessage[];
+}): Promise<AiChatThread> {
+  return invoke("upsert_ai_chat", { thread });
+}
+
+export function renameAiChat(id: string, title: string): Promise<AiChatSummary> {
+  return invoke("rename_ai_chat", { id, title });
+}
+
+export function deleteAiChat(id: string): Promise<void> {
+  return invoke("delete_ai_chat", { id });
 }
 
 /** Narrow an unknown thrown value to a structured `DbError`. */

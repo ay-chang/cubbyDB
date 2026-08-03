@@ -61,7 +61,7 @@ pub struct ConnectionInfo {
 
 /// A schema and everything in it: tables/views, functions/procedures,
 /// sequences, and enum types.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SchemaNode {
     pub name: String,
@@ -71,14 +71,14 @@ pub struct SchemaNode {
     pub types: Vec<TypeNode>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TableKind {
     Table,
     View,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TableNode {
     pub name: String,
@@ -88,7 +88,7 @@ pub struct TableNode {
     pub columns: Vec<ColumnNode>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ColumnNode {
     pub name: String,
@@ -111,7 +111,7 @@ pub struct ColumnNode {
 }
 
 /// A column this column points at via a foreign key.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ForeignKeyRef {
     pub schema: String,
@@ -125,7 +125,7 @@ pub struct ForeignKeyRef {
 /// to browse the list. Aggregate and window functions (`pg_proc.prokind`
 /// `'a'`/`'w'`) are deliberately excluded — rarer to browse and would need
 /// different definition rendering than a plain function/procedure body.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FunctionNode {
     /// The function's `pg_proc.oid`, cast to `i64`. Needed to disambiguate
@@ -141,7 +141,7 @@ pub struct FunctionNode {
     pub kind: FunctionKind,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum FunctionKind {
     Function,
@@ -151,7 +151,7 @@ pub enum FunctionKind {
 /// The table/column a sequence is `OWNED BY` (e.g. the sequence backing a
 /// `SERIAL`/`GENERATED ... AS IDENTITY` column), if any — always in the same
 /// schema as the sequence itself.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SequenceOwner {
     pub table: String,
@@ -160,7 +160,7 @@ pub struct SequenceOwner {
 
 /// A sequence, listed lightly in the schema tree — its current value and
 /// bounds are fetched separately, only when opened (see [`SequenceDetails`]).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SequenceNode {
     pub name: String,
@@ -174,7 +174,7 @@ pub struct SequenceNode {
 ///
 /// Deliberately enum types only, not composite or domain types — same
 /// honest-scope-cut as [`TableStructure`] not reconstructing `CREATE TABLE`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TypeNode {
     pub name: String,
@@ -351,6 +351,14 @@ pub trait DbSession: Send + Sync {
     /// applying the default row cap to unbounded SELECTs — the frontend never
     /// rewrites SQL.
     async fn run_query(&self, sql: &str) -> Result<QueryResult, DbError>;
+
+    /// Run a single statement read-only — used by the AI assistant to answer
+    /// data questions with model-generated SQL, which must never be trusted
+    /// to only ever contain a `SELECT`. Enforced by the driver at the
+    /// transaction level (e.g. Postgres's `BEGIN READ ONLY`, always rolled
+    /// back), not by inspecting the SQL text, which can't reliably tell a
+    /// read from a write (CTEs, `; DROP ...`, etc. all defeat a text check).
+    async fn run_read_only_query(&self, sql: &str) -> Result<QueryResult, DbError>;
 
     /// Build the `SELECT * FROM table [WHERE filter] LIMIT n [OFFSET m]` used by
     /// the table browser. `filter` is a user-authored predicate (the WHERE bar),

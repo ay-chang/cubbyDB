@@ -2,7 +2,7 @@ import { acceptCompletion } from "@codemirror/autocomplete";
 import { Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import CodeMirror from "@uiw/react-codemirror";
-import { useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef } from "react";
 
 import { buildSqlNamespace, SQL_KEYWORDS, sqlLanguage } from "../../lib/sqlSchema";
 import { statementAt } from "../../lib/sqlStatements";
@@ -32,6 +32,19 @@ export function SqlEditor(props: {
   const runRef = useRef(props.onRun);
   runRef.current = props.onRun;
 
+  // The live view, captured once on mount, so the toolbar Run button can
+  // target the same selection-or-statement the Mod-Enter keymap uses without
+  // needing the editor focused.
+  const viewRef = useRef<EditorView | null>(null);
+  const onCreateEditor = useCallback((view: EditorView) => {
+    viewRef.current = view;
+  }, []);
+  const handleRunClick = useCallback(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    runRef.current(selectionOrStatement(view));
+  }, []);
+
   const lineWrap = useStore((s) => s.editorLineWrap);
   const schema = useActiveSchema();
   const sqlNamespace = useMemo(() => buildSqlNamespace(schema), [schema]);
@@ -42,7 +55,7 @@ export function SqlEditor(props: {
 
   const extensions = useMemo(
     () => [
-      sqlLanguage(sqlNamespace, defaultSchema, undefined, SQL_KEYWORDS),
+      sqlLanguage(sqlNamespace, defaultSchema, undefined, SQL_KEYWORDS, schema),
       Prec.highest(
         keymap.of([
           {
@@ -86,7 +99,7 @@ export function SqlEditor(props: {
       cubbyEditorTheme,
       ...(lineWrap ? [EditorView.lineWrapping] : []),
     ],
-    [lineWrap, sqlNamespace, defaultSchema],
+    [lineWrap, sqlNamespace, defaultSchema, schema],
   );
 
   return (
@@ -94,6 +107,7 @@ export function SqlEditor(props: {
       <CodeMirror
         value={props.value}
         onChange={props.onChange}
+        onCreateEditor={onCreateEditor}
         extensions={extensions}
         // "none" disables the library's built-in light theme, which would
         // otherwise paint a white background over our token-driven theme.
@@ -118,6 +132,16 @@ export function SqlEditor(props: {
         height="100%"
         spellCheck={false}
       />
+      <button
+        className="editor__run-btn"
+        title="Run (⌘⏎)"
+        onClick={handleRunClick}
+      >
+        <svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true">
+          <path d="M3.5 2.2c0-.66.72-1.07 1.3-.73l8.5 4.8c.6.34.6 1.2 0 1.54l-8.5 4.8c-.58.34-1.3-.07-1.3-.73V2.2z" />
+        </svg>
+        Run
+      </button>
     </div>
   );
 }

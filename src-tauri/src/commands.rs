@@ -7,6 +7,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use tauri::State;
 
+use crate::ai::{ActiveTableRef, AiChatResult, ChatMessage, ModelInfo};
+use crate::ai::chats::{AiChatSummary, AiChatThread};
+use crate::ai::config::AiConfigStatus;
 use crate::connections::{LastConnection, SavedConnection};
 use crate::db::{
     driver_for, ColumnValue, ConnectionInfo, ConnectionParams, DbError, DbErrorKind, DeleteImpact,
@@ -641,4 +644,193 @@ pub async fn query_history(
 #[tauri::command]
 pub async fn clear_query_history(state: State<'_, AppState>) -> Result<(), DbError> {
     state.history_store().clear()
+}
+
+// --- AI assistant ------------------------------------------------------------
+
+#[tauri::command]
+pub async fn get_ai_config(state: State<'_, AppState>) -> Result<AiConfigStatus, DbError> {
+    let config = state.ai_config_store().get()?;
+    Ok((&config).into())
+}
+
+/// Sets the Anthropic API key.
+#[tauri::command]
+pub async fn save_ai_config(
+    state: State<'_, AppState>,
+    api_key: String,
+) -> Result<AiConfigStatus, DbError> {
+    let config = state.ai_config_store().set_api_key(api_key)?;
+    Ok((&config).into())
+}
+
+#[tauri::command]
+pub async fn clear_ai_config(state: State<'_, AppState>) -> Result<AiConfigStatus, DbError> {
+    let config = state.ai_config_store().clear_api_key()?;
+    Ok((&config).into())
+}
+
+#[tauri::command]
+pub async fn save_ai_model(
+    state: State<'_, AppState>,
+    model: String,
+    supports_effort: bool,
+) -> Result<AiConfigStatus, DbError> {
+    let config = state.ai_config_store().set_model(model, supports_effort)?;
+    Ok((&config).into())
+}
+
+/// Live-fetches the models the saved API key currently has access to, for
+/// the Settings model picker. Errors if no key is saved yet.
+#[tauri::command]
+pub async fn list_ai_models(state: State<'_, AppState>) -> Result<Vec<ModelInfo>, DbError> {
+    let config = state.ai_config_store().get()?;
+    let api_key = config
+        .api_key()
+        .ok_or_else(|| DbError::new(DbErrorKind::Internal, "Save an API key first."))?;
+    crate::ai::provider::list_models(api_key).await
+}
+
+/// One AI turn: builds the schema-aware system prompt from the schema tree
+/// the frontend already has (no need to re-fetch it here), then runs
+/// Anthropic's tool-call loop, executing any requested SQL read-only against
+/// this session's live connection (see `db::DbSession::run_read_only_query`)
+/// with the same reconnect-on-drop retry every other session-scoped command
+/// uses.
+#[tauri::command]
+pub async fn ai_chat(
+    state: State<'_, AppState>,
+    session_id: String,
+    schema: Vec<SchemaNode>,
+    active_table: Option<ActiveTableRef>,
+    messages: Vec<ChatMessage>,
+) -> Result<AiChatResult, DbError> {
+    let config = state.ai_config_store().get()?;
+    let api_key = config
+        .api_key()
+        .ok_or_else(|| {
+            DbError::new(
+                DbErrorKind::Internal,
+                "No API key configured. Add one in Settings \u{2192} AI Assistant.",
+            )
+        })?
+        .to_string();
+
+    // Server version and connection name come from the live session so the
+    // prompt can state what the model is actually talking to. Read and
+    // released before the tool-call closure below takes the same lock.
+    let (server_version, connection_name) = {
+        let active = state.active.lock().await;
+        let session = active.get(&session_id).ok_or_else(DbError::not_connected)?;
+        (
+            session.session.info().server_version.clone(),
+            session.name.clone(),
+        )
+    };
+
+    let system_prompt = crate::ai::prompt::build_system_prompt(&crate::ai::prompt::PromptContext {
+        schema: &schema,
+        active_table: active_table
+            .as_ref()
+            .map(|t| (t.schema.as_str(), t.table.as_str())),
+        server_version: &server_version,
+        connection_name: &connection_name,
+    });
+
+    // A plain `&AppState` (trivially `Copy`, unlike `State` itself) so the
+    // closure below can be called on every loop iteration without needing
+    // `state` to implement anything beyond what a shared reference already
+    // gives us.
+    //
+    // Session *lifecycle* lives here rather than in `ai::tools`: this closure
+    // owns the lock and the reconnect-on-drop retry every other session-scoped
+    // command uses, and hands the tools an already-known-good session.
+    let app_state: &AppState = state.inner();
+    let schema_ref = &schema;
+    let run_tool = move |name: String, input: serde_json::Value| {
+        let session_id = session_id.clone();
+        async move {
+            let mut active = app_state.active.lock().await;
+            {
+                let session = active.get(&session_id).ok_or_else(DbError::not_connected)?;
+                let ctx = crate::ai::tools::ToolContext {
+                    session: session.session.as_ref(),
+                    schema: schema_ref,
+                };
+                match crate::ai::tools::execute(&ctx, &name, &input).await {
+                    Err(e) if e.kind == DbErrorKind::Connection => { /* retry below */ }
+                    other => return other,
+                }
+            }
+            reconnect_in_place(&mut active, &session_id, app_state).await?;
+            let session = active.get(&session_id).ok_or_else(DbError::not_connected)?;
+            let ctx = crate::ai::tools::ToolContext {
+                session: session.session.as_ref(),
+                schema: schema_ref,
+            };
+            crate::ai::tools::execute(&ctx, &name, &input).await
+        }
+    };
+
+    let model = config.model();
+    let send_effort = config.model_supports_effort();
+    crate::ai::provider::run_loop(
+        &api_key,
+        model,
+        send_effort,
+        system_prompt,
+        messages,
+        run_tool,
+    )
+    .await
+}
+
+// --- Saved AI chats -----------------------------------------------------------
+// Scoped by `connection_id` (a *saved* connection's stable id) rather than a
+// `session_id` — a chat only makes sense against the specific database it
+// was asked about, and `session_id` is regenerated every reconnect, so it
+// can't identify "the same database" across a restart. Ad-hoc connections
+// have no `connection_id` and so simply have no entries here; the frontend
+// skips calling these for them and keeps today's ephemeral-only behavior.
+
+#[tauri::command]
+pub async fn list_ai_chats(
+    state: State<'_, AppState>,
+    connection_id: String,
+) -> Result<Vec<AiChatSummary>, DbError> {
+    state.ai_chat_store().list_for_connection(&connection_id)
+}
+
+#[tauri::command]
+pub async fn get_ai_chat(state: State<'_, AppState>, id: String) -> Result<AiChatThread, DbError> {
+    state
+        .ai_chat_store()
+        .get(&id)?
+        .ok_or_else(|| DbError::new(DbErrorKind::Internal, "Chat not found."))
+}
+
+/// Creates (`thread.id` empty) or updates (`thread.id` set) a saved chat.
+/// Called after every AI turn for a connection that has a stable id — see
+/// `AiChatStore::upsert` for the title-preservation rule that lets callers
+/// always pass `title: ""` here except when actually renaming.
+#[tauri::command]
+pub async fn upsert_ai_chat(
+    state: State<'_, AppState>,
+    thread: AiChatThread,
+) -> Result<AiChatThread, DbError> {
+    state.ai_chat_store().upsert(thread)
+}
+
+#[tauri::command]
+pub async fn rename_ai_chat(
+    state: State<'_, AppState>,
+    id: String,
+    title: String,
+) -> Result<AiChatSummary, DbError> {
+    state.ai_chat_store().rename(&id, title)
+}
+
+#[tauri::command]
+pub async fn delete_ai_chat(state: State<'_, AppState>, id: String) -> Result<(), DbError> {
+    state.ai_chat_store().delete(&id)
 }

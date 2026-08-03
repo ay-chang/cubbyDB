@@ -10,6 +10,8 @@ use std::path::PathBuf;
 
 use tokio::sync::Mutex;
 
+use crate::ai::chats::AiChatStore;
+use crate::ai::config::AiConfigStore;
 use crate::connections::{ConnectionStore, LastConnectionStore};
 use crate::db::{ConnectionParams, DbSession, Engine, QueryCanceller};
 use crate::history::HistoryStore;
@@ -65,5 +67,13 @@ impl AppState {
 
     pub fn saved_query_store(&self) -> SavedQueryStore {
         SavedQueryStore::new(&self.data_dir)
+    }
+
+    pub fn ai_config_store(&self) -> AiConfigStore {
+        AiConfigStore::new(&self.data_dir)
+    }
+
+    pub fn ai_chat_store(&self) -> AiChatStore {
+        AiChatStore::new(&self.data_dir)
     }
 }

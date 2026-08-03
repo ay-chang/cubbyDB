@@ -46,6 +46,16 @@ postgres-native-tls = "0.5"
 # Trait objects with async methods (the database-driver abstraction).
 async-trait = "0.1"
 
+# HTTP client for the AI assistant's calls to the Anthropic API.
+# native-tls (not rustls) to match the TLS story already used for Postgres.
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
+
+# The AI assistant's system prompt states today's date. Without it the model
+# answers "how many rows from yesterday" against its training cutoff instead
+# of the user's clock, which is silently wrong rather than an error. Needs
+# the local timezone (not UTC) since "yesterday" means the user's yesterday.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
 # System clipboard access for the grid's copy/paste — the webview's own
 # `navigator.clipboard` isn't reliably available inside the Tauri window.
 arboard = "3"

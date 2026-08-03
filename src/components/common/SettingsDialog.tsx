@@ -2,9 +2,12 @@ import { getVersion } from "@tauri-apps/api/app";
 import { useEffect, useState } from "react";
 import { check as checkForUpdate, type Update } from "@tauri-apps/plugin-updater";
 
+import * as api from "../../api/backend";
+import { errorMessage } from "../../api/backend";
 import { installUpdate } from "../../lib/appUpdate";
 import { useStore } from "../../state/store";
 import type { Delimiter, TableFont, Theme } from "../../state/store";
+import type { AiModelInfo } from "../../types";
 import {
   ACCENT_COLOR_LABELS,
   ACCENT_COLOR_OPTIONS,
@@ -26,12 +29,13 @@ import {
 } from "../../state/store";
 import type { NullDisplay } from "../../state/store";
 
-/** Top-level settings tabs. The rail is built to grow beyond these three. */
-type TopSection = "general" | "appearance" | "shortcuts";
+/** Top-level settings tabs. The rail is built to grow beyond these four. */
+type TopSection = "general" | "appearance" | "aiAssistant" | "shortcuts";
 
 const TOP_SECTIONS: { id: TopSection; label: string }[] = [
   { id: "general", label: "General" },
   { id: "appearance", label: "Appearance" },
+  { id: "aiAssistant", label: "AI Assistant" },
   { id: "shortcuts", label: "Keyboard Shortcuts" },
 ];
 
@@ -122,6 +126,7 @@ export function SettingsDialog() {
           {section === "appearance" && appearanceSub === "table" && <TableSection />}
           {section === "appearance" && appearanceSub === "sidebar" && <SidebarSection />}
           {section === "appearance" && appearanceSub === "editor" && <EditorSection />}
+          {section === "aiAssistant" && <AiAssistantSection />}
           {section === "shortcuts" && <ShortcutsSection />}
         </div>
       </div>
@@ -275,6 +280,150 @@ function GeneralSection() {
           </div>
         </div>
         <UpdateCheckButton />
+      </div>
+    </div>
+  );
+}
+
+/** The Ask AI panel's Anthropic API key + model. Bring-your-own-key only —
+ *  Anthropic doesn't let a third-party app use a user's Claude.ai
+ *  subscription in place of metered API billing, so there's no "sign in"
+ *  option to offer here. */
+function AiAssistantSection() {
+  const aiConfig = useStore((s) => s.aiConfig);
+  const loadAiConfig = useStore((s) => s.loadAiConfig);
+  const saveAiConfig = useStore((s) => s.saveAiConfig);
+  const clearAiConfig = useStore((s) => s.clearAiConfig);
+  const saveAiModel = useStore((s) => s.saveAiModel);
+
+  useEffect(() => {
+    if (!aiConfig) void loadAiConfig();
+  }, [aiConfig, loadAiConfig]);
+
+  // Never pre-filled with the real (never-returned) key.
+  const [keyInput, setKeyInput] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const keySet = aiConfig?.anthropicKeySet ?? false;
+  const currentModel = aiConfig?.anthropicModel;
+
+  // Live-fetched, not persisted anywhere — just what populates the dropdown.
+  // Re-runs once a key becomes available (e.g. right after `handleSave`
+  // below succeeds), so a freshly-saved key's models show up automatically.
+  const [modelOptions, setModelOptions] = useState<AiModelInfo[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!keySet) {
+      setModelOptions([]);
+      setModelsError(null);
+      return;
+    }
+    let cancelled = false;
+    setModelsLoading(true);
+    setModelsError(null);
+    api
+      .listAiModels()
+      .then((models) => {
+        if (!cancelled) setModelOptions(models);
+      })
+      .catch((err) => {
+        if (!cancelled) setModelsError(errorMessage(err));
+      })
+      .finally(() => {
+        if (!cancelled) setModelsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [keySet]);
+
+  const handleSave = () => {
+    const trimmed = keyInput.trim();
+    if (!trimmed) return;
+    setSaving(true);
+    void saveAiConfig(trimmed).then(
+      () => {
+        setKeyInput("");
+        setSaving(false);
+      },
+      () => setSaving(false),
+    );
+  };
+
+  return (
+    <div className="settings-section">
+      <div className="settings-field">
+        <div className="settings-field__label">Anthropic API key</div>
+        <div className="settings-field__desc">
+          Powers the Ask AI panel. Bring your own key — CubbyDB never sees your Claude.ai
+          subscription, only the key you paste below.{" "}
+          {keySet
+            ? "A key is saved."
+            : "No key saved yet — the Ask AI panel won't work until you add one."}
+        </div>
+        <div className="settings-select-row">
+          <input
+            className="settings-input"
+            type="password"
+            placeholder={keySet ? "•••• saved — enter a new key to replace it" : "sk-ant-…"}
+            value={keyInput}
+            onChange={(e) => setKeyInput(e.target.value)}
+            spellCheck={false}
+          />
+          <button
+            className="btn btn--primary"
+            onClick={handleSave}
+            disabled={!keyInput.trim() || saving}
+          >
+            Save
+          </button>
+          {keySet && (
+            <button className="btn btn--outline" onClick={() => void clearAiConfig()}>
+              Clear
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="settings-field settings-field--spaced">
+        <div className="settings-field__label">Model</div>
+        <div className="settings-field__desc">
+          {modelsError
+            ? `Couldn't load the model list: ${modelsError}`
+            : !keySet
+              ? "Add an API key above to choose a model."
+              : modelsLoading
+                ? "Loading available models…"
+                : "Fetched live from Anthropic — new models show up here automatically."}
+        </div>
+        <select
+          className="settings-select"
+          value={currentModel ?? ""}
+          disabled={!keySet}
+          onChange={(e) => {
+            const id = e.target.value;
+            // Whether the model accepts the `effort` parameter is captured
+            // here, from the live model list, and persisted with the choice.
+            // Sending `effort` to a model that rejects it (Haiku 4.5) fails
+            // every request, so an unknown model defaults to not sending it.
+            const picked = modelOptions.find((m) => m.id === id);
+            void saveAiModel(id, picked?.supportsEffort ?? false);
+          }}
+        >
+          {/* Keeps the resolved current model selectable even before the live
+              list has loaded (or if it fails to) — the select is never empty
+              or stuck on a value that isn't one of its own options. */}
+          {currentModel && !modelOptions.some((m) => m.id === currentModel) && (
+            <option value={currentModel}>{currentModel}</option>
+          )}
+          {modelOptions.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.label}
+            </option>
+          ))}
+        </select>
       </div>
     </div>
   );

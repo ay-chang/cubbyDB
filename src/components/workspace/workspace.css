@@ -573,11 +573,51 @@
 
 /* --- Editor --- */
 .editor {
+  position: relative;
   height: 100%;
   overflow: hidden;
 }
+/* `@uiw/react-codemirror` wraps `.cm-editor` in its own theme div
+   (`.cm-theme-none`, from the `theme="none"` prop below); without a height on
+   that wrapper too, `.cm-editor`'s `height: 100%` has nothing definite to
+   resolve against and collapses to its content's height instead of filling
+   the pane. That left CodeMirror's own scroller — and so its horizontal
+   scrollbar — sized to the query's line count rather than the full editor
+   height, so on a short query the scrollbar sat right under the last line
+   instead of at the bottom of the pane. */
+.editor .cm-theme-none {
+  height: 100%;
+}
 .editor .cm-editor {
   height: 100%;
+}
+.editor__run-btn {
+  position: absolute;
+  top: 10px;
+  right: 16px;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 11px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  font-weight: 500;
+  box-shadow: var(--shadow-card);
+  transition: background var(--transition), color var(--transition), border-color var(--transition);
+}
+.editor__run-btn svg {
+  fill: currentColor;
+}
+.editor__run-btn:hover {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
 }
 
 /* --- Results --- */
@@ -1865,6 +1905,256 @@
   color: var(--error);
 }
 
+/* --- AI assistant panel --- */
+.ai-panel {
+  position: fixed;
+  top: var(--h-topbar);
+  right: 0;
+  bottom: 0;
+  width: 380px;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  box-shadow: -12px 0 40px -20px rgba(20, 24, 40, 0.25);
+  display: flex;
+  flex-direction: column;
+  z-index: 50;
+}
+.ai-panel__head {
+  height: var(--h-tabs);
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-raised);
+}
+.ai-panel__head-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ai-panel__btn {
+  height: 24px;
+  padding: 0 9px;
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  color: var(--text-muted);
+  border: 1px solid transparent;
+  transition: background var(--transition), color var(--transition);
+}
+.ai-panel__btn:not(:disabled):hover {
+  background: var(--border-faint);
+  color: var(--text);
+}
+.ai-panel__btn:disabled {
+  color: var(--text-ghost);
+  cursor: default;
+}
+.ai-panel__btn--active {
+  background: var(--accent-tint);
+  color: var(--accent-tint-text);
+}
+.ai-panel__close {
+  font-size: 16px;
+  color: var(--text-faint);
+}
+.ai-panel__close:hover {
+  color: var(--text);
+}
+.ai-panel__list {
+  flex: 1;
+  overflow: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ai-panel__empty {
+  padding: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+.ai-panel__settings-link {
+  color: var(--accent);
+  cursor: pointer;
+}
+.ai-panel__settings-link:hover {
+  text-decoration: underline;
+}
+.ai-msg {
+  max-width: 92%;
+  padding: 8px 11px;
+  border-radius: 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.ai-msg--user {
+  align-self: flex-end;
+  background: var(--accent-tint);
+  color: var(--accent-tint-text);
+}
+.ai-msg--assistant {
+  align-self: flex-start;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+.ai-msg--pending {
+  padding: 10px 14px;
+}
+.ai-msg__content {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ai-trace {
+  margin-top: 6px;
+  font-size: 11px;
+}
+.ai-trace summary {
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.ai-trace summary:hover {
+  color: var(--text-muted);
+}
+.ai-trace__item {
+  margin-top: 5px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.ai-trace__tool {
+  font-size: 10px;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ai-trace__sql {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ai-trace__meta {
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+.ai-input-row {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-raised);
+}
+.ai-input {
+  flex: 1;
+  min-width: 0;
+  height: var(--h-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text);
+  padding: 0 10px;
+  font-size: 12.5px;
+  outline: none;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+.ai-input:focus {
+  border: 1.5px solid var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.ai-input-row__send {
+  flex: none;
+}
+
+/* Saved-chats history list — same recipe as `.saved-queries__item`. */
+.ai-panel__history-list {
+  padding: 8px;
+  gap: 4px;
+}
+.ai-chat-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  transition: background var(--transition), border-color var(--transition);
+}
+.ai-chat-item:hover {
+  background: var(--surface-raised);
+  border-color: var(--border);
+}
+.ai-chat-item--active {
+  background: var(--accent-tint);
+  border-color: var(--accent);
+}
+.ai-chat-item__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ai-chat-item__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: var(--text);
+}
+.ai-chat-item__time {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+.ai-chat-item__rename-input {
+  flex: 1;
+  height: 24px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 0 8px;
+  font-size: 12.5px;
+  outline: none;
+}
+.ai-chat-item__actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ai-chat-item__rename,
+.ai-chat-item__delete {
+  font-size: 12px;
+  color: var(--text-faint);
+  opacity: 0;
+  transition: opacity var(--transition), color var(--transition);
+}
+.ai-chat-item:hover .ai-chat-item__rename,
+.ai-chat-item:hover .ai-chat-item__delete {
+  opacity: 1;
+}
+.ai-chat-item__rename:hover {
+  color: var(--text);
+}
+.ai-chat-item__delete:hover {
+  color: var(--error);
+}
+
 /* --- Table structure pane ("View structure" tabs) --- */
 .structure {
   flex: 1;
@@ -2185,4 +2475,12 @@
 .cmdk-item--active .cmdk-item__meta {
   color: var(--on-accent);
   opacity: 0.75;
+}
+/* A script's SQL preview is much longer than a row count or data type —
+   clamp it so a long query can't push the row wider than the panel. */
+.cmdk-item__meta--script {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

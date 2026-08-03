@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useActiveTabId, useActiveTabs, useStore } from "../../state/store";
+import { AiPanel } from "./AiPanel";
 import { CommandPalette } from "./CommandPalette";
 import { EditorTabs } from "./EditorTabs";
 import { FunctionDefinitionPane } from "./FunctionDefinitionPane";
@@ -27,6 +28,7 @@ export function Workspace() {
   const runTab = useStore((s) => s.runTab);
   const historyOpen = useStore((s) => s.historyOpen);
   const savedQueriesOpen = useStore((s) => s.savedQueriesOpen);
+  const aiPanelOpen = useStore((s) => s.aiPanelOpen);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
 
@@ -109,6 +111,7 @@ export function Workspace() {
 
       {historyOpen && <HistoryPanel />}
       {savedQueriesOpen && <SavedQueriesPanel />}
+      {aiPanelOpen && <AiPanel />}
       {saveDialogOpen && <SaveQueryDialog onClose={closeSaveDialog} />}
       <CommandPalette />
     </div>

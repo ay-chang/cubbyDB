@@ -8,7 +8,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { buildTableNamespace, WHERE_KEYWORDS, sqlLanguage } from "../../lib/sqlSchema";
 import type { QueryTab } from "../../state/store";
 import { useActiveSchema, useStore } from "../../state/store";
-import { cubbyAutocompleteTheme, sqlHighlightStyle } from "./editorTheme";
+import {
+  cubbyAutocompleteTheme,
+  cubbySelectionTheme,
+  sqlHighlightStyle,
+} from "./editorTheme";
 import { singleQuoteKeymap } from "./smartQuotes";
 
 /** Compact single-line theme — the box styling (border, height, padding)
@@ -26,9 +30,8 @@ const filterEditorTheme = EditorView.theme({
   ".cm-line": { padding: 0 },
   "&.cm-focused": { outline: "none" },
   ".cm-cursor": { borderLeftColor: "var(--accent)" },
-  "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection": {
-    backgroundColor: "var(--accent-glow)",
-  },
+  // Selection colors come from the shared `cubbySelectionTheme` below — see
+  // its comment for why they can't just be set here.
 });
 
 /**
@@ -99,6 +102,7 @@ export function FilterBar({ tab }: { tab: QueryTab }) {
         ]),
       ),
       filterEditorTheme,
+      cubbySelectionTheme,
       cubbyAutocompleteTheme,
       syntaxHighlighting(sqlHighlightStyle),
       // The placeholder widget (below) appears the instant the doc empties,

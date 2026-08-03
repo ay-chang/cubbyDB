@@ -4,7 +4,7 @@ import { formatCount } from "../../lib/format";
 import type { FuzzyMatch } from "../../lib/fuzzyMatch";
 import { bestMatch } from "../../lib/fuzzyMatch";
 import { useStore } from "../../state/store";
-import type { TableKind } from "../../types";
+import type { SavedQuery, TableKind } from "../../types";
 
 type Item =
   | {
@@ -28,24 +28,42 @@ type Item =
       column: string;
       dataType: string;
       match: FuzzyMatch & { candidate: number };
+    }
+  | {
+      id: string;
+      kind: "script";
+      query: SavedQuery;
+      match: FuzzyMatch & { candidate: number };
     };
 
 const MAX_RESULTS = 40;
 const NO_MATCH: FuzzyMatch & { candidate: number } = { score: 0, indices: [], candidate: -1 };
 
+/** A single-line, length-capped preview of a saved script's SQL for the
+ *  palette row's meta column — full text lives in the Saved Queries panel. */
+function scriptPreview(sql: string): string {
+  const line = sql.trim().replace(/\s+/g, " ");
+  return line.length > 60 ? line.slice(0, 60) + "…" : line;
+}
+
 /**
- * Which kinds of thing the palette is searching. "All" is the default and
- * behaves exactly as the palette always has; the narrower scopes exist for
- * when you know what you're after and the mixed list gets in the way —
- * searching a wide schema for "id" otherwise buries every table under a
- * hundred `id` columns. Tab cycles forward, Shift+Tab back, wrapping both
- * ways so Tab alone reaches all three.
+ * Which kinds of thing the palette is searching. "All" is the default —
+ * tables, columns (once you've typed something), and saved scripts (same
+ * condition) all mixed together — and the narrower scopes exist for when you
+ * know what you're after and the mixed list gets in the way — searching a
+ * wide schema for "id" otherwise buries every table under a hundred `id`
+ * columns. "Scripts" searches saved queries instead — those are global (not
+ * tied to any one connection, see `SavedQuery`), so this scope (and its
+ * contribution to "All") shows the exact same list no matter which database
+ * is active. Tab cycles forward, Shift+Tab back, wrapping both ways so Tab
+ * alone reaches all four.
  */
-type Scope = "all" | "tables" | "columns";
+type Scope = "all" | "tables" | "columns" | "scripts";
 const SCOPES: Array<{ id: Scope; label: string; placeholder: string }> = [
   { id: "all", label: "All", placeholder: "Search tables and columns…" },
   { id: "tables", label: "Tables", placeholder: "Search tables…" },
   { id: "columns", label: "Columns", placeholder: "Search columns…" },
+  { id: "scripts", label: "Scripts", placeholder: "Search saved scripts…" },
 ];
 
 /** Render `text` with the characters at `indices` wrapped in <mark>. */
@@ -80,7 +98,10 @@ function highlight(text: string, indices: number[]): React.ReactNode {
  * opens/focuses that table's structure tab and scrolls to + briefly
  * highlights that column's row there — there's no "column" surface to jump
  * to directly, so this is the closest thing to "go to this column's
- * definition."
+ * definition." The Scripts scope searches saved queries instead: since those
+ * are global rather than per-connection, the same list shows up no matter
+ * which database is active, and Enter opens the script as a tab on whichever
+ * connection is currently active (see `openSavedQuery`).
  */
 export function CommandPalette() {
   const open = useStore((s) => s.commandPaletteOpen);
@@ -90,6 +111,8 @@ export function CommandPalette() {
   const switchConnection = useStore((s) => s.switchConnection);
   const openSelectTop = useStore((s) => s.openSelectTop);
   const jumpToColumn = useStore((s) => s.jumpToColumn);
+  const savedQueries = useStore((s) => s.savedQueries);
+  const openSavedQuery = useStore((s) => s.openSavedQuery);
 
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<Scope>("all");
@@ -124,8 +147,35 @@ export function CommandPalette() {
   const slots = useMemo(() => Object.values(connections), [connections]);
   const showConnBadge = slots.length > 1;
 
+  /** Score every saved script against `q` (or, with `q` empty, every script
+   *  at score 0 — `bestMatch` already treats an empty query as a match-all).
+   *  Shared by the dedicated Scripts scope and, when there's something
+   *  typed, folded into the All scope below. */
+  const matchScripts = (q: string): Array<{ item: Item; score: number }> => {
+    const scored: Array<{ item: Item; score: number }> = [];
+    for (const sq of savedQueries) {
+      const m = bestMatch(q, [sq.name]);
+      if (!m) continue;
+      scored.push({
+        item: { id: `s:${sq.id}`, kind: "script", query: sq, match: m },
+        score: m.score,
+      });
+    }
+    return scored;
+  };
+
   const results = useMemo(() => {
     const q = query.trim();
+
+    // Scripts are global — one list, the same regardless of which
+    // connection is active — so this scope skips the per-connection loop
+    // below entirely and searches `savedQueries` directly.
+    if (scope === "scripts") {
+      const scored = matchScripts(q);
+      if (q) scored.sort((a, b) => b.score - a.score);
+      return scored.slice(0, MAX_RESULTS).map((x) => x.item);
+    }
+
     const wantTables = scope === "all" || scope === "tables";
     const wantColumns = scope === "all" || scope === "columns";
     const scored: Array<{ item: Item; score: number }> = [];
@@ -196,6 +246,12 @@ export function CommandPalette() {
         }
       }
     }
+    // Fold in saved scripts too, same as tables/columns above — but only
+    // once there's something typed, so the default "All" view (no query)
+    // still shows just tables, same as it always has.
+    if (scope === "all" && q) {
+      scored.push(...matchScripts(q));
+    }
     if (q) {
       scored.sort((a, b) => b.score - a.score);
     } else {
@@ -210,7 +266,7 @@ export function CommandPalette() {
       });
     }
     return scored.slice(0, MAX_RESULTS).map((x) => x.item);
-  }, [slots, query, scope]);
+  }, [slots, query, scope, savedQueries]);
 
   useEffect(() => {
     setSelected(0);
@@ -220,6 +276,11 @@ export function CommandPalette() {
   }, [query, scope]);
 
   const activate = (item: Item) => {
+    if (item.kind === "script") {
+      void openSavedQuery(item.query);
+      close();
+      return;
+    }
     if (item.sessionId !== activeConnectionId) switchConnection(item.sessionId);
     if (item.kind === "table") {
       void openSelectTop(item.schema, item.table);
@@ -237,7 +298,7 @@ export function CommandPalette() {
         className="cmdk-panel"
         role="dialog"
         aria-modal="true"
-        aria-label="Search tables and columns"
+        aria-label="Search tables, columns, and saved scripts"
         onClick={(e) => e.stopPropagation()}
       >
         <input
@@ -301,7 +362,9 @@ export function CommandPalette() {
                 ? "No matches."
                 : scope === "columns"
                   ? "Type to search columns."
-                  : "No tables."}
+                  : scope === "scripts"
+                    ? "No saved scripts yet."
+                    : "No tables."}
             </div>
           ) : (
             results.map((item, i) => (
@@ -314,9 +377,15 @@ export function CommandPalette() {
                 onClick={() => activate(item)}
               >
                 <span className="cmdk-item__icon">
-                  {item.kind === "table" ? (item.tableKind === "view" ? "▨" : "▦") : "·"}
+                  {item.kind === "table"
+                    ? item.tableKind === "view"
+                      ? "▨"
+                      : "▦"
+                    : item.kind === "column"
+                      ? "·"
+                      : "▤"}
                 </span>
-                {showConnBadge && (
+                {item.kind !== "script" && showConnBadge && (
                   <span className="cmdk-item__conn">{item.connectionName}</span>
                 )}
                 <span className="cmdk-item__label">
@@ -325,7 +394,7 @@ export function CommandPalette() {
                       <span className="cmdk-item__path">{item.schema}.</span>
                       {highlight(item.table, item.match.candidate === 0 ? item.match.indices : [])}
                     </>
-                  ) : (
+                  ) : item.kind === "column" ? (
                     <>
                       <span className="cmdk-item__path">
                         {item.schema}.{item.table}.
@@ -335,10 +404,21 @@ export function CommandPalette() {
                         item.match.candidate === 0 ? item.match.indices : [],
                       )}
                     </>
+                  ) : (
+                    highlight(item.query.name, item.match.candidate === 0 ? item.match.indices : [])
                   )}
                 </span>
-                <span className="cmdk-item__meta mono">
-                  {item.kind === "table" ? formatCount(item.estimatedRows) : item.dataType}
+                <span
+                  className={
+                    "cmdk-item__meta mono" +
+                    (item.kind === "script" ? " cmdk-item__meta--script" : "")
+                  }
+                >
+                  {item.kind === "table"
+                    ? formatCount(item.estimatedRows)
+                    : item.kind === "column"
+                      ? item.dataType
+                      : scriptPreview(item.query.sql)}
                 </span>
               </div>
             ))

@@ -67,6 +67,8 @@ export function TopBar() {
   const toggleHistory = useStore((s) => s.toggleHistory);
   const savedQueriesOpen = useStore((s) => s.savedQueriesOpen);
   const toggleSavedQueries = useStore((s) => s.toggleSavedQueries);
+  const aiPanelOpen = useStore((s) => s.aiPanelOpen);
+  const toggleAiPanel = useStore((s) => s.toggleAiPanel);
   const refreshSchema = useStore((s) => s.refreshSchema);
   const disconnect = useStore((s) => s.disconnect);
   const openSettings = useStore((s) => s.openSettings);
@@ -167,6 +169,13 @@ export function TopBar() {
       </div>
 
       <div className="topbar__right">
+        <button
+          className={"topbar__btn" + (aiPanelOpen ? " topbar__btn--active" : "")}
+          onClick={toggleAiPanel}
+          title="Ask AI"
+        >
+          Ask AI
+        </button>
         <button
           className={"topbar__btn" + (savedQueriesOpen ? " topbar__btn--active" : "")}
           onClick={toggleSavedQueries}

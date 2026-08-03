@@ -421,12 +421,36 @@ function ResultsGrid({
   // (so the rules line up), user-adjustable, and restored from a saved layout
   // for this exact set of columns.
   const signature = useMemo(() => layoutSignature(result.columns), [result]);
-  const [order, setOrder] = useState<number[]>(() =>
+  const [orderState, setOrder] = useState<number[]>(() =>
     loadOrder(signature, result.columns),
   );
-  const [widths, setWidths] = useState<number[]>(() =>
+  const [widthsState, setWidths] = useState<number[]>(() =>
     loadWidths(signature, result, numericCols),
   );
+  // The signature `orderState`/`widthsState` were last derived for.
+  const [layoutSig, setLayoutSig] = useState(signature);
+
+  // Re-derive the column layout *during* render — deliberately not in the
+  // `[result]` effect further down — whenever the result's column set
+  // changes. An effect only runs after the render it belongs to has already
+  // committed, so re-running a tab against a different table (highlight a
+  // second statement, hit run) spent one full render with the *previous*
+  // result's `order`/`widths`: every entry in them is an index into a column
+  // list that no longer has those slots. On a narrower new result that took
+  // the header out with `result.columns[colIndex].name` of undefined, killing
+  // the whole pane. Deriving here means this render already sees a layout
+  // that matches `result`; the `setState` calls just persist it for the next
+  // one (React re-runs the component immediately, before committing, rather
+  // than scheduling a second visible pass).
+  let order = orderState;
+  let widths = widthsState;
+  if (layoutSig !== signature) {
+    order = loadOrder(signature, result.columns);
+    widths = loadWidths(signature, result, numericCols);
+    setLayoutSig(signature);
+    setOrder(order);
+    setWidths(widths);
+  }
   // Pointer-drag reorder state: dragged display position, live pointer delta,
   // and the position it would drop into.
   const [drag, setDrag] = useState<{
@@ -623,9 +647,11 @@ function ResultsGrid({
     [],
   );
 
+  // Per-result state that only ever *reads* the new result defensively (or
+  // not at all), so clearing it one render late is harmless. `order`/`widths`
+  // are deliberately not here — see the render-time derivation above for why
+  // they can't wait for an effect.
   useEffect(() => {
-    setOrder(loadOrder(signature, result.columns));
-    setWidths(loadWidths(signature, result, numericCols));
     setSelected(null);
     setRowSel([]);
     rowAnchorRef.current = null;

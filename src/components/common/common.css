@@ -749,6 +749,27 @@
   font-family: var(--table-font);
 }
 
+/* A single-line settings text input (e.g. the AI assistant's API key field),
+   styled to match .settings-select — but flexes to fill its row instead of a
+   fixed min-width, since it usually shares the row with buttons. */
+.settings-input {
+  flex: 1;
+  min-width: 0;
+  height: var(--h-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text);
+  padding: 0 10px;
+  font-size: 12.5px;
+  outline: none;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+.settings-input:focus {
+  border: 1.5px solid var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
 /* A multi-line settings input (e.g. the starter-SQL template), styled to
    match .settings-select. */
 .settings-textarea {

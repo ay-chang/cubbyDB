@@ -3,6 +3,7 @@ import { PostgreSQL, schemaCompletionSource } from "@codemirror/lang-sql";
 import type { SQLNamespace } from "@codemirror/lang-sql";
 import { LanguageSupport } from "@codemirror/language";
 
+import { statementAt } from "./sqlStatements";
 import type { SchemaNode } from "../types";
 
 /**
@@ -75,6 +76,131 @@ export const SQL_KEYWORDS = [
   "min", "max",
 ];
 
+/** A table named by the statement under the cursor, plus the identifier it's
+ *  addressed by there (its alias, or its own name when unaliased). */
+interface TableRef {
+  schema: string | null;
+  table: string;
+  alias: string;
+}
+
+/**
+ * Words that can directly follow a table reference but are never an alias —
+ * without this, `FROM users WHERE ...` would read "WHERE" as the alias. Only
+ * needs the words that can actually appear in that slot, not the full
+ * keyword list.
+ */
+const NOT_AN_ALIAS = new Set([
+  "where", "join", "inner", "left", "right", "full", "outer", "cross",
+  "natural", "on", "using", "group", "order", "having", "limit", "offset",
+  "fetch", "union", "intersect", "except", "set", "values", "returning",
+  "select", "from", "into", "and", "or", "not", "window", "for", "lateral",
+]);
+
+/** `FROM`/`JOIN`/`UPDATE`/`INTO` followed by a (optionally schema-qualified,
+ *  optionally quoted) table name and an optional `AS`-less alias. */
+const TABLE_REF_RE =
+  /\b(?:from|join|update|into)\s+("?[\w$]+"?(?:\.\s*"?[\w$]+"?)?)(?:\s+(?:as\s+)?("?[\w$]+"?))?/gi;
+
+const unquote = (s: string) => s.replace(/^"|"$/g, "");
+
+/** Table references in one statement's text, in source order. */
+function parseTableRefs(sql: string): TableRef[] {
+  const refs: TableRef[] = [];
+  TABLE_REF_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = TABLE_REF_RE.exec(sql))) {
+    const parts = m[1].split(".").map((p) => unquote(p.trim()));
+    const schema = parts.length > 1 ? parts[0] : null;
+    const table = parts.length > 1 ? parts[1] : parts[0];
+    if (!table) continue;
+    const rawAlias = m[2] ? unquote(m[2]) : null;
+    const alias =
+      rawAlias && !NOT_AN_ALIAS.has(rawAlias.toLowerCase()) ? rawAlias : table;
+    refs.push({ schema, table, alias });
+  }
+  return refs;
+}
+
+/** The schema tree's entry for a parsed reference, matched case-insensitively
+ *  (Postgres folds unquoted identifiers to lowercase) and, when the reference
+ *  is unqualified, across every schema. */
+function findTable(schema: SchemaNode[], ref: TableRef) {
+  const wanted = ref.table.toLowerCase();
+  for (const s of schema) {
+    if (ref.schema && s.name.toLowerCase() !== ref.schema.toLowerCase()) continue;
+    const t = s.tables.find((t) => t.name.toLowerCase() === wanted);
+    if (t) return t;
+  }
+  return null;
+}
+
+/**
+ * Bare (unqualified) column completions for the statement under the cursor.
+ *
+ * `@codemirror/lang-sql` only ever offers columns behind a qualifier — after
+ * `alias.`/`table.`, or at the top level when a single `defaultTable` is
+ * configured (which is how the WHERE bar gets them). In a real editor
+ * statement there's no such single table, so typing a bare column name
+ * matched nothing at all. This fills that gap: columns of whatever tables the
+ * statement's own FROM/JOIN clauses name, offered unqualified.
+ *
+ * When the statement names no resolvable table yet — the very common case of
+ * writing the SELECT list before the FROM clause — it falls back to every
+ * column in the schema, collapsed to one entry per distinct name so a wide
+ * schema's dozens of `id`/`created_at` columns don't flood the list.
+ */
+function columnOptions(schema: SchemaNode[], doc: string, pos: number): Completion[] {
+  const stmt = statementAt(doc, pos);
+  const text = stmt ? doc.slice(stmt.start, stmt.end) : doc;
+
+  const inScope = parseTableRefs(text)
+    .map((ref) => ({ ref, table: findTable(schema, ref) }))
+    .filter((x): x is { ref: TableRef; table: NonNullable<ReturnType<typeof findTable>> } =>
+      x.table !== null,
+    );
+
+  if (inScope.length > 0) {
+    const out: Completion[] = [];
+    const seen = new Set<string>();
+    for (const { ref, table } of inScope) {
+      for (const c of table.columns) {
+        const key = c.name.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        // Above table names and keywords: inside a statement that already
+        // names its tables, a bare word is far more often a column.
+        out.push({ label: c.name, type: "property", detail: ref.alias, boost: 2 });
+      }
+    }
+    return out;
+  }
+
+  // Fallback: no table in scope yet. One entry per distinct column name,
+  // labelled with where it comes from.
+  const byName = new Map<string, { name: string; tables: string[] }>();
+  for (const s of schema) {
+    for (const t of s.tables) {
+      for (const c of t.columns) {
+        const key = c.name.toLowerCase();
+        const hit = byName.get(key);
+        if (hit) {
+          if (!hit.tables.includes(t.name)) hit.tables.push(t.name);
+        } else {
+          byName.set(key, { name: c.name, tables: [t.name] });
+        }
+      }
+    }
+  }
+  return Array.from(byName.values()).map((c) => ({
+    label: c.name,
+    type: "property",
+    detail: c.tables.length === 1 ? c.tables[0] : `${c.tables.length} tables`,
+    // Below in-scope columns and table names — this is the speculative set.
+    boost: -0.5,
+  }));
+}
+
 /**
  * Postgres SQL language support with schema-aware completion, using a
  * curated keyword list instead of `@codemirror/lang-sql`'s bundled
@@ -84,12 +210,17 @@ export const SQL_KEYWORDS = [
  * of what you type that they bury the schema suggestions that are actually
  * useful). Syntax highlighting is unaffected either way — that comes from
  * the parser/dialect itself, not from the completion source.
+ *
+ * Pass `schema` (the app's own tree) to additionally offer bare column names
+ * from the statement's FROM/JOIN tables — see `columnOptions`. The WHERE bar
+ * doesn't need it: `defaultTable` already covers its single-table case.
  */
 export function sqlLanguage(
   namespace: SQLNamespace,
   defaultSchema: string | undefined,
   defaultTable: string | undefined,
   keywords: readonly string[],
+  schema?: SchemaNode[],
 ): LanguageSupport {
   const schemaSource = schemaCompletionSource({
     dialect: PostgreSQL,
@@ -97,17 +228,41 @@ export function sqlLanguage(
     defaultSchema,
     defaultTable,
   });
-  const keywordOptions: Completion[] = keywords.map((label) => ({
-    label,
-    type: "keyword",
-    boost: -1,
-  }));
-  const merge = (result: Awaited<ReturnType<CompletionSource>>) =>
-    result ? { ...result, options: [...result.options, ...keywordOptions] } : result;
+
   const source: CompletionSource = (context) => {
+    // Match the case the user is typing, so a keyword completed mid-`SELECT`
+    // comes out `SELECT` rather than lowercase. Identifiers (table/column
+    // names) are deliberately left alone — their casing is the database's,
+    // not a style choice.
+    const typed = context.matchBefore(/[\w$]+/)?.text ?? "";
+    const upper = /[A-Z]/.test(typed) && !/[a-z]/.test(typed);
+    const keywordOptions: Completion[] = keywords.map((kw) => ({
+      label: upper ? kw.toUpperCase() : kw,
+      type: "keyword",
+      boost: -1,
+    }));
+
+    const merge = (result: Awaited<ReturnType<CompletionSource>>) => {
+      if (!result) return result;
+      const extra: Completion[] = [...keywordOptions];
+      // Only unqualified positions get bare column names; after a `.` the
+      // schema source has already resolved the right table's columns and
+      // anything we added would be wrong for that qualifier.
+      if (schema && !/\.\s*[\w$]*$/.test(context.state.sliceDoc(0, context.pos))) {
+        const existing = new Set(
+          result.options.map((o) => o.label.toLowerCase()),
+        );
+        for (const c of columnOptions(schema, context.state.doc.toString(), context.pos)) {
+          if (!existing.has(c.label.toLowerCase())) extra.push(c);
+        }
+      }
+      return { ...result, options: [...result.options, ...extra] };
+    };
+
     const result = schemaSource(context);
     return result instanceof Promise ? result.then(merge) : merge(result);
   };
+
   return new LanguageSupport(PostgreSQL.language, [
     PostgreSQL.language.data.of({ autocomplete: source }),
   ]);

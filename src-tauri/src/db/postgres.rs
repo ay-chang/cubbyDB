@@ -245,54 +245,35 @@ impl DbSession for PostgresSession {
             .map_err(map_query_err)?;
         let elapsed_ms = start.elapsed().as_millis() as u64;
 
-        let mut columns: Vec<ResultColumn> = Vec::new();
-        let mut rows: Vec<Vec<Option<String>>> = Vec::new();
-        let mut affected: Option<u64> = None;
+        Ok(simple_query_messages_to_result(sql, messages, elapsed_ms, limit_applied))
+    }
 
-        for message in messages {
-            match message {
-                // Postgres sends the column list before any row data — including
-                // when the query matches zero rows. Relying on this (rather than
-                // the first `Row`) is what lets an empty result set still report
-                // its columns instead of looking like a non-row-returning statement.
-                SimpleQueryMessage::RowDescription(cols) => {
-                    columns = cols
-                        .iter()
-                        .map(|c| ResultColumn {
-                            name: c.name().to_string(),
-                        })
-                        .collect();
-                }
-                SimpleQueryMessage::Row(row) => {
-                    let values = (0..row.len())
-                        .map(|i| row.get(i).map(|v| v.to_string()))
-                        .collect();
-                    rows.push(values);
-                }
-                SimpleQueryMessage::CommandComplete(n) => {
-                    affected = Some(n);
-                }
-                // The message enum is non-exhaustive; ignore anything else.
-                _ => {}
-            }
-        }
+    async fn run_read_only_query(&self, sql: &str) -> Result<QueryResult, DbError> {
+        let (final_sql, limit_applied) = apply_default_limit(sql, super::DEFAULT_ROW_LIMIT);
 
-        // A row-returning statement yields columns; otherwise report the command
-        // tag (verb inferred from the SQL, count from the server).
-        let command_tag = if columns.is_empty() {
-            affected.map(|n| format!("{} {}", leading_verb(sql), n))
-        } else {
-            None
-        };
+        // Manual BEGIN/ROLLBACK (rather than `Client::transaction()`, which
+        // needs `&mut Client`) for the same `&self`-method reason as
+        // `delete_row_cascade` below. This is the actual enforcement against
+        // a model-generated query attempting to mutate data: Postgres itself
+        // rejects INSERT/UPDATE/DELETE/DDL inside a READ ONLY transaction
+        // regardless of how the SQL is phrased, so nothing here needs to
+        // parse or guess at the statement's intent.
+        self.client
+            .batch_execute("BEGIN READ ONLY")
+            .await
+            .map_err(map_query_err)?;
 
-        Ok(QueryResult {
-            row_count: rows.len(),
-            columns,
-            rows,
-            elapsed_ms,
-            command_tag,
-            limit_applied,
-        })
+        let start = Instant::now();
+        let result = self.client.simple_query(&final_sql).await;
+        let elapsed_ms = start.elapsed().as_millis() as u64;
+
+        // Always rolled back, even on success — this path exists purely to
+        // read. Best-effort: if the rollback itself fails (e.g. the
+        // connection dropped), `result` is still what gets surfaced.
+        let _ = self.client.batch_execute("ROLLBACK").await;
+
+        let messages = result.map_err(map_query_err)?;
+        Ok(simple_query_messages_to_result(sql, messages, elapsed_ms, limit_applied))
     }
 
     fn select_top_sql(
@@ -778,6 +759,65 @@ fn leading_verb(sql: &str) -> String {
         .next()
         .unwrap_or("")
         .to_uppercase()
+}
+
+/// Shared by `run_query` and `run_read_only_query`: turns `simple_query`'s
+/// message stream into a `QueryResult`. `sql` is the *original* (pre-limit)
+/// text, used only to infer the command tag's verb.
+fn simple_query_messages_to_result(
+    sql: &str,
+    messages: Vec<SimpleQueryMessage>,
+    elapsed_ms: u64,
+    limit_applied: bool,
+) -> QueryResult {
+    let mut columns: Vec<ResultColumn> = Vec::new();
+    let mut rows: Vec<Vec<Option<String>>> = Vec::new();
+    let mut affected: Option<u64> = None;
+
+    for message in messages {
+        match message {
+            // Postgres sends the column list before any row data — including
+            // when the query matches zero rows. Relying on this (rather than
+            // the first `Row`) is what lets an empty result set still report
+            // its columns instead of looking like a non-row-returning statement.
+            SimpleQueryMessage::RowDescription(cols) => {
+                columns = cols
+                    .iter()
+                    .map(|c| ResultColumn {
+                        name: c.name().to_string(),
+                    })
+                    .collect();
+            }
+            SimpleQueryMessage::Row(row) => {
+                let values = (0..row.len())
+                    .map(|i| row.get(i).map(|v| v.to_string()))
+                    .collect();
+                rows.push(values);
+            }
+            SimpleQueryMessage::CommandComplete(n) => {
+                affected = Some(n);
+            }
+            // The message enum is non-exhaustive; ignore anything else.
+            _ => {}
+        }
+    }
+
+    // A row-returning statement yields columns; otherwise report the command
+    // tag (verb inferred from the SQL, count from the server).
+    let command_tag = if columns.is_empty() {
+        affected.map(|n| format!("{} {}", leading_verb(sql), n))
+    } else {
+        None
+    };
+
+    QueryResult {
+        row_count: rows.len(),
+        columns,
+        rows,
+        elapsed_ms,
+        command_tag,
+        limit_applied,
+    }
 }
 
 /// Double-quote an identifier, escaping embedded quotes.

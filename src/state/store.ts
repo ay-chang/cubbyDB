@@ -12,6 +12,9 @@ import { create } from "zustand";
 import * as api from "../api/backend";
 import type {
   ActiveConnectionInfo,
+  AiChatSummary,
+  AiConfigStatus,
+  AiMessage,
   ColumnValue,
   ConnectionParams,
   DbError,
@@ -112,6 +115,21 @@ export interface ConnectionSlot {
   schemaError: string | null;
   tabs: QueryTab[];
   activeTabId: string | null;
+  /** This connection's own AI chat thread — scoped per connection (like
+   *  `tabs`/`schema`) rather than globally, so switching connections shows
+   *  that database's own conversation. */
+  aiMessages: AiMessage[];
+  /** True while an `aiChat` call is in flight for this connection. */
+  aiSending: boolean;
+  /** Which saved chat (see `ai_chats.rs`) the current `aiMessages` is, once
+   *  it has one — `null` until the first message of a fresh conversation is
+   *  sent, and permanently `null` for ad-hoc connections (no stable id to
+   *  save against, so their chats stay in-memory only, same as before this
+   *  feature existed). */
+  aiChatId: string | null;
+  /** This connection's saved-chat list, for the AI panel's History view. */
+  aiChats: AiChatSummary[];
+  aiChatsLoading: boolean;
 }
 
 type View = "connection" | "workspace";
@@ -561,6 +579,18 @@ interface AppStore {
   history: HistoryEntry[];
   historyOpen: boolean;
 
+  /** Right-drawer AI chat panel, toggled the same way as History/Saved
+   *  Queries. Messages live per-connection (see `ConnectionSlot.aiMessages`);
+   *  this only tracks whether the panel itself is visible. */
+  aiPanelOpen: boolean;
+  /** Which provider is active and whether each has a key saved — never the
+   *  real keys. `null` until `loadAiConfig` has fetched it at least once. */
+  aiConfig: AiConfigStatus | null;
+  /** Whether the AI panel is showing the saved-chats list instead of the
+   *  active conversation — a UI mode, not per-connection data, so it lives
+   *  here rather than on `ConnectionSlot`. */
+  aiHistoryView: boolean;
+
   /** Cmd/Ctrl+K quick-jump: search tables and columns in the active
    *  connection's schema. */
   commandPaletteOpen: boolean;
@@ -771,6 +801,29 @@ interface AppStore {
   // --- command palette ---
   toggleCommandPalette: () => void;
   closeCommandPalette: () => void;
+
+  // --- ai assistant ---
+  toggleAiPanel: () => void;
+  /** Sends `text` as a user message in the *active* connection's thread,
+   *  waits for the reply, and appends both. */
+  sendAiMessage: (text: string) => Promise<void>;
+  loadAiConfig: () => Promise<void>;
+  saveAiConfig: (apiKey: string) => Promise<void>;
+  clearAiConfig: () => Promise<void>;
+  saveAiModel: (model: string, supportsEffort: boolean) => Promise<void>;
+  /** Flips between the conversation and the saved-chats list; loads the list
+   *  on open, same "toggle then refetch" idiom as `toggleSavedQueries`. */
+  toggleAiHistoryView: () => void;
+  /** Loads the active connection's saved-chat list (a no-op, clearing the
+   *  list, if it has no stable connection id to save chats against). */
+  loadAiChats: () => Promise<void>;
+  /** Clears the active connection's current thread to start fresh — nothing
+   *  is persisted until the first message of the new conversation is sent. */
+  newAiChat: () => void;
+  /** Opens a saved chat as the active connection's current thread. */
+  openAiChat: (id: string) => Promise<void>;
+  renameAiChat: (id: string, title: string) => Promise<void>;
+  deleteAiChat: (id: string) => Promise<void>;
 
   // --- appearance / settings ---
   setTheme: (theme: Theme) => void;
@@ -1688,6 +1741,9 @@ export const useStore = create<AppStore>((set, get) => {
     activeConnectionId: null,
     history: [],
     historyOpen: false,
+    aiPanelOpen: false,
+    aiConfig: null,
+    aiHistoryView: false,
     commandPaletteOpen: false,
     pendingColumnHighlight: null,
     confirmDialog: null,
@@ -1739,6 +1795,15 @@ export const useStore = create<AppStore>((set, get) => {
       }
 
       try {
+        // Read the persisted tabs *before* connecting: `connectTo` below
+        // seeds the new slot with a single blank tab and, via the
+        // `connections`-change subscriber further down this file, that
+        // immediately overwrites `TABS_KEY` in storage — clobbering the very
+        // tabs (including table tabs) this is about to restore if read any
+        // later than this.
+        const pendingRestore =
+          get().restoreTabsOnLaunch ? loadPersistedTabs() : null;
+
         await get().connectTo(
           { params: last.params, name: last.name },
           { rememberAsLast: false },
@@ -1750,22 +1815,19 @@ export const useStore = create<AppStore>((set, get) => {
         // added manually during a session always start with one blank tab
         // and don't persist across a restart.
         const connectionId = get().activeConnectionId;
-        if (connectionId && get().restoreTabsOnLaunch) {
-          const restored = loadPersistedTabs();
-          if (restored) {
-            set((s) => ({
-              connections: patchSlot(s.connections, connectionId, {
-                tabs: restored.tabs,
-                activeTabId: restored.activeTabId,
-              }),
-            }));
-            // Re-populate restored table tabs (they hold their select-top SQL
-            // but no results yet), one at a time. Query tabs keep their SQL
-            // and wait for the user to run.
-            for (const tab of get().connections[connectionId]?.tabs ?? []) {
-              if (tab.kind === "table" && !tab.result && !tab.error && !tab.running) {
-                await get().runTab(tab.id);
-              }
+        if (connectionId && pendingRestore) {
+          set((s) => ({
+            connections: patchSlot(s.connections, connectionId, {
+              tabs: pendingRestore.tabs,
+              activeTabId: pendingRestore.activeTabId,
+            }),
+          }));
+          // Re-populate restored table tabs (they hold their select-top SQL
+          // but no results yet), one at a time. Query tabs keep their SQL
+          // and wait for the user to run.
+          for (const tab of get().connections[connectionId]?.tabs ?? []) {
+            if (tab.kind === "table" && !tab.result && !tab.error && !tab.running) {
+              await get().runTab(tab.id);
             }
           }
         }
@@ -1816,6 +1878,11 @@ export const useStore = create<AppStore>((set, get) => {
         schemaError: null,
         tabs: [tab],
         activeTabId: tab.id,
+        aiMessages: [],
+        aiSending: false,
+        aiChatId: null,
+        aiChats: [],
+        aiChatsLoading: false,
       };
       set((s) => ({
         view: "workspace",
@@ -2694,6 +2761,220 @@ export const useStore = create<AppStore>((set, get) => {
       set({ commandPaletteOpen: false });
     },
 
+    toggleAiPanel() {
+      const next = !get().aiPanelOpen;
+      set({ aiPanelOpen: next });
+      if (!next) return;
+      if (!get().aiConfig) void get().loadAiConfig();
+
+      // "Reopen where I left off": if this connection has a saved-chat
+      // identity and nothing's loaded into the panel yet, auto-resume its
+      // most recently used chat, if it has one.
+      const connectionId = get().activeConnectionId;
+      const slot = connectionId ? get().connections[connectionId] : null;
+      const savedConnectionId = slot?.current.connectionId ?? null;
+      if (slot && savedConnectionId && slot.aiMessages.length === 0 && !slot.aiChatId) {
+        void api
+          .listAiChats(savedConnectionId)
+          .then((chats) => {
+            if (chats.length > 0) void get().openAiChat(chats[0].id);
+          })
+          .catch((err) => console.error("failed to auto-resume AI chat:", errorMessage(err)));
+      }
+    },
+
+    toggleAiHistoryView() {
+      const next = !get().aiHistoryView;
+      set({ aiHistoryView: next });
+      if (next) void get().loadAiChats();
+    },
+
+    async loadAiChats() {
+      const connectionId = get().activeConnectionId;
+      if (!connectionId) return;
+      const slot = get().connections[connectionId];
+      const savedConnectionId = slot?.current.connectionId ?? null;
+      if (!savedConnectionId) {
+        set((s) => ({ connections: patchSlot(s.connections, connectionId, { aiChats: [] }) }));
+        return;
+      }
+      set((s) => ({
+        connections: patchSlot(s.connections, connectionId, { aiChatsLoading: true }),
+      }));
+      try {
+        const aiChats = await api.listAiChats(savedConnectionId);
+        set((s) => ({
+          connections: patchSlot(s.connections, connectionId, { aiChats, aiChatsLoading: false }),
+        }));
+      } catch (err) {
+        console.error("failed to load AI chats:", errorMessage(err));
+        set((s) => ({
+          connections: patchSlot(s.connections, connectionId, { aiChatsLoading: false }),
+        }));
+      }
+    },
+
+    newAiChat() {
+      const connectionId = get().activeConnectionId;
+      if (!connectionId) return;
+      set((s) => ({
+        connections: patchSlot(s.connections, connectionId, { aiMessages: [], aiChatId: null }),
+        aiHistoryView: false,
+      }));
+    },
+
+    async openAiChat(id) {
+      const connectionId = get().activeConnectionId;
+      if (!connectionId) return;
+      try {
+        const thread = await api.getAiChat(id);
+        set((s) => ({
+          connections: patchSlot(s.connections, connectionId, {
+            aiMessages: thread.messages,
+            aiChatId: thread.id,
+          }),
+          aiHistoryView: false,
+        }));
+      } catch (err) {
+        console.error("failed to open AI chat:", errorMessage(err));
+      }
+    },
+
+    async renameAiChat(id, title) {
+      const trimmed = title.trim();
+      if (!trimmed) return;
+      const connectionId = get().activeConnectionId;
+      if (!connectionId) return;
+      try {
+        await api.renameAiChat(id, trimmed);
+        set((s) => ({
+          connections: patchSlot(s.connections, connectionId, (slot) => ({
+            aiChats: slot.aiChats.map((c) => (c.id === id ? { ...c, title: trimmed } : c)),
+          })),
+        }));
+      } catch (err) {
+        console.error("failed to rename AI chat:", errorMessage(err));
+      }
+    },
+
+    async deleteAiChat(id) {
+      const ok = await requestConfirm("Delete this saved chat?", "Delete");
+      if (!ok) return;
+      const connectionId = get().activeConnectionId;
+      if (!connectionId) return;
+      try {
+        await api.deleteAiChat(id);
+        set((s) => ({
+          connections: patchSlot(s.connections, connectionId, (slot) => ({
+            aiChats: slot.aiChats.filter((c) => c.id !== id),
+            // The deleted chat was open — fall back to a blank new chat
+            // rather than leaving a dangling `aiChatId`.
+            ...(slot.aiChatId === id ? { aiMessages: [], aiChatId: null } : {}),
+          })),
+        }));
+      } catch (err) {
+        console.error("failed to delete AI chat:", errorMessage(err));
+      }
+    },
+
+    async sendAiMessage(text) {
+      const connectionId = get().activeConnectionId;
+      if (!connectionId) return;
+      const trimmed = text.trim();
+      if (!trimmed) return;
+
+      const userMessage: AiMessage = { role: "user", content: trimmed };
+      set((s) => ({
+        connections: patchSlot(s.connections, connectionId, (slot) => ({
+          aiMessages: [...slot.aiMessages, userMessage],
+          aiSending: true,
+        })),
+      }));
+
+      const slot = get().connections[connectionId];
+      if (!slot) return;
+      // The active tab's table (if it's a table tab) so the AI knows what's
+      // currently on screen — same info `openTableStructure`'s tab already
+      // carries as `source`.
+      const activeTab = slot.tabs.find((t) => t.id === slot.activeTabId);
+      const activeTable = activeTab?.source ?? null;
+      // `null` for an ad-hoc (never-saved) connection — there's no stable id
+      // to save a chat against, so it stays exactly as ephemeral as before
+      // this feature existed.
+      const savedConnectionId = slot.current.connectionId;
+
+      const persist = async (messages: AiMessage[]) => {
+        if (!savedConnectionId) return;
+        try {
+          const thread = await api.upsertAiChat({
+            id: get().connections[connectionId]?.aiChatId ?? "",
+            connectionId: savedConnectionId,
+            title: "",
+            messages,
+          });
+          set((s) => ({
+            connections: patchSlot(s.connections, connectionId, { aiChatId: thread.id }),
+          }));
+        } catch (err) {
+          console.error("failed to save AI chat:", errorMessage(err));
+        }
+      };
+
+      try {
+        const result = await api.aiChat(slot.sessionId, slot.schema, activeTable, slot.aiMessages);
+        const assistantMessage: AiMessage = {
+          role: "assistant",
+          content: result.reply,
+          trace: result.trace,
+        };
+        set((s) => ({
+          connections: patchSlot(s.connections, connectionId, (current) => ({
+            aiMessages: [...current.aiMessages, assistantMessage],
+            aiSending: false,
+          })),
+        }));
+        void persist([...slot.aiMessages, assistantMessage]);
+      } catch (err) {
+        const assistantMessage: AiMessage = {
+          role: "assistant",
+          content: `Error: ${errorMessage(err)}`,
+        };
+        set((s) => ({
+          connections: patchSlot(s.connections, connectionId, (current) => ({
+            aiMessages: [...current.aiMessages, assistantMessage],
+            aiSending: false,
+          })),
+        }));
+        void persist([...slot.aiMessages, assistantMessage]);
+      }
+    },
+
+    async loadAiConfig() {
+      try {
+        const aiConfig = await api.getAiConfig();
+        set({ aiConfig });
+      } catch (err) {
+        console.error("failed to load AI config:", errorMessage(err));
+      }
+    },
+
+    async saveAiConfig(apiKey) {
+      const aiConfig = await api.saveAiConfig(apiKey);
+      set({ aiConfig });
+    },
+
+    async clearAiConfig() {
+      const ok = await requestConfirm("Remove the saved Anthropic API key?", "Remove key");
+      if (!ok) return;
+      const aiConfig = await api.clearAiConfig();
+      set({ aiConfig });
+    },
+
+    async saveAiModel(model, supportsEffort) {
+      const aiConfig = await api.saveAiModel(model, supportsEffort);
+      set({ aiConfig });
+    },
+
     async refreshHistory() {
       try {
         const history = await api.queryHistory(get().historyLimit);
@@ -2945,6 +3226,8 @@ export const useStore = create<AppStore>((set, get) => {
 // connection.
 const EMPTY_TABS: QueryTab[] = [];
 const EMPTY_SCHEMA: SchemaNode[] = [];
+const EMPTY_AI_MESSAGES: AiMessage[] = [];
+const EMPTY_AI_CHATS: AiChatSummary[] = [];
 
 /** The active connection's open tabs. Empty when nothing is connected. */
 export function useActiveTabs(): QueryTab[] {
@@ -2964,6 +3247,55 @@ export function useActiveTabId(): string | null {
 export function useActiveSchema(): SchemaNode[] {
   return useStore((s) =>
     s.activeConnectionId ? s.connections[s.activeConnectionId]?.schema ?? EMPTY_SCHEMA : EMPTY_SCHEMA,
+  );
+}
+
+/** The active connection's AI chat thread. Empty when nothing is connected. */
+export function useActiveAiMessages(): AiMessage[] {
+  return useStore((s) =>
+    s.activeConnectionId
+      ? s.connections[s.activeConnectionId]?.aiMessages ?? EMPTY_AI_MESSAGES
+      : EMPTY_AI_MESSAGES,
+  );
+}
+
+/** True while an `aiChat` call is in flight for the active connection. */
+export function useActiveAiSending(): boolean {
+  return useStore((s) =>
+    s.activeConnectionId ? s.connections[s.activeConnectionId]?.aiSending ?? false : false,
+  );
+}
+
+/** Which saved chat the active connection's current thread is, if any. */
+export function useActiveAiChatId(): string | null {
+  return useStore((s) =>
+    s.activeConnectionId ? s.connections[s.activeConnectionId]?.aiChatId ?? null : null,
+  );
+}
+
+/** The active connection's saved-chat list, for the AI panel's History view. */
+export function useActiveAiChats(): AiChatSummary[] {
+  return useStore((s) =>
+    s.activeConnectionId
+      ? s.connections[s.activeConnectionId]?.aiChats ?? EMPTY_AI_CHATS
+      : EMPTY_AI_CHATS,
+  );
+}
+
+export function useActiveAiChatsLoading(): boolean {
+  return useStore((s) =>
+    s.activeConnectionId ? s.connections[s.activeConnectionId]?.aiChatsLoading ?? false : false,
+  );
+}
+
+/** Whether the active connection has a stable id to save chats against —
+ *  `false` for ad-hoc (never-saved) connections, which keep AI chat fully
+ *  functional but ephemeral, same as before this feature existed. */
+export function useActiveConnectionCanSaveChats(): boolean {
+  return useStore((s) =>
+    s.activeConnectionId
+      ? Boolean(s.connections[s.activeConnectionId]?.current.connectionId)
+      : false,
   );
 }
 

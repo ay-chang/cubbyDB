@@ -240,3 +240,79 @@ export interface SavedQuery {
   sql: string;
   createdAt: number;
 }
+
+// --- AI assistant ------------------------------------------------------------
+// Anthropic-only, deliberately — see the backend's `ai_config.rs` module doc.
+
+/** What Settings shows for the AI assistant — the real API key never comes
+ *  back from the backend once saved, only whether one is set. `model` is
+ *  always resolved (the user's saved choice, or the hardcoded fallback), so
+ *  there's always a concrete value to show even before one is picked. */
+export interface AiConfigStatus {
+  anthropicKeySet: boolean;
+  anthropicModel: string;
+}
+
+/** One model a provider currently offers, for the Settings model picker —
+ *  fetched live so a new release shows up without an app update. `label` is
+ *  a human-readable name when the provider's API supplies one (Anthropic's
+ *  `display_name`); otherwise it's just `id` again (OpenAI's models
+ *  endpoint has no display name). */
+export interface AiModelInfo {
+  id: string;
+  label: string;
+  /** Whether this model accepts the `effort` request parameter. Not
+   *  universal — Haiku 4.5 rejects it — so it's captured when the user picks
+   *  a model and persisted with the choice. */
+  supportsEffort: boolean;
+}
+
+/** One turn of the AI chat. `role`/`content` are exactly what's sent
+ *  to/received from the backend on every turn (provider-specific tool-call
+ *  scaffolding is entirely a backend-internal concern for a single `aiChat`
+ *  call). `trace` is a frontend-only addition, attached to assistant
+ *  messages after a reply comes back — the backend's deserializer ignores
+ *  unknown fields, so resending a message with `trace` attached is harmless. */
+export interface AiMessage {
+  role: "user" | "assistant";
+  content: string;
+  trace?: AiToolTrace[];
+}
+
+/** One tool call the AI made to answer a question, shown under its reply so
+ *  the user can see exactly what it did rather than trusting a black box. */
+export interface AiToolTrace {
+  /** Which tool ran — `run_sql`, `describe_table`, `sample_rows`,
+   *  `search_schema`, `explain_query`. */
+  tool: string;
+  /** What it ran on: the SQL for query tools, the table name for
+   *  `describe_table`/`sample_rows`, the search term for `search_schema`. */
+  detail: string;
+  rowCount: number | null;
+  error: string | null;
+}
+
+export interface AiChatResult {
+  reply: string;
+  trace: AiToolTrace[];
+}
+
+/** A saved chat's lightweight list-view shape — no message bodies, so
+ *  listing a connection's chats doesn't ship every message of every one. */
+export interface AiChatSummary {
+  id: string;
+  title: string;
+  updatedAt: number;
+}
+
+/** A saved chat's full record. Scoped by `connectionId` (a *saved*
+ *  connection's stable id) rather than a session id — see the backend's
+ *  `ai_chats.rs` module doc for why. */
+export interface AiChatThread {
+  id: string;
+  connectionId: string;
+  title: string;
+  messages: AiMessage[];
+  createdAt: number;
+  updatedAt: number;
+}

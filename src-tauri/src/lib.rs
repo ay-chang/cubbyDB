@@ -1,12 +1,14 @@
 //! CubbyDB library entry point.
 //!
 //! Module layout:
+//! - [`ai`]         — the AI assistant service (prompt, provider, tools, persistence)
 //! - [`db`]         — the engine-agnostic driver interface and the Postgres impl
 //! - [`connections`]— saved-connection persistence
 //! - [`history`]    — query history log
 //! - [`state`]      — Tauri-managed application state
 //! - [`commands`]   — the command surface exposed to the frontend
 
+mod ai;
 mod commands;
 mod connections;
 mod db;
@@ -59,6 +61,17 @@ pub fn run() {
             commands::read_clipboard,
             commands::query_history,
             commands::clear_query_history,
+            commands::get_ai_config,
+            commands::save_ai_config,
+            commands::clear_ai_config,
+            commands::save_ai_model,
+            commands::list_ai_models,
+            commands::ai_chat,
+            commands::list_ai_chats,
+            commands::get_ai_chat,
+            commands::upsert_ai_chat,
+            commands::rename_ai_chat,
+            commands::delete_ai_chat,
         ])
         .run(tauri::generate_context!())
         .expect("error while running CubbyDB");

@@ -53,16 +53,71 @@ const theme = EditorView.theme(
       borderLeftColor: cssVar("--accent", "#5e6ad2"),
       borderLeftWidth: "1.5px",
     },
-    "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection":
-      {
-        backgroundColor: cssVar("--accent-glow", "rgba(94,106,210,0.12)"),
-      },
     ".cm-content, .cm-gutter": {
       minHeight: "100%",
     },
   },
   { dark: false },
 );
+
+/**
+ * Selection, selection-match and matching-bracket colors, shared by the SQL
+ * editor and the WHERE filter bar.
+ *
+ * Split out into its own theme (rather than living in `theme` above) for two
+ * reasons, both about beating CodeMirror's own defaults rather than taste:
+ *
+ * 1. **Specificity.** The view's base theme styles the drawn selection with
+ *    `&light.cm-focused > .cm-scroller > .cm-selectionLayer
+ *    .cm-selectionBackground` — five classes. The obvious
+ *    `.cm-selectionBackground` override is only two once the theme's marker
+ *    class is prefixed, so it silently loses and the default wins. Every
+ *    rule here mirrors the structure of the default it's replacing so it
+ *    ties on specificity, which is enough: the base themes are registered at
+ *    `Prec.lowest`, so a tie goes to us.
+ * 2. **These editors are always tagged `&light`.** Both are constructed with
+ *    `{dark: false}` (colors come from CSS variables, so there's no separate
+ *    dark CodeMirror theme to switch to). That means the base theme's
+ *    *light* branch applies under every one of our themes — including the
+ *    dark ones, where its hardcoded `#d7d4f0` selection read as a washed-out
+ *    lavender that swallowed the syntax colors underneath it.
+ *
+ * Note that `::selection` can't do this job: `drawSelection` (on via
+ * `basicSetup`) forces native selection transparent with `!important`, so
+ * the drawn layer is the only thing actually visible.
+ */
+export const cubbySelectionTheme = EditorView.theme({
+  "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground": {
+    background: cssVar("--accent-glow", "rgba(94,106,210,0.12)"),
+  },
+  // Unfocused (e.g. after clicking into the results grid) — softer, so it
+  // reads as "this was selected" rather than competing with the live caret.
+  "&:not(.cm-focused) > .cm-scroller > .cm-selectionLayer .cm-selectionBackground": {
+    background: cssVar("--accent-glow-soft", "rgba(94,106,210,0.08)"),
+  },
+  // Other occurrences of the selected word (`highlightSelectionMatches`,
+  // also on via `basicSetup`). Its default is a fully opaque `#99ff7780`
+  // green that has nothing to do with the token system.
+  ".cm-selectionMatch": {
+    background: cssVar("--accent-glow-soft", "rgba(94,106,210,0.08)"),
+    borderRadius: "2px",
+  },
+  // The selected range itself is already tinted by the selection layer;
+  // stacking the match tint on top of it just muddies that one word.
+  ".cm-selectionMatch-main": {
+    background: "transparent",
+  },
+  "&.cm-focused .cm-matchingBracket": {
+    background: cssVar("--accent-glow", "rgba(94,106,210,0.12)"),
+    outline: `1px solid ${cssVar("--accent-tint-text", "#4a54b8")}`,
+    borderRadius: "2px",
+  },
+  "&.cm-focused .cm-nonmatchingBracket": {
+    background: cssVar("--error-bg", "#fcecec"),
+    outline: `1px solid ${cssVar("--error-border", "#f3c6c7")}`,
+    borderRadius: "2px",
+  },
+});
 
 /**
  * Restyles `@codemirror/autocomplete`'s completion popup, which otherwise
@@ -84,7 +139,7 @@ export const cubbyAutocompleteTheme = EditorView.theme({
   ".cm-tooltip.cm-tooltip-autocomplete": {
     background: cssVar("--surface", "#ffffff"),
     border: `1px solid ${cssVar("--border-strong", "#d5d8dd")}`,
-    borderRadius: "8px",
+    borderRadius: "10px",
     boxShadow: cssVar("--shadow-card", "0 12px 40px -18px rgba(20,24,40,0.28)"),
     padding: "4px",
     overflow: "hidden",
@@ -92,13 +147,29 @@ export const cubbyAutocompleteTheme = EditorView.theme({
   ".cm-tooltip-autocomplete > ul": {
     fontFamily: cssVar("--font-mono", "monospace"),
     fontSize: "12.5px",
-    minWidth: "220px",
+    minWidth: "260px",
+    maxWidth: "460px",
+    maxHeight: "16em",
+    // Firefox; the WebKit equivalents are the ::-webkit-scrollbar rules below.
+    scrollbarWidth: "thin",
+    scrollbarColor: `${cssVar("--scrollbar-thumb", "#dfe1e5")} transparent`,
+  },
+  ".cm-tooltip-autocomplete > ul::-webkit-scrollbar": {
+    width: "8px",
+  },
+  ".cm-tooltip-autocomplete > ul::-webkit-scrollbar-thumb": {
+    background: cssVar("--scrollbar-thumb", "#dfe1e5"),
+    borderRadius: "4px",
+    border: "2px solid transparent",
+    backgroundClip: "content-box",
   },
   ".cm-tooltip-autocomplete ul li": {
     display: "flex",
     alignItems: "center",
-    padding: "6px 8px",
+    gap: "9px",
+    padding: "5px 9px",
     borderRadius: "6px",
+    lineHeight: "1.5",
     color: cssVar("--text", "#16181d"),
   },
   ".cm-tooltip-autocomplete ul li[aria-selected]": {
@@ -109,11 +180,39 @@ export const cubbyAutocompleteTheme = EditorView.theme({
   // types (notably the keyword "🔑") — the text-presentation variation
   // selector it appends doesn't reliably override that in every font, so
   // `color` can't restyle it. Rather than fight per-glyph emoji rendering,
-  // drop the icon column entirely — it matches the app's existing list
-  // style elsewhere (context menus, saved-connection cards) anyway, which
-  // is text-first with no per-row type icons.
+  // the glyph is blanked below and replaced with a short text tag, which is
+  // what actually distinguishes a column from a table from a keyword now
+  // that all three share one list.
   ".cm-completionIcon": {
-    display: "none",
+    flex: "none",
+    boxSizing: "border-box",
+    width: "30px",
+    padding: "0",
+    margin: "0",
+    fontFamily: cssVar("--font-sans", "sans-serif"),
+    fontSize: "9px",
+    fontWeight: "600",
+    letterSpacing: "0.04em",
+    textTransform: "uppercase",
+    textAlign: "left",
+    color: cssVar("--text-fainter", "#a2a7ae"),
+    opacity: "1",
+  },
+  ".cm-completionIcon::after": { content: "''" },
+  ".cm-completionIcon-property::after": { content: "'col'" },
+  ".cm-completionIcon-type::after": { content: "'tbl'" },
+  ".cm-completionIcon-keyword::after": { content: "'kw'" },
+  ".cm-completionIcon-constant::after": { content: "'as'" },
+  ".cm-tooltip-autocomplete ul li[aria-selected] .cm-completionIcon": {
+    color: cssVar("--on-accent", "#ffffff"),
+    opacity: "0.7",
+  },
+  ".cm-completionLabel": {
+    flex: "1",
+    minWidth: "0",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
   },
   ".cm-completionMatchedText": {
     textDecoration: "none",
@@ -122,12 +221,24 @@ export const cubbyAutocompleteTheme = EditorView.theme({
   },
   ".cm-tooltip-autocomplete ul li[aria-selected] .cm-completionMatchedText": {
     color: cssVar("--on-accent", "#ffffff"),
+    fontWeight: "700",
   },
   ".cm-completionDetail": {
+    flex: "none",
+    maxWidth: "150px",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    fontFamily: cssVar("--font-sans", "sans-serif"),
+    fontSize: "10.5px",
     color: cssVar("--text-faint", "#8c9198"),
     fontStyle: "normal",
     marginLeft: "auto",
-    paddingLeft: "12px",
+    paddingLeft: "14px",
+  },
+  ".cm-tooltip-autocomplete ul li[aria-selected] .cm-completionDetail": {
+    color: cssVar("--on-accent", "#ffffff"),
+    opacity: "0.75",
   },
   ".cm-completionListIncompleteTop:before, .cm-completionListIncompleteBottom:after": {
     color: cssVar("--text-faint", "#8c9198"),
@@ -139,6 +250,7 @@ export const cubbyAutocompleteTheme = EditorView.theme({
     boxShadow: cssVar("--shadow-card", "0 12px 40px -18px rgba(20,24,40,0.28)"),
     color: cssVar("--text", "#16181d"),
     fontSize: "12px",
+    padding: "7px 10px",
   },
 });
 
@@ -154,6 +266,7 @@ export const sqlHighlightStyle = HighlightStyle.define([
 
 export const cubbyEditorTheme = [
   theme,
+  cubbySelectionTheme,
   cubbyAutocompleteTheme,
   syntaxHighlighting(sqlHighlightStyle),
 ];
