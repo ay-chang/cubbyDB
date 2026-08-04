@@ -149,8 +149,11 @@
   --on-accent: #ffffff;
 
   /* Text */
-  --text: #e6e8eb;
-  --text-muted: #a0a5ad;
+  /* Brightened twice now (originally #e6e8eb) — still read as dim/gray
+     rather than a proper light color against the dark surfaces, so this
+     goes all the way to pure white. */
+  --text: #ffffff;
+  --text-muted: #bcc0c7;
   --text-faint: #767c85;
   --text-fainter: #626771;
   --text-placeholder: #565b64;

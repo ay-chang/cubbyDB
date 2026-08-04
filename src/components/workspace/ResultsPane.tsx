@@ -14,7 +14,13 @@ import { parseCsv } from "../../lib/csv";
 import { bestMatch } from "../../lib/fuzzyMatch";
 import type { Delimiter, QueryTab } from "../../state/store";
 import { useActiveSchema, useStore } from "../../state/store";
-import { NULL_DISPLAY_LABELS, PAGE_SIZE, tabHasPendingEdits } from "../../state/store";
+import {
+  accentPaletteFor,
+  NULL_DISPLAY_LABELS,
+  PAGE_SIZE,
+  tabHasPendingEdits,
+  THEME_MODE,
+} from "../../state/store";
 import type { ForeignKeyRef, QueryResult } from "../../types";
 import { FilterBar } from "./FilterBar";
 import { PendingEditsBar } from "./PendingEditsBar";
@@ -111,8 +117,31 @@ export function ResultsPane({ tab }: { tab: QueryTab }) {
     );
   }, [result, schemaTable]);
 
+  // A tagged connection (set in its own edit form) tints this whole pane —
+  // a thin border by default, or a flatter full-tint fill if that
+  // connection was set up to use the louder style instead.
+  const connColor = useStore((s) => {
+    const id = s.activeConnectionId;
+    return id ? (s.connections[id]?.color ?? null) : null;
+  });
+  const connectionColorStyle = useStore((s) => {
+    const id = s.activeConnectionId;
+    return id ? (s.connections[id]?.colorStyle ?? "border") : "border";
+  });
+  const theme = useStore((s) => s.theme);
+  const connPalette = connColor ? accentPaletteFor(connColor, THEME_MODE[theme]) : null;
+  const connStyle = connPalette
+    ? ({
+        "--conn-color": connPalette.accent,
+        "--conn-color-tint": connPalette.accentTint,
+      } as React.CSSProperties)
+    : undefined;
+
   return (
-    <div className="results">
+    <div
+      className={"results" + (connPalette ? ` results--conn-${connectionColorStyle}` : "")}
+      style={connStyle}
+    >
       <ResultsHeader tab={tab} result={result} readOnlyReason={editability?.reason ?? null} />
 
       {tab.error ? (
@@ -155,6 +184,12 @@ function ResultsHeader({
 }) {
   const csvDelimiter = useStore((s) => s.csvDelimiter);
   const cancelQuery = useStore((s) => s.cancelQuery);
+  const silentRefreshTabId = useStore((s) => s.silentRefreshTabId);
+  // A background refresh (Cmd/Ctrl+R, the Refresh button) of a tab that
+  // already has data on screen shouldn't yank the stats away in favor of the
+  // "Running…/Cancel" takeover below — that's built for a genuine new run,
+  // where there's nothing else worth showing yet.
+  const showRunningTakeover = tab.running && silentRefreshTabId !== tab.id;
   return (
     <div
       className={
@@ -184,7 +219,7 @@ function ResultsHeader({
             Read-only
           </span>
         )}
-        {tab.running ? (
+        {showRunningTakeover ? (
           <span className="results__running">
             <span className="spinner" />
             Running…

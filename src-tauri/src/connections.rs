@@ -42,6 +42,18 @@ pub struct SavedConnection {
     /// Epoch milliseconds of creation.
     #[serde(default)]
     pub created_at: u64,
+    /// One of the app's named accent colors (see `AccentColor` on the
+    /// frontend), used to tag this connection so it's visually
+    /// distinguishable — e.g. a red-bordered results grid for "prod". `None`
+    /// means untagged. Free-form `String` rather than a Rust enum since the
+    /// palette is a frontend concern; this layer just stores and round-trips
+    /// whatever name it's given.
+    #[serde(default)]
+    pub color: Option<String>,
+    /// How `color` renders — "border" or "fill" (see `ConnectionColorStyle`
+    /// on the frontend). Same free-form-`String` reasoning as `color`.
+    #[serde(default)]
+    pub color_style: Option<String>,
 }
 
 /// Reads and writes the saved-connection file.

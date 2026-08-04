@@ -130,6 +130,16 @@ export interface ConnectionSlot {
   /** This connection's saved-chat list, for the AI panel's History view. */
   aiChats: AiChatSummary[];
   aiChatsLoading: boolean;
+  /** Seeded from the matching saved connection's `color` on connect (`null`
+   *  for an ad-hoc/never-saved session, or one explicitly left untagged).
+   *  Settable live via `setConnectionColor` — persisted back to the saved
+   *  record when there is one, kept as session-only state otherwise. */
+  color: AccentColor | null;
+  /** How `color` renders (results pane border vs. full tint) — a
+   *  per-connection choice (set alongside `color` in the connection form),
+   *  not a global app setting, since e.g. "prod" might warrant the louder
+   *  fill while a merely-tagged staging connection doesn't. */
+  colorStyle: ConnectionColorStyle;
 }
 
 type View = "connection" | "workspace";
@@ -175,6 +185,11 @@ export const THEME_MODE: Record<Theme, ThemeMode> = {
   dracula: "dark",
 };
 
+/** The settings modal's top-level tabs — kept here (not in `SettingsDialog`)
+ *  since `openSettings` needs to name one as a one-shot "jump to this
+ *  section" directive. */
+export type SettingsSection = "general" | "appearance" | "aiAssistant" | "shortcuts";
+
 /** The accent color used for buttons, active states, and SQL keyword
  *  highlighting. Persisted across launches. */
 export type AccentColor =
@@ -187,20 +202,36 @@ export type AccentColor =
   | "orange"
   | "red"
   | "pink"
-  | "purple";
+  | "purple"
+  | "lime"
+  | "emerald"
+  | "sky"
+  | "violet"
+  | "fuchsia"
+  | "rose"
+  | "yellow"
+  | "stone";
 
 /** `AccentColor` options in display order. */
 export const ACCENT_COLOR_OPTIONS: AccentColor[] = [
+  "green",
   "indigo",
   "blue",
+  "sky",
   "cyan",
   "teal",
-  "green",
+  "emerald",
+  "lime",
+  "yellow",
   "amber",
   "orange",
   "red",
+  "rose",
   "pink",
+  "fuchsia",
   "purple",
+  "violet",
+  "stone",
 ];
 
 export const ACCENT_COLOR_LABELS: Record<AccentColor, string> = {
@@ -214,12 +245,30 @@ export const ACCENT_COLOR_LABELS: Record<AccentColor, string> = {
   red: "Red",
   pink: "Pink",
   purple: "Purple",
+  lime: "Lime",
+  emerald: "Emerald",
+  sky: "Sky",
+  violet: "Violet",
+  fuchsia: "Fuchsia",
+  rose: "Rose",
+  yellow: "Yellow",
+  stone: "Stone",
 };
 
-/** The longstanding default — existing users see no visual change. */
-export const DEFAULT_ACCENT_COLOR: AccentColor = "indigo";
+/** Existing users keep whatever they've already picked (or explicitly left
+ *  at the old indigo default) — `loadAccentColor` only falls back to this for
+ *  someone with nothing saved yet. */
+export const DEFAULT_ACCENT_COLOR: AccentColor = "green";
 
-interface AccentPalette {
+/** Type guard for a value read back from storage (saved-connection JSON,
+ *  localStorage) — the palette can change over time, so a name that isn't
+ *  (or is no longer) a real option should fall back to "untagged" rather
+ *  than propagate a bogus color through the UI. */
+export function isAccentColor(value: string | null | undefined): value is AccentColor {
+  return !!value && (ACCENT_COLOR_OPTIONS as string[]).includes(value);
+}
+
+export interface AccentPalette {
   accent: string;
   accentHover: string;
   accentTint: string;
@@ -242,6 +291,14 @@ export const ACCENT_COLOR_SWATCH: Record<AccentColor, string> = {
   red: "#e11d3f",
   pink: "#db2777",
   purple: "#7c3aed",
+  lime: "#65a30d",
+  emerald: "#059669",
+  sky: "#0ea5e9",
+  violet: "#8b5cf6",
+  fuchsia: "#c026d3",
+  rose: "#e11d48",
+  yellow: "#ca8a04",
+  stone: "#57534e",
 };
 
 /** Light/dark variants of every accent color, in the same token shape as the
@@ -430,7 +487,176 @@ const ACCENT_PALETTES: Record<AccentColor, { light: AccentPalette; dark: AccentP
       accentGlowSoft: "rgba(157, 109, 240, 0.12)",
     },
   },
+  lime: {
+    light: {
+      accent: "#65a30d",
+      accentHover: "#588f0b",
+      accentTint: "#eff7e3",
+      accentTintText: "#3f6b0a",
+      accentGlow: "rgba(101, 163, 13, 0.12)",
+      accentGlowSoft: "rgba(101, 163, 13, 0.08)",
+    },
+    dark: {
+      accent: "#a3e635",
+      accentHover: "#b3ec55",
+      accentTint: "#202b0f",
+      accentTintText: "#c8f08a",
+      accentGlow: "rgba(163, 230, 53, 0.22)",
+      accentGlowSoft: "rgba(163, 230, 53, 0.12)",
+    },
+  },
+  emerald: {
+    light: {
+      accent: "#059669",
+      accentHover: "#047857",
+      accentTint: "#e3f8f0",
+      accentTintText: "#036e4e",
+      accentGlow: "rgba(5, 150, 105, 0.12)",
+      accentGlowSoft: "rgba(5, 150, 105, 0.08)",
+    },
+    dark: {
+      accent: "#34d399",
+      accentHover: "#57dbac",
+      accentTint: "#0f2921",
+      accentTintText: "#8bf0c8",
+      accentGlow: "rgba(52, 211, 153, 0.22)",
+      accentGlowSoft: "rgba(52, 211, 153, 0.12)",
+    },
+  },
+  sky: {
+    light: {
+      accent: "#0ea5e9",
+      accentHover: "#0b8fcc",
+      accentTint: "#e5f5fd",
+      accentTintText: "#0a6d9c",
+      accentGlow: "rgba(14, 165, 233, 0.12)",
+      accentGlowSoft: "rgba(14, 165, 233, 0.08)",
+    },
+    dark: {
+      accent: "#38bdf8",
+      accentHover: "#61cbfa",
+      accentTint: "#102633",
+      accentTintText: "#92dbfb",
+      accentGlow: "rgba(56, 189, 248, 0.22)",
+      accentGlowSoft: "rgba(56, 189, 248, 0.12)",
+    },
+  },
+  violet: {
+    light: {
+      accent: "#8b5cf6",
+      accentHover: "#7a48ef",
+      accentTint: "#f1edfe",
+      accentTintText: "#5d34c9",
+      accentGlow: "rgba(139, 92, 246, 0.12)",
+      accentGlowSoft: "rgba(139, 92, 246, 0.08)",
+    },
+    dark: {
+      accent: "#a78bfa",
+      accentHover: "#bba4fb",
+      accentTint: "#211c37",
+      accentTintText: "#d3c3fc",
+      accentGlow: "rgba(167, 139, 250, 0.22)",
+      accentGlowSoft: "rgba(167, 139, 250, 0.12)",
+    },
+  },
+  fuchsia: {
+    light: {
+      accent: "#c026d3",
+      accentHover: "#a81fb8",
+      accentTint: "#fbe9fc",
+      accentTintText: "#8f1a9c",
+      accentGlow: "rgba(192, 38, 211, 0.12)",
+      accentGlowSoft: "rgba(192, 38, 211, 0.08)",
+    },
+    dark: {
+      accent: "#e879f9",
+      accentHover: "#ee97fa",
+      accentTint: "#2f1730",
+      accentTintText: "#f4b8fb",
+      accentGlow: "rgba(232, 121, 249, 0.22)",
+      accentGlowSoft: "rgba(232, 121, 249, 0.12)",
+    },
+  },
+  rose: {
+    light: {
+      accent: "#e11d48",
+      accentHover: "#c11740",
+      accentTint: "#fde9ee",
+      accentTintText: "#9f1239",
+      accentGlow: "rgba(225, 29, 72, 0.12)",
+      accentGlowSoft: "rgba(225, 29, 72, 0.08)",
+    },
+    dark: {
+      accent: "#fb7185",
+      accentHover: "#fc93a3",
+      accentTint: "#2d151a",
+      accentTintText: "#fbb8c4",
+      accentGlow: "rgba(251, 113, 133, 0.22)",
+      accentGlowSoft: "rgba(251, 113, 133, 0.12)",
+    },
+  },
+  yellow: {
+    light: {
+      accent: "#ca8a04",
+      accentHover: "#a97103",
+      accentTint: "#fdf6e0",
+      accentTintText: "#855c02",
+      accentGlow: "rgba(202, 138, 4, 0.12)",
+      accentGlowSoft: "rgba(202, 138, 4, 0.08)",
+    },
+    dark: {
+      accent: "#facc15",
+      accentHover: "#fbdb4d",
+      accentTint: "#2b2408",
+      accentTintText: "#fbe28a",
+      accentGlow: "rgba(250, 204, 21, 0.22)",
+      accentGlowSoft: "rgba(250, 204, 21, 0.12)",
+    },
+  },
+  stone: {
+    light: {
+      accent: "#57534e",
+      accentHover: "#44403c",
+      accentTint: "#f0eeec",
+      accentTintText: "#44403c",
+      accentGlow: "rgba(87, 83, 78, 0.12)",
+      accentGlowSoft: "rgba(87, 83, 78, 0.08)",
+    },
+    dark: {
+      accent: "#a8a29e",
+      accentHover: "#d6d3d1",
+      accentTint: "#211f1d",
+      accentTintText: "#d6d3d1",
+      accentGlow: "rgba(168, 162, 158, 0.22)",
+      accentGlowSoft: "rgba(168, 162, 158, 0.12)",
+    },
+  },
 };
+
+/** Looks up one accent color's theme-appropriate values — used for the
+ *  connection-color feature (results-pane border/fill), which renders an
+ *  arbitrary named color correctly against whichever theme is active, unlike
+ *  `ACCENT_COLOR_SWATCH` (deliberately fixed to the light-mode value so
+ *  Settings' picker swatches stay consistent regardless of theme). */
+export function accentPaletteFor(color: AccentColor, mode: ThemeMode): AccentPalette {
+  return ACCENT_PALETTES[color][mode];
+}
+
+/** How a tagged connection's color renders in the results pane — set
+ *  per-connection (see `ConnectionSlot.colorStyle`/the connection form),
+ *  not a global app setting. */
+export type ConnectionColorStyle = "border" | "fill";
+
+export const DEFAULT_CONNECTION_COLOR_STYLE: ConnectionColorStyle = "border";
+
+/** Type guard for a value read back from a saved connection's `colorStyle`
+ *  — same reasoning as `isAccentColor`: a stored value could be stale or
+ *  absent, so fall back to the default rather than propagate garbage. */
+export function isConnectionColorStyle(
+  value: string | null | undefined,
+): value is ConnectionColorStyle {
+  return value === "border" || value === "fill";
+}
 
 /** The results-grid data font. Persisted across launches. */
 export type TableFont = "sans" | "mono" | "serif" | "system";
@@ -651,6 +877,23 @@ interface AppStore {
   rowCopyDelimiter: Delimiter;
   /** True while the settings modal is open. */
   settingsOpen: boolean;
+  /** A one-shot directive for which settings section to jump to next time the
+   *  dialog opens (e.g. the AI panel's "Open Settings" link landing on AI
+   *  Assistant instead of whatever tab was last open) — `null` means "leave
+   *  it wherever the user last had it." Consumed by `SettingsDialog` itself. */
+  settingsSection: SettingsSection | null;
+  /** Tab id currently doing a "silent" refresh (see `runTab`'s `silent`
+   *  option) — the one thing this drives is `ResultsHeader` keeping its
+   *  existing stats on screen instead of swapping to the "Running…/Cancel"
+   *  takeover, since a background refresh of already-loaded data shouldn't
+   *  read as a brand new, cancelable query. */
+  silentRefreshTabId: string | null;
+  /** Session id the "edit connection" overlay is open for, if any — lifted
+   *  out of `TopBar` (which still renders the overlay) so other UI, like the
+   *  AI panel's "this connection isn't saved" nudge, can open it too. */
+  editConnectionSessionId: string | null;
+  openEditConnection: (sessionId: string) => void;
+  closeEditConnection: () => void;
 
   // --- lifecycle ---
   initialize: () => Promise<void>;
@@ -692,6 +935,16 @@ interface AppStore {
    *  immediately rather than only after reconnecting. A no-op if that saved
    *  connection isn't currently connected. */
   renameLiveConnection: (savedConnectionId: string, name: string) => void;
+  /** Tags a live session with a color and how it renders (border/fill),
+   *  updating it immediately. If the session is backed by a saved
+   *  connection, both are also persisted there (so they survive
+   *  reconnects/restarts); an ad-hoc session just keeps them in memory for
+   *  the life of this session. */
+  setConnectionColor: (
+    sessionId: string,
+    color: AccentColor | null,
+    colorStyle: ConnectionColorStyle,
+  ) => Promise<void>;
   /** Re-establish an already-open session with edited params/name — for
    *  "edit the connection I'm on," not opening an additional one. Keeps the
    *  same slot (tabs stay put); its schema is cleared since it may now point
@@ -714,8 +967,16 @@ interface AppStore {
   /** Run a tab's query. `sqlOverride`, if given, is sent to the backend
    *  instead of the tab's own `sql` (e.g. just the statement under the
    *  cursor, or a selection) — the tab's editor buffer is never changed by
-   *  this, only what gets executed and logged to history. */
-  runTab: (id: string, sqlOverride?: string) => Promise<void>;
+   *  this, only what gets executed and logged to history. Pass
+   *  `opts.silent` for a background refresh of already-loaded data (see
+   *  `silentRefreshTabId`) rather than a user-initiated run — it skips the
+   *  "Running…/Cancel" takeover in the results header. */
+  runTab: (id: string, sqlOverride?: string, opts?: { silent?: boolean }) => Promise<void>;
+  /** Refreshes the schema tree and, if the active tab has already run once,
+   *  silently re-runs it too — the combined action behind the top bar's
+   *  Refresh button and the Cmd/Ctrl+R shortcut, so both pick up e.g. a row
+   *  inserted via the API without a disruptive loading takeover. */
+  refreshActive: () => Promise<void>;
   /** Ask the server to interrupt whatever's running on the active
    *  connection (one query executing at a time per connection) — whichever
    *  tab's `runTab` call is actually in flight there will see the resulting
@@ -848,7 +1109,11 @@ interface AppStore {
   setHistoryLimit: (limit: number) => void;
   setCsvDelimiter: (delimiter: Delimiter) => void;
   setRowCopyDelimiter: (delimiter: Delimiter) => void;
-  openSettings: () => void;
+  /** Opens the settings modal. Pass `section` to jump straight to a
+   *  particular tab (e.g. the AI panel's "Open Settings" link landing on AI
+   *  Assistant); omit it to leave the dialog on whatever section the user
+   *  had open last. */
+  openSettings: (section?: SettingsSection) => void;
   closeSettings: () => void;
 }
 
@@ -1211,6 +1476,7 @@ function saveNullDisplay(display: NullDisplay) {
     // Storage unavailable — non-fatal.
   }
 }
+
 
 /** Read the saved editor font, defaulting to the classic code (mono) stack. */
 function loadEditorFont(): TableFont {
@@ -1770,6 +2036,9 @@ export const useStore = create<AppStore>((set, get) => {
     csvDelimiter: loadDelimiter(CSV_DELIMITER_KEY, ","),
     rowCopyDelimiter: loadDelimiter(ROW_COPY_DELIMITER_KEY, "\t"),
     settingsOpen: false,
+    settingsSection: null,
+    silentRefreshTabId: null,
+    editConnectionSessionId: null,
 
     async initialize() {
       if (didInitialize) return;
@@ -1869,6 +2138,9 @@ export const useStore = create<AppStore>((set, get) => {
         options?.rememberAsLast ?? true,
       );
       const tab = makeTab({ sql: get().starterSql });
+      const savedRecord = connection.id
+        ? get().savedConnections.find((c) => c.id === connection.id)
+        : undefined;
       const slot: ConnectionSlot = {
         sessionId: info.sessionId,
         current: info,
@@ -1883,6 +2155,10 @@ export const useStore = create<AppStore>((set, get) => {
         aiChatId: null,
         aiChats: [],
         aiChatsLoading: false,
+        color: isAccentColor(savedRecord?.color) ? savedRecord.color : null,
+        colorStyle: isConnectionColorStyle(savedRecord?.colorStyle)
+          ? savedRecord.colorStyle
+          : DEFAULT_CONNECTION_COLOR_STYLE,
       };
       set((s) => ({
         view: "workspace",
@@ -1936,6 +2212,25 @@ export const useStore = create<AppStore>((set, get) => {
           },
         };
       });
+    },
+
+    async setConnectionColor(sessionId, color, colorStyle) {
+      const slot = get().connections[sessionId];
+      if (!slot) return;
+      set((s) => ({
+        connections: patchSlot(s.connections, sessionId, { color, colorStyle }),
+      }));
+
+      const savedConnectionId = slot.current.connectionId;
+      if (!savedConnectionId) return; // ad-hoc — color just lives on the slot above
+      const saved = get().savedConnections.find((c) => c.id === savedConnectionId);
+      if (!saved) return;
+      try {
+        await api.saveConnection({ ...saved, color, colorStyle });
+        await get().loadSavedConnections();
+      } catch (err) {
+        console.error("failed to persist connection color:", errorMessage(err));
+      }
     },
 
     async reconnectSession(sessionId, connection) {
@@ -2069,13 +2364,18 @@ export const useStore = create<AppStore>((set, get) => {
       });
     },
 
-    async runTab(id, sqlOverride) {
+    async runTab(id, sqlOverride, opts) {
       const owner = findTabOwner(get().connections, id);
       if (!owner || owner.tab.running) return;
       const { connectionId, tab } = owner;
       const sqlToRun = sqlOverride ?? tab.sql;
+      const silent = opts?.silent ?? false;
 
       if (tabHasPendingEdits(tab)) {
+        // A silent background refresh (Cmd/Ctrl+R, the Refresh button) never
+        // has a reason to clobber uncommitted edits with a confirm prompt the
+        // user didn't ask for — just skip it this round.
+        if (silent) return;
         const ok = await requestConfirm(
           `"${tab.title}" has unsaved changes. Refresh and lose them?`,
           "Refresh",
@@ -2083,6 +2383,7 @@ export const useStore = create<AppStore>((set, get) => {
         if (!ok) return;
       }
 
+      if (silent) set({ silentRefreshTabId: id });
       set((s) => ({
         connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
           tabs.map((t) =>
@@ -2130,9 +2431,19 @@ export const useStore = create<AppStore>((set, get) => {
           ),
         }));
       } finally {
+        if (silent && get().silentRefreshTabId === id) set({ silentRefreshTabId: null });
         // Reflect the just-logged query in the history panel if it's open.
         if (get().historyOpen) void get().refreshHistory();
       }
+    },
+
+    async refreshActive() {
+      const connectionId = get().activeConnectionId;
+      const slot = connectionId ? get().connections[connectionId] : null;
+      const tasks: Promise<void>[] = [get().refreshSchema()];
+      const activeTab = slot?.tabs.find((t) => t.id === slot.activeTabId);
+      if (activeTab?.hasRun) tasks.push(get().runTab(activeTab.id, undefined, { silent: true }));
+      await Promise.all(tasks);
     },
 
     cancelQuery() {
@@ -2749,7 +3060,11 @@ export const useStore = create<AppStore>((set, get) => {
 
     toggleHistory() {
       const next = !get().historyOpen;
-      set({ historyOpen: next });
+      // History, Saved Queries, and the AI panel share one slot on the right
+      // edge of the window — opening one closes the other two rather than
+      // stacking on top of each other. Closing (next === false) only touches
+      // this panel's own flag.
+      set(next ? { historyOpen: true, savedQueriesOpen: false, aiPanelOpen: false } : { historyOpen: false });
       if (next) void get().refreshHistory();
     },
 
@@ -2763,7 +3078,9 @@ export const useStore = create<AppStore>((set, get) => {
 
     toggleAiPanel() {
       const next = !get().aiPanelOpen;
-      set({ aiPanelOpen: next });
+      // See `toggleHistory` — the three right-edge panels are mutually
+      // exclusive.
+      set(next ? { aiPanelOpen: true, historyOpen: false, savedQueriesOpen: false } : { aiPanelOpen: false });
       if (!next) return;
       if (!get().aiConfig) void get().loadAiConfig();
 
@@ -3002,7 +3319,9 @@ export const useStore = create<AppStore>((set, get) => {
 
     toggleSavedQueries() {
       const next = !get().savedQueriesOpen;
-      set({ savedQueriesOpen: next });
+      // See `toggleHistory` — the three right-edge panels are mutually
+      // exclusive.
+      set(next ? { savedQueriesOpen: true, historyOpen: false, aiPanelOpen: false } : { savedQueriesOpen: false });
       if (next) void get().loadSavedQueries();
     },
 
@@ -3211,12 +3530,20 @@ export const useStore = create<AppStore>((set, get) => {
       set({ rowCopyDelimiter: delimiter });
     },
 
-    openSettings() {
-      set({ settingsOpen: true });
+    openSettings(section) {
+      set({ settingsOpen: true, settingsSection: section ?? null });
     },
 
     closeSettings() {
       set({ settingsOpen: false });
+    },
+
+    openEditConnection(sessionId) {
+      set({ editConnectionSessionId: sessionId });
+    },
+
+    closeEditConnection() {
+      set({ editConnectionSessionId: null });
     },
   };
 });

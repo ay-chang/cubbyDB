@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import {
   useActiveAiChatId,
@@ -10,7 +10,10 @@ import {
   useStore,
 } from "../../state/store";
 import type { AiChatSummary } from "../../types";
-import { Spinner } from "../common/Spinner";
+
+/** Cap on how tall the chat input grows before it starts scrolling instead —
+ *  about 8-9 lines at the input's font size, VSCode-editor style. */
+const AI_INPUT_MAX_HEIGHT = 160;
 
 function formatTime(ms: number): string {
   const d = new Date(ms);
@@ -43,10 +46,12 @@ export function AiPanel() {
   const renameAiChat = useStore((s) => s.renameAiChat);
   const deleteAiChat = useStore((s) => s.deleteAiChat);
   const openSettings = useStore((s) => s.openSettings);
+  const activeConnectionId = useStore((s) => s.activeConnectionId);
+  const openEditConnection = useStore((s) => s.openEditConnection);
 
   const [draft, setDraft] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
@@ -55,6 +60,25 @@ export function AiPanel() {
   useEffect(() => {
     if (!historyView) requestAnimationFrame(() => inputRef.current?.focus());
   }, [historyView]);
+
+  // Auto-grow with content, VSCode-style — reset to measure the content's
+  // true height, then clamp so long drafts scroll inside the box instead of
+  // pushing it past AI_INPUT_MAX_HEIGHT. `useLayoutEffect` (not `useEffect`)
+  // so the resize happens before the browser paints — otherwise the box
+  // would flash at its stale size for a frame on every keystroke.
+  useLayoutEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    // `box-sizing: border-box` means `height` sets the *border*-box size,
+    // but `scrollHeight` only measures content + padding, excluding the
+    // border. Setting height straight to scrollHeight therefore comes up
+    // short by the border's width — just enough for the content to overflow
+    // its own box and trigger a scrollbar well before AI_INPUT_MAX_HEIGHT.
+    const border =
+      el.clientHeight > 0 ? el.offsetHeight - el.clientHeight : 0;
+    el.style.height = `${Math.min(el.scrollHeight + border, AI_INPUT_MAX_HEIGHT)}px`;
+  }, [draft]);
 
   const hasKey = aiConfig ? aiConfig.anthropicKeySet : true;
 
@@ -101,6 +125,17 @@ export function AiPanel() {
             <p className="ai-panel__empty">
               This connection isn't saved, so there's no stable place to keep its chat history —
               chats here stay in-memory only, for this session.{" "}
+              {activeConnectionId && (
+                <>
+                  <span
+                    className="ai-panel__settings-link"
+                    onClick={() => openEditConnection(activeConnectionId)}
+                  >
+                    Save this connection
+                  </span>{" "}
+                  to keep history across restarts.{" "}
+                </>
+              )}
               <span className="ai-panel__settings-link" onClick={toggleAiHistoryView}>
                 Back to chat
               </span>
@@ -119,7 +154,10 @@ export function AiPanel() {
             {aiConfig && !hasKey && (
               <p className="ai-panel__empty">
                 Add an Anthropic API key to use the AI assistant.{" "}
-                <span className="ai-panel__settings-link" onClick={openSettings}>
+                <span
+                  className="ai-panel__settings-link"
+                  onClick={() => openSettings("aiAssistant")}
+                >
                   Open Settings
                 </span>
               </p>
@@ -154,20 +192,24 @@ export function AiPanel() {
             ))}
             {sending && (
               <div className="ai-msg ai-msg--assistant ai-msg--pending">
-                <Spinner />
+                Thinking…
               </div>
             )}
           </div>
           <div className="ai-input-row">
-            <input
+            <textarea
               ref={inputRef}
               className="ai-input"
+              rows={1}
               placeholder={hasKey ? "Ask a question…" : "Add an API key in Settings to start"}
               value={draft}
               disabled={!hasKey}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") send();
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  send();
+                }
               }}
             />
             <button

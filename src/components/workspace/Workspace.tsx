@@ -20,6 +20,8 @@ import "./workspace.css";
 const SIDEBAR_MIN = 200;
 const SIDEBAR_MAX = 360;
 const EDITOR_MIN = 120;
+const AI_PANEL_MIN = 300;
+const AI_PANEL_MAX = 640;
 
 export function Workspace() {
   const tabs = useActiveTabs();
@@ -34,14 +36,22 @@ export function Workspace() {
 
   const { saveDialogOpen, openSaveDialog, closeSaveDialog } = useGlobalRunShortcut();
 
-  const [sidebarWidth, setSidebarWidth] = useState(280);
+  const [sidebarWidth, setSidebarWidth] = useState(300);
   const [editorHeight, setEditorHeight] = useState(280);
+  const [aiPanelWidth, setAiPanelWidth] = useState(380);
   const mainRef = useRef<HTMLDivElement>(null);
 
   // Sidebar drag (resizable 200–360px, per spec).
   const startSidebarDrag = useDrag((dx, startWidth) => {
     setSidebarWidth(clamp(startWidth + dx, SIDEBAR_MIN, SIDEBAR_MAX));
   }, sidebarWidth);
+
+  // AI panel drag — its resizer sits on the panel's left edge, so dragging
+  // left (negative dx) grows it and dragging right shrinks it, the mirror of
+  // the sidebar's own resizer above.
+  const startAiPanelDrag = useDrag((dx, startWidth) => {
+    setAiPanelWidth(clamp(startWidth - dx, AI_PANEL_MIN, AI_PANEL_MAX));
+  }, aiPanelWidth);
 
   // Editor/results horizontal split.
   const startEditorDrag = useDrag(
@@ -107,11 +117,25 @@ export function Workspace() {
             </div>
           )}
         </div>
+
+        {/* Laid out as a flex sibling (not a fixed overlay, unlike History/
+            Saved Queries) so it shrinks the table view instead of covering
+            it, with its own drag handle to resize. */}
+        {aiPanelOpen && (
+          <>
+            <div
+              className="workspace__resizer workspace__resizer--v"
+              onMouseDown={startAiPanelDrag}
+            />
+            <div className="workspace__ai" style={{ width: aiPanelWidth }}>
+              <AiPanel />
+            </div>
+          </>
+        )}
       </div>
 
       {historyOpen && <HistoryPanel />}
       {savedQueriesOpen && <SavedQueriesPanel />}
-      {aiPanelOpen && <AiPanel />}
       {saveDialogOpen && <SaveQueryDialog onClose={closeSaveDialog} />}
       <CommandPalette />
     </div>
@@ -162,11 +186,16 @@ function useDrag(
  * Escape cancels the active tab's query if it's currently running,
  * Cmd/Ctrl+T opens a new query tab, Cmd/Ctrl+W closes the active tab
  * (routed through the store's own unsaved-edits confirmation), Cmd/Ctrl+K
- * toggles the quick-jump command palette, and Cmd/Ctrl+S opens the "save as
+ * toggles the quick-jump command palette, Cmd/Ctrl+S opens the "save as
  * query" dialog when the active tab is a `query` tab (a `table` tab's own
  * Cmd/Ctrl+S, for committing pending cell edits, lives in
  * `PendingEditsBar` — the two never both mount for the same tab kind, so
- * there's no collision).
+ * there's no collision), and Cmd/Ctrl+R refreshes: it takes over the
+ * browser/webview's native reload (which would otherwise just reload the
+ * whole app) and instead calls `refreshActive` — the schema tree plus a
+ * silent re-run of the active tab's query — reachable without leaving the
+ * keyboard, e.g. after inserting a row via the API and wanting the grid to
+ * pick it up.
  */
 function useGlobalRunShortcut() {
   const runTab = useStore((s) => s.runTab);
@@ -174,6 +203,7 @@ function useGlobalRunShortcut() {
   const newTab = useStore((s) => s.newTab);
   const closeTab = useStore((s) => s.closeTab);
   const toggleCommandPalette = useStore((s) => s.toggleCommandPalette);
+  const refreshActive = useStore((s) => s.refreshActive);
   const activeTabId = useActiveTabId();
   const tabs = useActiveTabs();
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
@@ -182,6 +212,11 @@ function useGlobalRunShortcut() {
       if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && activeTabId) {
         e.preventDefault();
         void runTab(activeTabId);
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "r") {
+        e.preventDefault();
+        void refreshActive();
         return;
       }
       if (e.key === "Escape") {
@@ -217,7 +252,7 @@ function useGlobalRunShortcut() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [runTab, cancelQuery, newTab, closeTab, toggleCommandPalette, activeTabId, tabs]);
+  }, [runTab, cancelQuery, newTab, closeTab, toggleCommandPalette, refreshActive, activeTabId, tabs]);
 
   return {
     saveDialogOpen,

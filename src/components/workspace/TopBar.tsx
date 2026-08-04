@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { ConnectionScreen } from "../connection/ConnectionScreen";
 import { Spinner } from "../common/Spinner";
-import { useActiveSchemaLoading, useStore } from "../../state/store";
+import { ACCENT_COLOR_SWATCH, useActiveSchemaLoading, useStore } from "../../state/store";
 
 /** True on macOS, where the window is configured (`tauri.conf.json`,
  *  `titleBarStyle: "Overlay"`) with no native title bar — just the traffic
@@ -69,12 +69,15 @@ export function TopBar() {
   const toggleSavedQueries = useStore((s) => s.toggleSavedQueries);
   const aiPanelOpen = useStore((s) => s.aiPanelOpen);
   const toggleAiPanel = useStore((s) => s.toggleAiPanel);
-  const refreshSchema = useStore((s) => s.refreshSchema);
+  const refreshActive = useStore((s) => s.refreshActive);
   const disconnect = useStore((s) => s.disconnect);
   const openSettings = useStore((s) => s.openSettings);
   const compactTopBar = useStore((s) => s.compactTopBar);
+  const editSessionId = useStore((s) => s.editConnectionSessionId);
+  const openEditConnection = useStore((s) => s.openEditConnection);
+  const closeEditConnection = useStore((s) => s.closeEditConnection);
   const [addOpen, setAddOpen] = useState(false);
-  const [editSessionId, setEditSessionId] = useState<string | null>(null);
+  const [pillMenuSessionId, setPillMenuSessionId] = useState<string | null>(null);
   const schemaLoading = useActiveSchemaLoading();
   // Flashed briefly after a refresh completes, so a fast reload (the common
   // case) still gives visible confirmation instead of the spinner just
@@ -86,7 +89,7 @@ export function TopBar() {
   }, []);
 
   const handleRefresh = () => {
-    void refreshSchema().then(() => {
+    void refreshActive().then(() => {
       setJustRefreshed(true);
       if (justRefreshedTimer.current) window.clearTimeout(justRefreshedTimer.current);
       justRefreshedTimer.current = window.setTimeout(() => setJustRefreshed(false), 1200);
@@ -119,13 +122,24 @@ export function TopBar() {
               key={slot.sessionId}
               className={
                 "conn-pill conn-pill--switch" +
-                (slot.sessionId === activeConnectionId ? " conn-pill--active" : "")
+                (slot.sessionId === activeConnectionId ? " conn-pill--active" : "") +
+                (slot.color ? " conn-pill--tagged" : "")
+              }
+              style={
+                slot.color
+                  ? ({ "--conn-tag-color": ACCENT_COLOR_SWATCH[slot.color] } as React.CSSProperties)
+                  : undefined
               }
               onClick={() => switchConnection(slot.sessionId)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setPillMenuSessionId(slot.sessionId);
+              }}
               title={
-                slot.sessionId === activeConnectionId
+                (slot.sessionId === activeConnectionId
                   ? slot.current.name
-                  : `Switch to ${slot.current.name}`
+                  : `Switch to ${slot.current.name}`) + " (right-click for options)"
               }
             >
               <span className="conn-pill__dot" />
@@ -136,16 +150,6 @@ export function TopBar() {
                 </span>
               )}
               <span
-                className="conn-pill__edit"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setEditSessionId(slot.sessionId);
-                }}
-                title={`Edit ${slot.current.name}`}
-              >
-                ✎
-              </span>
-              <span
                 className="conn-pill__close"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -155,6 +159,15 @@ export function TopBar() {
               >
                 ×
               </span>
+              {pillMenuSessionId === slot.sessionId && (
+                <ConnectionPillMenu
+                  onEdit={() => {
+                    openEditConnection(slot.sessionId);
+                    setPillMenuSessionId(null);
+                  }}
+                  onClose={() => setPillMenuSessionId(null)}
+                />
+              )}
             </div>
           ))}
           <button
@@ -198,7 +211,7 @@ export function TopBar() {
           }
           onClick={handleRefresh}
           disabled={schemaLoading}
-          title="Refresh schema"
+          title="Refresh schema and the active tab's data (⌘R)"
         >
           {schemaLoading ? (
             <>
@@ -219,7 +232,7 @@ export function TopBar() {
         </button>
         <button
           className="topbar__btn topbar__btn--icon"
-          onClick={openSettings}
+          onClick={() => openSettings()}
           title="Settings"
           aria-label="Settings"
         >
@@ -266,7 +279,7 @@ export function TopBar() {
       )}
 
       {editSessionId && (
-        <div className="settings-overlay" onClick={() => setEditSessionId(null)}>
+        <div className="settings-overlay" onClick={closeEditConnection}>
           <div
             className="add-connection-card"
             role="dialog"
@@ -278,7 +291,7 @@ export function TopBar() {
               <span className="settings-panel__title">Edit connection</span>
               <button
                 className="settings-panel__close"
-                onClick={() => setEditSessionId(null)}
+                onClick={closeEditConnection}
                 title="Close"
                 aria-label="Close"
               >
@@ -288,11 +301,42 @@ export function TopBar() {
             <ConnectionScreen
               embedded
               editSessionId={editSessionId}
-              onConnected={() => setEditSessionId(null)}
+              onConnected={closeEditConnection}
             />
           </div>
         </div>
       )}
     </div>
+  );
+}
+
+/** Small right-click popover on a connection pill. Just "Edit" for now (which
+ *  opens the same form the pencil icon used to, including its color picker)
+ *  — a dropdown rather than a bare action so there's somewhere to add more
+ *  to later without redesigning the interaction. */
+function ConnectionPillMenu(props: { onEdit: () => void; onClose: () => void }) {
+  const { onEdit, onClose } = props;
+  return (
+    <>
+      {/* Full-screen click-catcher to dismiss on outside click, same idiom
+          as the results-grid FK context menu. */}
+      <div
+        style={{ position: "fixed", inset: 0, zIndex: 90 }}
+        onClick={(e) => {
+          e.stopPropagation();
+          onClose();
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onClose();
+        }}
+      />
+      <div className="pill-menu" onClick={(e) => e.stopPropagation()}>
+        <button className="context-menu__item" onClick={onEdit}>
+          Edit
+        </button>
+      </div>
+    </>
   );
 }

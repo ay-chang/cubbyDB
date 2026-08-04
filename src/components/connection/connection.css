@@ -37,6 +37,15 @@
   flex-direction: column;
   gap: 7px;
 }
+.conn-color-style {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
 
 .conn-input {
   height: var(--h-input);
@@ -220,6 +229,15 @@
 }
 .conn-card:hover .conn-card__actions {
   opacity: 1;
+}
+.conn-card__connect {
+  color: var(--text-ghost);
+  font-size: 10px;
+  line-height: 1;
+  transition: color var(--transition);
+}
+.conn-card__connect:hover {
+  color: var(--success);
 }
 .conn-card__duplicate {
   color: var(--text-ghost);

@@ -26,6 +26,13 @@ export interface SavedConnection {
   engine: Engine;
   params: ConnectionParams;
   createdAt: number;
+  /** One of `AccentColor`'s names (see state/store.ts), tagging this
+   *  connection so it's visually distinguishable — e.g. red for "prod".
+   *  `null`/absent means untagged. */
+  color?: string | null;
+  /** How `color` renders — one of `ConnectionColorStyle`'s values ("border"
+   *  or "fill"). `null`/absent falls back to "border". */
+  colorStyle?: string | null;
 }
 
 /** Returned by `connect` for a newly-opened session — `sessionId` addresses

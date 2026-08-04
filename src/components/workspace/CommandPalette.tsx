@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { formatCount } from "../../lib/format";
 import type { FuzzyMatch } from "../../lib/fuzzyMatch";
 import { bestMatch } from "../../lib/fuzzyMatch";
-import { useStore } from "../../state/store";
+import { accentPaletteFor, THEME_MODE, useStore } from "../../state/store";
 import type { SavedQuery, TableKind } from "../../types";
 
 type Item =
@@ -113,6 +113,7 @@ export function CommandPalette() {
   const jumpToColumn = useStore((s) => s.jumpToColumn);
   const savedQueries = useStore((s) => s.savedQueries);
   const openSavedQuery = useStore((s) => s.openSavedQuery);
+  const theme = useStore((s) => s.theme);
 
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<Scope>("all");
@@ -367,10 +368,30 @@ export function CommandPalette() {
                     : "No tables."}
             </div>
           ) : (
-            results.map((item, i) => (
+            results.map((item, i) => {
+              // Tables/columns from a color-tagged connection (see
+              // `ConnectionColorMenu` in TopBar.tsx) carry that tag into the
+              // list — searching across staging *and* prod at once is
+              // exactly when mixing them up is easiest to do by accident.
+              const connColor =
+                item.kind !== "script" ? (connections[item.sessionId]?.color ?? null) : null;
+              const connPalette = connColor ? accentPaletteFor(connColor, THEME_MODE[theme]) : null;
+              // Always the full-row tint here, regardless of that
+              // connection's own border/fill preference for the results
+              // pane — a thin border is easy to miss in a dense list where
+              // whole-row color is what actually reads at a glance.
+              const connStyle = connPalette
+                ? ({ "--conn-color-tint": connPalette.accentTint } as React.CSSProperties)
+                : undefined;
+              return (
               <div
                 key={item.id}
-                className={"cmdk-item" + (i === selected ? " cmdk-item--active" : "")}
+                className={
+                  "cmdk-item" +
+                  (i === selected ? " cmdk-item--active" : "") +
+                  (connPalette ? " cmdk-item--conn-fill" : "")
+                }
+                style={connStyle}
                 onMouseEnter={() => {
                   if (mouseArmedRef.current) setSelected(i);
                 }}
@@ -421,7 +442,8 @@ export function CommandPalette() {
                       : scriptPreview(item.query.sql)}
                 </span>
               </div>
-            ))
+              );
+            })
           )}
         </div>
       </div>

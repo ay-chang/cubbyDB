@@ -6,8 +6,9 @@ import * as api from "../../api/backend";
 import { errorMessage } from "../../api/backend";
 import { installUpdate } from "../../lib/appUpdate";
 import { useStore } from "../../state/store";
-import type { Delimiter, TableFont, Theme } from "../../state/store";
+import type { Delimiter, SettingsSection, TableFont, Theme } from "../../state/store";
 import type { AiModelInfo } from "../../types";
+import { Toggle } from "./Toggle";
 import {
   ACCENT_COLOR_LABELS,
   ACCENT_COLOR_OPTIONS,
@@ -30,7 +31,7 @@ import {
 import type { NullDisplay } from "../../state/store";
 
 /** Top-level settings tabs. The rail is built to grow beyond these four. */
-type TopSection = "general" | "appearance" | "aiAssistant" | "shortcuts";
+type TopSection = SettingsSection;
 
 const TOP_SECTIONS: { id: TopSection; label: string }[] = [
   { id: "general", label: "General" },
@@ -57,8 +58,18 @@ const APPEARANCE_SUBS: { id: AppearanceSub; label: string }[] = [
 export function SettingsDialog() {
   const open = useStore((s) => s.settingsOpen);
   const close = useStore((s) => s.closeSettings);
+  const requestedSection = useStore((s) => s.settingsSection);
   const [section, setSection] = useState<TopSection>("appearance");
   const [appearanceSub, setAppearanceSub] = useState<AppearanceSub>("table");
+
+  // The dialog stays mounted (just hidden) between opens, so its own
+  // `section` state doesn't reset on its own — `openSettings(section)`
+  // routes a one-shot directive through the store instead, which this syncs
+  // onto local state whenever it's set (e.g. the AI panel's "Open Settings"
+  // link landing straight on AI Assistant).
+  useEffect(() => {
+    if (open && requestedSection) setSection(requestedSection);
+  }, [open, requestedSection]);
 
   if (!open) return null;
 
@@ -134,25 +145,6 @@ export function SettingsDialog() {
   );
 }
 
-/** Reusable pill toggle switch, used by every on/off setting. */
-function Toggle({
-  on,
-  onToggle,
-}: {
-  on: boolean;
-  onToggle: () => void;
-}) {
-  return (
-    <button
-      role="switch"
-      aria-checked={on}
-      className={"toggle" + (on ? " toggle--on" : "")}
-      onClick={onToggle}
-    >
-      <span className="toggle__thumb" />
-    </button>
-  );
-}
 
 function GeneralSection() {
   const restoreTabsOnLaunch = useStore((s) => s.restoreTabsOnLaunch);

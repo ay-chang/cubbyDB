@@ -2,10 +2,20 @@ import { useMemo, useState } from "react";
 
 import * as api from "../../api/backend";
 import { errorMessage } from "../../api/backend";
-import { useStore } from "../../state/store";
+import {
+  ACCENT_COLOR_LABELS,
+  ACCENT_COLOR_OPTIONS,
+  ACCENT_COLOR_SWATCH,
+  DEFAULT_CONNECTION_COLOR_STYLE,
+  isAccentColor,
+  isConnectionColorStyle,
+  useStore,
+} from "../../state/store";
+import type { AccentColor, ConnectionColorStyle } from "../../state/store";
 import type { ConnectionParams, SavedConnection } from "../../types";
 import { AppFrame } from "../common/AppFrame";
 import { Spinner } from "../common/Spinner";
+import { Toggle } from "../common/Toggle";
 import "./connection.css";
 
 /** Editable form fields. Kept as strings; converted to params on submit. */
@@ -129,6 +139,7 @@ export function ConnectionScreen(props: {
   const lastConnection = useStore((s) => s.lastConnection);
   const reconnectError = useStore((s) => s.reconnectError);
   const renameLiveConnection = useStore((s) => s.renameLiveConnection);
+  const setConnectionColor = useStore((s) => s.setConnectionColor);
   // Only read once, at mount, to seed the form below — this component
   // doesn't need to react to the slot changing after that.
   const [editSlot] = useState(() =>
@@ -147,6 +158,10 @@ export function ConnectionScreen(props: {
   });
   const [selectedId, setSelectedId] = useState<string | null>(
     editSlot?.current.connectionId ?? null,
+  );
+  const [color, setColor] = useState<AccentColor | null>(editSlot?.color ?? null);
+  const [colorStyle, setColorStyle] = useState<ConnectionColorStyle>(
+    editSlot?.colorStyle ?? DEFAULT_CONNECTION_COLOR_STYLE,
   );
   const [test, setTest] = useState<TestState>({ kind: "idle" });
   const [connectError, setConnectError] = useState<string | null>(null);
@@ -170,7 +185,10 @@ export function ConnectionScreen(props: {
   // or an explicit "Update" + "Save as new" pair, instead of silently
   // switching between overwrite and create-new on every keystroke.
   const dirty = selected
-    ? !paramsEqual(params, selected.params) || effectiveName !== selected.name
+    ? !paramsEqual(params, selected.params) ||
+      effectiveName !== selected.name ||
+      color !== (isAccentColor(selected.color) ? selected.color : null) ||
+      colorStyle !== (isConnectionColorStyle(selected.colorStyle) ? selected.colorStyle : DEFAULT_CONNECTION_COLOR_STYLE)
     : false;
 
   function update<K extends keyof FormState>(key: K, value: string) {
@@ -184,8 +202,29 @@ export function ConnectionScreen(props: {
   function loadSaved(conn: SavedConnection) {
     setForm(paramsToForm(conn.params, conn.name));
     setSelectedId(conn.id);
+    setColor(isAccentColor(conn.color) ? conn.color : null);
+    setColorStyle(
+      isConnectionColorStyle(conn.colorStyle) ? conn.colorStyle : DEFAULT_CONNECTION_COLOR_STYLE,
+    );
     setTest({ kind: "idle" });
     setConnectError(null);
+  }
+
+  /** Loads a saved connection into the form *and* connects immediately —
+   *  the one-click path from the saved list, vs. `loadSaved` (load only,
+   *  reviewed before hitting Connect). */
+  async function connectSaved(conn: SavedConnection, e: React.MouseEvent) {
+    e.stopPropagation();
+    setConnecting(true);
+    setConnectError(null);
+    try {
+      await connectTo({ params: conn.params, name: conn.name, id: conn.id });
+      onConnected?.();
+    } catch (err) {
+      setConnectError(errorMessage(err));
+    } finally {
+      setConnecting(false);
+    }
   }
 
   async function handleTest() {
@@ -210,6 +249,8 @@ export function ConnectionScreen(props: {
         name: effectiveName,
         id: selectedId ?? undefined,
       });
+      const newSessionId = useStore.getState().activeConnectionId;
+      if (newSessionId) await setConnectionColor(newSessionId, color, colorStyle);
       onConnected?.();
     } catch (err) {
       setConnectError(errorMessage(err));
@@ -233,6 +274,7 @@ export function ConnectionScreen(props: {
         name: effectiveName,
         id: selectedId ?? undefined,
       });
+      await setConnectionColor(editSessionId, color, colorStyle);
       if (selectedId) await handleSave("update");
       onConnected?.();
     } catch (err) {
@@ -251,6 +293,8 @@ export function ConnectionScreen(props: {
       engine: "postgres",
       params,
       createdAt: 0,
+      color,
+      colorStyle,
     };
     try {
       const saved = await api.saveConnection(record);
@@ -260,6 +304,30 @@ export function ConnectionScreen(props: {
       // connection's session), reflect the rename in the switcher right
       // away rather than only after reconnecting.
       if (mode === "update") renameLiveConnection(saved.id, saved.name);
+      // Likewise for color/style — Update alone (unlike Connect/Reconnect)
+      // doesn't otherwise touch the live slot, so a color-only edit to an
+      // already-saved, already-live connection wouldn't show up until a
+      // separate reconnect.
+      const liveEntry = Object.entries(useStore.getState().connections).find(
+        ([, slot]) => slot.current.connectionId === saved.id,
+      );
+      if (mode === "update" && liveEntry) {
+        await setConnectionColor(liveEntry[0], color, colorStyle);
+      }
+
+      // First save of a live but never-saved (ad-hoc) session — e.g. the AI
+      // panel's or the right-click "Edit" form's "save this connection" path.
+      // `handleSave` alone only wrote the *saved-connections list*; without
+      // this, the live session's own `connectionId` stayed null, so it kept
+      // reading as unsaved (no chat history, "Save" offered again) until a
+      // separate manual Reconnect. Link the two here so one click finishes
+      // the job — reconnecting is a no-op on the actual DB connection since
+      // nothing about the params changed, just the identity now attached.
+      if (editSessionId && mode === "new" && !editSlot?.current.connectionId) {
+        await reconnectSession(editSessionId, { params, name: saved.name, id: saved.id });
+        await setConnectionColor(editSessionId, color, colorStyle);
+        onConnected?.();
+      }
     } catch (err) {
       setConnectError(errorMessage(err));
     }
@@ -284,6 +352,8 @@ export function ConnectionScreen(props: {
       engine: conn.engine,
       params: conn.params,
       createdAt: 0,
+      color: conn.color,
+      colorStyle: conn.colorStyle,
     };
     try {
       const saved = await api.saveConnection(record);
@@ -317,6 +387,48 @@ export function ConnectionScreen(props: {
               onChange={(v) => update("name", v)}
               placeholder={derivedName}
             />
+
+            <div className="conn-field">
+              <span className="caption">Color</span>
+              <div className="color-menu__grid">
+                <button
+                  type="button"
+                  className={
+                    "color-menu__swatch color-menu__swatch--none" +
+                    (!color ? " color-menu__swatch--active" : "")
+                  }
+                  onClick={() => setColor(null)}
+                  title="No color"
+                  aria-label="No color"
+                >
+                  {!color && "✓"}
+                </button>
+                {ACCENT_COLOR_OPTIONS.map((c) => (
+                  <button
+                    type="button"
+                    key={c}
+                    className={
+                      "color-menu__swatch" + (color === c ? " color-menu__swatch--active" : "")
+                    }
+                    style={{ background: ACCENT_COLOR_SWATCH[c] }}
+                    onClick={() => setColor(c)}
+                    title={ACCENT_COLOR_LABELS[c]}
+                    aria-label={ACCENT_COLOR_LABELS[c]}
+                  >
+                    {color === c && "✓"}
+                  </button>
+                ))}
+              </div>
+              {color && (
+                <div className="conn-color-style">
+                  <span>Highlight whole table</span>
+                  <Toggle
+                    on={colorStyle === "fill"}
+                    onToggle={() => setColorStyle(colorStyle === "fill" ? "border" : "fill")}
+                  />
+                </div>
+              )}
+            </div>
 
             <label className="conn-field">
               <span className="caption">Connection string</span>
@@ -510,11 +622,23 @@ export function ConnectionScreen(props: {
                         "conn-card__dot" +
                         (selectedId === conn.id ? " conn-card__dot--live" : "")
                       }
+                      style={
+                        isAccentColor(conn.color)
+                          ? { background: ACCENT_COLOR_SWATCH[conn.color] }
+                          : undefined
+                      }
                     />
                     {conn.name}
                   </span>
                   <span className="conn-card__sub mono">{savedSubtitle(conn)}</span>
                   <span className="conn-card__actions">
+                    <span
+                      className="conn-card__connect"
+                      onClick={(e) => void connectSaved(conn, e)}
+                      title="Connect"
+                    >
+                      ▶
+                    </span>
                     <span
                       className="conn-card__duplicate"
                       onClick={(e) => void handleDuplicate(conn, e)}
