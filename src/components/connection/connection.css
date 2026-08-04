@@ -37,6 +37,30 @@
   flex-direction: column;
   gap: 7px;
 }
+/* `.settings-subtabs` is tuned for the Settings dialog's own unpadded
+   panel — `.conn-form` already carries its own padding, so this zeroes the
+   subtab strip's own to avoid doubling up. */
+.conn-form-tabs {
+  padding: 0;
+}
+/* Both tab panels stay mounted, stacked in the same implicit grid cell (one
+   just `visibility: hidden`) so grid track sizing — which counts hidden-but-
+   laid-out items, unlike `display: none` — always sizes this to the taller
+   one (Connection). Otherwise the dialog visibly resized switching to the
+   shorter Color tab. */
+.conn-form-tabpanel {
+  display: grid;
+}
+.conn-form-tabpage {
+  grid-area: 1 / 1;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+.conn-form-tabpage--hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
 .conn-color-style {
   margin-top: 6px;
   display: flex;

@@ -56,6 +56,16 @@
   padding: 3px 9px;
   border-radius: var(--radius-sm);
   background: var(--pill-bg);
+  /* Right-clicking (for `ConnectionPillMenu`) otherwise left behind a native
+     text-selection highlight across the pill's label — the mousedown that
+     precedes `contextmenu` still runs its default text-selection behavior
+     even though `contextmenu`'s own `preventDefault()` stops the OS/browser
+     menu itself. `-webkit-user-select` alongside the unprefixed property:
+     the Tauri app's actual renderer on macOS is WKWebView, which needs the
+     prefix for this to reliably suppress the native selection box (same
+     idiom as `.grid__row`'s own comment on this). */
+  user-select: none;
+  -webkit-user-select: none;
 }
 .conn-pill__dot {
   width: 6px;
@@ -696,6 +706,12 @@
   --surface: var(--conn-color-tint);
   --surface-raised: var(--conn-color-tint);
   --surface-header: var(--conn-color-tint);
+  /* `--table-zebra` defaults to `var(--surface-raised)` (see tokens.css),
+     which in principle re-resolves against the override above — but in
+     practice left every other stripe visibly banded against the (still
+     un-tinted-looking) base rows. Pinning it directly here is what actually
+     makes the fill read as one flat color instead of alternating stripes. */
+  --table-zebra: var(--conn-color-tint);
 }
 .results__header {
   height: var(--h-results-header);
@@ -2518,9 +2534,29 @@
 }
 /* Connection color tag, carried into the quick-jump list as a full-row tint
    (always, regardless of that connection's own border/fill preference for
-   the results pane — a thin border reads poorly in a dense list). */
+   the results pane — a thin border reads poorly in a dense list). Every
+   `.cmdk-item` is independently rounded and inset from `.cmdk-list`'s own
+   6px padding, which is invisible on an untagged (backgroundless) row but
+   turns into a visible gap around and between tinted ones — bleeding into
+   that padding and squaring the corners is what makes the color read as
+   filling the whole row instead of a chip floating inside it. */
 .cmdk-item--conn-fill {
   background: var(--conn-color-tint);
+  margin: 0 -6px;
+  padding-left: 16px;
+  padding-right: 16px;
+  border-radius: 0;
+}
+/* Same bleed, vertically — `.cmdk-list`'s own top/bottom padding leaves a
+   sliver above the first row and below the last, exactly like the left/right
+   padding did before the horizontal bleed above. */
+.cmdk-item--conn-fill:first-child {
+  margin-top: -6px;
+  padding-top: 14px;
+}
+.cmdk-item--conn-fill:last-child {
+  margin-bottom: -6px;
+  padding-bottom: 14px;
 }
 /* The keyboard-selected row's solid accent background always wins over a
    fill tag, regardless of source order (two classes beats one on

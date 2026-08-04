@@ -163,6 +163,7 @@ export function ConnectionScreen(props: {
   const [colorStyle, setColorStyle] = useState<ConnectionColorStyle>(
     editSlot?.colorStyle ?? DEFAULT_CONNECTION_COLOR_STYLE,
   );
+  const [formTab, setFormTab] = useState<"connection" | "color">("connection");
   const [test, setTest] = useState<TestState>({ kind: "idle" });
   const [connectError, setConnectError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
@@ -381,148 +382,184 @@ export function ConnectionScreen(props: {
               <p>Paste a connection string, or fill in the fields below.</p>
             </div>
 
-            <Field
-              label="Name"
-              value={form.name}
-              onChange={(v) => update("name", v)}
-              placeholder={derivedName}
-            />
+            <div className="settings-subtabs conn-form-tabs">
+              <button
+                type="button"
+                className={"settings-subtab" + (formTab === "connection" ? " settings-subtab--active" : "")}
+                onClick={() => setFormTab("connection")}
+              >
+                Connection
+              </button>
+              <button
+                type="button"
+                className={"settings-subtab" + (formTab === "color" ? " settings-subtab--active" : "")}
+                onClick={() => setFormTab("color")}
+              >
+                Color
+              </button>
+            </div>
 
-            <div className="conn-field">
-              <span className="caption">Color</span>
-              <div className="color-menu__grid">
-                <button
-                  type="button"
-                  className={
-                    "color-menu__swatch color-menu__swatch--none" +
-                    (!color ? " color-menu__swatch--active" : "")
-                  }
-                  onClick={() => setColor(null)}
-                  title="No color"
-                  aria-label="No color"
-                >
-                  {!color && "✓"}
-                </button>
-                {ACCENT_COLOR_OPTIONS.map((c) => (
-                  <button
-                    type="button"
-                    key={c}
-                    className={
-                      "color-menu__swatch" + (color === c ? " color-menu__swatch--active" : "")
-                    }
-                    style={{ background: ACCENT_COLOR_SWATCH[c] }}
-                    onClick={() => setColor(c)}
-                    title={ACCENT_COLOR_LABELS[c]}
-                    aria-label={ACCENT_COLOR_LABELS[c]}
-                  >
-                    {color === c && "✓"}
-                  </button>
-                ))}
-              </div>
-              {color && (
-                <div className="conn-color-style">
-                  <span>Highlight whole table</span>
-                  <Toggle
-                    on={colorStyle === "fill"}
-                    onToggle={() => setColorStyle(colorStyle === "fill" ? "border" : "fill")}
+            {/* Both panels stay mounted, overlaid in the same grid cell (one
+                just `visibility: hidden`) so the taller one — always
+                Connection — sets the height regardless of which is showing.
+                Otherwise switching to the shorter Color tab visibly shrank
+                the whole dialog. */}
+            <div className="conn-form-tabpanel">
+              <div
+                className={"conn-form-tabpage" + (formTab === "connection" ? "" : " conn-form-tabpage--hidden")}
+              >
+                <Field
+                  label="Name"
+                  value={form.name}
+                  onChange={(v) => update("name", v)}
+                  placeholder={derivedName}
+                />
+
+                <label className="conn-field">
+                  <span className="caption">Connection string</span>
+                  <input
+                    className="conn-input conn-input--mono"
+                    placeholder="postgresql://user:password@host:5432/database"
+                    value={form.connectionString}
+                    onChange={(e) => update("connectionString", e.target.value)}
+                    spellCheck={false}
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                  />
+                </label>
+
+                <div className="conn-or">
+                  <span />
+                  <span className="conn-or__label">or</span>
+                  <span />
+                </div>
+
+                <div className="conn-row conn-row--host">
+                  <Field
+                    label="Host"
+                    value={form.host}
+                    onChange={(v) => update("host", v)}
+                    placeholder="localhost"
+                  />
+                  <Field
+                    label="Port"
+                    value={form.port}
+                    onChange={(v) => update("port", v)}
+                    placeholder="5432"
                   />
                 </div>
-              )}
+
+                <div className="conn-row conn-row--pair">
+                  <Field
+                    label="Database"
+                    value={form.database}
+                    onChange={(v) => update("database", v)}
+                    placeholder="postgres"
+                  />
+                  <Field
+                    label="User"
+                    value={form.user}
+                    onChange={(v) => update("user", v)}
+                    placeholder="postgres"
+                  />
+                </div>
+
+                <Field
+                  label="Password"
+                  type="password"
+                  value={form.password}
+                  onChange={(v) => update("password", v)}
+                  placeholder="••••••••••"
+                />
+              </div>
+
+              <div
+                className={"conn-form-tabpage" + (formTab === "color" ? "" : " conn-form-tabpage--hidden")}
+              >
+                <div className="conn-field">
+                  <span className="caption">Color</span>
+                  <div className="color-menu__grid">
+                    <button
+                      type="button"
+                      className={
+                        "color-menu__swatch color-menu__swatch--none" +
+                        (!color ? " color-menu__swatch--active" : "")
+                      }
+                      onClick={() => setColor(null)}
+                      title="No color"
+                      aria-label="No color"
+                    >
+                      {!color && "✓"}
+                    </button>
+                    {ACCENT_COLOR_OPTIONS.map((c) => (
+                      <button
+                        type="button"
+                        key={c}
+                        className={
+                          "color-menu__swatch" + (color === c ? " color-menu__swatch--active" : "")
+                        }
+                        style={{ background: ACCENT_COLOR_SWATCH[c] }}
+                        onClick={() => setColor(c)}
+                        title={ACCENT_COLOR_LABELS[c]}
+                        aria-label={ACCENT_COLOR_LABELS[c]}
+                      >
+                        {color === c && "✓"}
+                      </button>
+                    ))}
+                  </div>
+                  {color && (
+                    <div className="conn-color-style">
+                      <span>Highlight whole table</span>
+                      <Toggle
+                        on={colorStyle === "fill"}
+                        onToggle={() => setColorStyle(colorStyle === "fill" ? "border" : "fill")}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
-
-            <label className="conn-field">
-              <span className="caption">Connection string</span>
-              <input
-                className="conn-input conn-input--mono"
-                placeholder="postgresql://user:password@host:5432/database"
-                value={form.connectionString}
-                onChange={(e) => update("connectionString", e.target.value)}
-                spellCheck={false}
-                autoCapitalize="off"
-                autoCorrect="off"
-              />
-            </label>
-
-            <div className="conn-or">
-              <span />
-              <span className="conn-or__label">or</span>
-              <span />
-            </div>
-
-            <div className="conn-row conn-row--host">
-              <Field
-                label="Host"
-                value={form.host}
-                onChange={(v) => update("host", v)}
-                placeholder="localhost"
-              />
-              <Field
-                label="Port"
-                value={form.port}
-                onChange={(v) => update("port", v)}
-                placeholder="5432"
-              />
-            </div>
-
-            <div className="conn-row conn-row--pair">
-              <Field
-                label="Database"
-                value={form.database}
-                onChange={(v) => update("database", v)}
-                placeholder="postgres"
-              />
-              <Field
-                label="User"
-                value={form.user}
-                onChange={(v) => update("user", v)}
-                placeholder="postgres"
-              />
-            </div>
-
-            <Field
-              label="Password"
-              type="password"
-              value={form.password}
-              onChange={(v) => update("password", v)}
-              placeholder="••••••••••"
-            />
 
             <div className="conn-actions">
-              <button
-                className="btn btn--primary"
-                onClick={editSessionId ? handleReconnect : handleConnect}
-                disabled={!hasInput || connecting}
-                title={
-                  editSessionId
-                    ? "Apply these changes to the connection you're on now"
-                    : undefined
-                }
-              >
-                {connecting ? (
-                  <>
-                    <Spinner light /> {editSessionId ? "Reconnecting…" : "Connecting…"}
-                  </>
-                ) : editSessionId ? (
-                  <>
-                    Reconnect <span className="btn__kbd">⌘↵</span>
-                  </>
-                ) : (
-                  <>
-                    Connect <span className="btn__kbd">⌘↵</span>
-                  </>
-                )}
-              </button>
-              <button
-                className="btn btn--outline"
-                onClick={handleTest}
-                disabled={!hasInput || test.kind === "testing"}
-              >
-                Test connection
-              </button>
+              {formTab === "connection" && (
+                <>
+                  <button
+                    className="btn btn--primary"
+                    onClick={editSessionId ? handleReconnect : handleConnect}
+                    disabled={!hasInput || connecting}
+                    title={
+                      editSessionId
+                        ? "Apply these changes to the connection you're on now"
+                        : undefined
+                    }
+                  >
+                    {connecting ? (
+                      <>
+                        <Spinner light /> {editSessionId ? "Reconnecting…" : "Connecting…"}
+                      </>
+                    ) : editSessionId ? (
+                      <>
+                        Reconnect <span className="btn__kbd">⌘↵</span>
+                      </>
+                    ) : (
+                      <>
+                        Connect <span className="btn__kbd">⌘↵</span>
+                      </>
+                    )}
+                  </button>
+                  <button
+                    className="btn btn--outline"
+                    onClick={handleTest}
+                    disabled={!hasInput || test.kind === "testing"}
+                  >
+                    Test connection
+                  </button>
+                </>
+              )}
               {selected ? (
                 <>
                   <button
-                    className="btn btn--ghost"
+                    className="btn btn--outline"
                     onClick={() => handleSave("update")}
                     disabled={!hasInput || !dirty}
                     title={`Overwrite "${selected.name}" with these values`}
@@ -531,7 +568,7 @@ export function ConnectionScreen(props: {
                   </button>
                   {dirty && (
                     <button
-                      className="btn btn--ghost"
+                      className="btn btn--outline"
                       onClick={() => handleSave("new")}
                       disabled={!hasInput}
                       title="Save these values as a new connection, leaving the original unchanged"
@@ -542,7 +579,7 @@ export function ConnectionScreen(props: {
                 </>
               ) : (
                 <button
-                  className="btn btn--ghost"
+                  className="btn btn--outline"
                   onClick={() => handleSave("new")}
                   disabled={!hasInput}
                   title="Save this connection"
