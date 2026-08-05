@@ -15,6 +15,18 @@ styling.
 Product name is **CubbyDB**. The original design mockup called it "Halyard" —
 ignore that name.
 
+## Engineering philosophy
+
+Favor ambitious outcomes built from simple systems. Software should feel
+obvious: understand the real constraint, then choose the smallest model that
+makes the correct behavior unsurprising. Do not preserve complexity merely
+because it already exists or introduce machinery for architectural appearance.
+
+Balance "measure twice, cut once" with YAGNI. Resist scope creep, and honor the
+developer's intent in a way that is both minimal and realistic. Treat the
+guidance in this document as strong defaults rather than substitutes for
+judgment; explicit developer preferences take precedence.
+
 ## Status & scope
 
 This is an early v1, but the core loop and most of a usable Postgres client are
@@ -123,6 +135,11 @@ in `src-tauri/` are Rust-side.
 
 ## Conventions
 
+- Fix root causes rather than patching symptoms. If a change reveals a cleaner,
+  smaller implementation in the code being touched or its immediate
+  surroundings, refactor toward it instead of layering on more complexity.
+- Clean up after every change. Review the surrounding code and remove anything
+  the change made dead, redundant, or obsolete.
 - **Document every feature you build in [FEATURES.md](FEATURES.md).** When you
   ship something user-facing — a new capability, a new Settings option, a
   meaningful change to how an existing feature behaves — add or update its
@@ -141,8 +158,18 @@ in `src-tauri/` are Rust-side.
   "camelCase")]`). Keep `types.ts` in sync with `db/mod.rs` and the stores.
 - Tauri command args map JS camelCase ↔ Rust snake_case automatically.
 - Keep new persistence in the OS app-data dir via `AppState`, not scattered.
+- Write commit messages as plain imperative sentences (for example, "Show
+  on-time as green in Live Activity progress bar"). Do not use conventional-
+  commit prefixes.
+- Add comments only when the reasoning is not clear from the code. Keep them
+  short, usually one line, and prefer documenting how a function or abstraction
+  is used over narrating line-by-line behavior. Keep comments with the code they
+  describe when code moves.
 - Verify changes with `npm run build` + `cargo build`; the user prefers NOT
   opening the browser preview pane.
+
+If a convention here conflicts with the task at hand, call out the conflict
+clearly and get sign-off before breaking it.
 
 ## Gotchas / non-obvious behavior
 
