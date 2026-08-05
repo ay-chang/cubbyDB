@@ -5,7 +5,7 @@
 //! protocol does.
 //!
 //! **Everything here must stay stable across the turns of one conversation.**
-//! Anthropic's prompt caching is a prefix match and `provider.rs` puts its
+//! Provider prompt caching is prefix-based and the request clients put the
 //! cache breakpoint on the system block, so a value that changes per request
 //! (a timestamp, a session id, a row count) silently defeats the cache on
 //! every single call. The one time-varying value included below is today's

@@ -7,7 +7,7 @@ import { errorMessage } from "../../api/backend";
 import { installUpdate } from "../../lib/appUpdate";
 import { useStore } from "../../state/store";
 import type { Delimiter, SettingsSection, TableFont, Theme } from "../../state/store";
-import type { AiModelInfo } from "../../types";
+import type { AiModelInfo, AiProvider, AiReasoningEffort } from "../../types";
 import { Toggle } from "./Toggle";
 import {
   ACCENT_COLOR_LABELS,
@@ -277,16 +277,15 @@ function GeneralSection() {
   );
 }
 
-/** The Ask AI panel's Anthropic API key + model. Bring-your-own-key only —
- *  Anthropic doesn't let a third-party app use a user's Claude.ai
- *  subscription in place of metered API billing, so there's no "sign in"
- *  option to offer here. */
+/** The Ask AI panel's provider, credential route, and model. */
 function AiAssistantSection() {
   const aiConfig = useStore((s) => s.aiConfig);
   const loadAiConfig = useStore((s) => s.loadAiConfig);
+  const saveAiProvider = useStore((s) => s.saveAiProvider);
   const saveAiConfig = useStore((s) => s.saveAiConfig);
   const clearAiConfig = useStore((s) => s.clearAiConfig);
   const saveAiModel = useStore((s) => s.saveAiModel);
+  const saveAiReasoningEffort = useStore((s) => s.saveAiReasoningEffort);
 
   useEffect(() => {
     if (!aiConfig) void loadAiConfig();
@@ -296,8 +295,15 @@ function AiAssistantSection() {
   const [keyInput, setKeyInput] = useState("");
   const [saving, setSaving] = useState(false);
 
-  const keySet = aiConfig?.anthropicKeySet ?? false;
-  const currentModel = aiConfig?.anthropicModel;
+  const provider = aiConfig?.provider ?? "anthropic";
+  const providerName = provider === "openai" ? "OpenAI" : "Anthropic";
+  const keySet = provider === "openai"
+    ? (aiConfig?.openaiKeySet ?? false)
+    : (aiConfig?.anthropicKeySet ?? false);
+  const currentModel = provider === "openai"
+    ? aiConfig?.openaiModel
+    : aiConfig?.anthropicModel;
+  const currentReasoningEffort = aiConfig?.openaiReasoningEffort ?? "medium";
 
   // Live-fetched, not persisted anywhere — just what populates the dropdown.
   // Re-runs once a key becomes available (e.g. right after `handleSave`
@@ -305,6 +311,13 @@ function AiAssistantSection() {
   const [modelOptions, setModelOptions] = useState<AiModelInfo[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
+  const selectedModelInfo = modelOptions.find((model) => model.id === currentModel);
+  const fallbackReasoningEfforts: AiReasoningEffort[] = currentModel?.startsWith("gpt-5.6")
+    ? ["none", "low", "medium", "high", "xhigh", "max"]
+    : ["low", "medium", "high"];
+  const reasoningOptions = selectedModelInfo?.supportedReasoningEfforts.length
+    ? selectedModelInfo.supportedReasoningEfforts
+    : fallbackReasoningEfforts;
 
   useEffect(() => {
     if (!keySet) {
@@ -329,13 +342,13 @@ function AiAssistantSection() {
     return () => {
       cancelled = true;
     };
-  }, [keySet]);
+  }, [keySet, provider]);
 
   const handleSave = () => {
     const trimmed = keyInput.trim();
     if (!trimmed) return;
     setSaving(true);
-    void saveAiConfig(trimmed).then(
+    void saveAiConfig(provider, trimmed).then(
       () => {
         setKeyInput("");
         setSaving(false);
@@ -347,36 +360,60 @@ function AiAssistantSection() {
   return (
     <div className="settings-section">
       <div className="settings-field">
-        <div className="settings-field__label">Anthropic API key</div>
+        <div className="settings-field__label">Provider</div>
         <div className="settings-field__desc">
-          Powers the Ask AI panel. Bring your own key — CubbyDB never sees your Claude.ai
-          subscription, only the key you paste below.{" "}
-          {keySet
-            ? "A key is saved."
-            : "No key saved yet — the Ask AI panel won't work until you add one."}
+          Choose what powers Ask AI. API keys and model choices stay separate for each provider.
         </div>
-        <div className="settings-select-row">
-          <input
-            className="settings-input"
-            type="password"
-            placeholder={keySet ? "•••• saved — enter a new key to replace it" : "sk-ant-…"}
-            value={keyInput}
-            onChange={(e) => setKeyInput(e.target.value)}
-            spellCheck={false}
-          />
-          <button
-            className="btn btn--primary"
-            onClick={handleSave}
-            disabled={!keyInput.trim() || saving}
-          >
-            Save
-          </button>
-          {keySet && (
-            <button className="btn btn--outline" onClick={() => void clearAiConfig()}>
-              Clear
+        <select
+          className="settings-select"
+          value={provider}
+          onChange={(e) => {
+            setKeyInput("");
+            void saveAiProvider(e.target.value as AiProvider);
+          }}
+        >
+          <option value="anthropic">Anthropic</option>
+          <option value="openai">OpenAI</option>
+        </select>
+      </div>
+
+      <div className="settings-field settings-field--spaced">
+          <div className="settings-field__label">{providerName} API key</div>
+          <div className="settings-field__desc">
+            Powers the Ask AI panel. The key stays in CubbyDB's local app-data file and is never
+            returned to the UI after you save it.{" "}
+            {keySet
+              ? "A key is saved."
+              : "No key saved yet — the Ask AI panel won't work until you add one."}
+          </div>
+          <div className="settings-select-row">
+            <input
+              className="settings-input"
+              type="password"
+              placeholder={
+                keySet
+                  ? "•••• saved — enter a new key to replace it"
+                  : provider === "openai"
+                    ? "sk-…"
+                    : "sk-ant-…"
+              }
+              value={keyInput}
+              onChange={(e) => setKeyInput(e.target.value)}
+              spellCheck={false}
+            />
+            <button
+              className="btn btn--primary"
+              onClick={handleSave}
+              disabled={!keyInput.trim() || saving}
+            >
+              Save
             </button>
-          )}
-        </div>
+            {keySet && (
+              <button className="btn btn--outline" onClick={() => void clearAiConfig(provider)}>
+                Clear
+              </button>
+            )}
+          </div>
       </div>
 
       <div className="settings-field settings-field--spaced">
@@ -388,7 +425,7 @@ function AiAssistantSection() {
               ? "Add an API key above to choose a model."
               : modelsLoading
                 ? "Loading available models…"
-                : "Fetched live from Anthropic — new models show up here automatically."}
+                : `Fetched live from ${providerName} — new models show up here automatically.`}
         </div>
         <select
           className="settings-select"
@@ -401,7 +438,19 @@ function AiAssistantSection() {
             // Sending `effort` to a model that rejects it (Haiku 4.5) fails
             // every request, so an unknown model defaults to not sending it.
             const picked = modelOptions.find((m) => m.id === id);
-            void saveAiModel(id, picked?.supportsEffort ?? false);
+            void (async () => {
+              await saveAiModel(provider, id, picked?.supportsEffort ?? false);
+              if (
+                provider === "openai" &&
+                picked?.supportedReasoningEfforts.length &&
+                !picked.supportedReasoningEfforts.includes(currentReasoningEffort)
+              ) {
+                await saveAiReasoningEffort(
+                  provider,
+                  picked.defaultReasoningEffort ?? "medium",
+                );
+              }
+            })();
           }}
         >
           {/* Keeps the resolved current model selectable even before the live
@@ -417,8 +466,50 @@ function AiAssistantSection() {
           ))}
         </select>
       </div>
+
+      {provider === "openai" && (
+        <div className="settings-field settings-field--spaced">
+          <div className="settings-field__label">Reasoning level</div>
+          <div className="settings-field__desc">
+            Stored separately from the model. Higher levels can improve difficult answers but take
+            longer and use more of your API allowance.
+          </div>
+          <select
+            className="settings-select"
+            value={currentReasoningEffort}
+            disabled={!keySet || reasoningOptions.length === 0}
+            onChange={(event) => {
+              void saveAiReasoningEffort(
+                provider,
+                event.target.value as AiReasoningEffort,
+              );
+            }}
+          >
+            {!reasoningOptions.includes(currentReasoningEffort) && (
+              <option value={currentReasoningEffort}>{reasoningLabel(currentReasoningEffort)}</option>
+            )}
+            {reasoningOptions.map((effort) => (
+              <option key={effort} value={effort}>
+                {reasoningLabel(effort)}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
     </div>
   );
+}
+
+function reasoningLabel(effort: AiReasoningEffort): string {
+  switch (effort) {
+    case "none": return "None";
+    case "low": return "Low";
+    case "medium": return "Medium";
+    case "high": return "High";
+    case "xhigh": return "Extra high";
+    case "max": return "Max";
+    case "ultra": return "Ultra";
+  }
 }
 
 /**

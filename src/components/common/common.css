@@ -340,6 +340,9 @@
   font-size: 12px;
   color: var(--text-muted);
 }
+.settings-field__desc--error {
+  color: var(--error-text);
+}
 /* A settings-field whose control is a toggle switch: label/desc on the left,
    switch on the right, on one row. */
 .settings-toggle-row {

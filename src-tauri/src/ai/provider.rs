@@ -65,6 +65,8 @@ pub async fn list_models(api_key: &str) -> Result<Vec<ModelInfo>, DbError> {
                 .and_then(|c| c.effort)
                 .map(|e| e.supported)
                 .unwrap_or(false),
+            supported_reasoning_efforts: Vec::new(),
+            default_reasoning_effort: None,
         })
         .collect())
 }

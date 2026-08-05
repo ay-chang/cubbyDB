@@ -16,6 +16,8 @@ import type {
   AiConfigStatus,
   AiMessage,
   AiModelInfo,
+  AiProvider,
+  AiReasoningEffort,
   ColumnValue,
   ConnectionInfo,
   ConnectionParams,
@@ -332,29 +334,42 @@ export function clearQueryHistory(): Promise<void> {
 }
 
 // --- AI assistant ------------------------------------------------------------
-// Anthropic-only, deliberately — see the backend's `ai_config.rs` module doc.
 
 export function getAiConfig(): Promise<AiConfigStatus> {
   return invoke("get_ai_config");
 }
 
-export function saveAiConfig(apiKey: string): Promise<AiConfigStatus> {
-  return invoke("save_ai_config", { apiKey });
+export function saveAiProvider(provider: AiProvider): Promise<AiConfigStatus> {
+  return invoke("save_ai_provider", { provider });
 }
 
-export function clearAiConfig(): Promise<AiConfigStatus> {
-  return invoke("clear_ai_config");
+export function saveAiConfig(
+  provider: AiProvider,
+  apiKey: string,
+): Promise<AiConfigStatus> {
+  return invoke("save_ai_config", { provider, apiKey });
+}
+
+export function clearAiConfig(provider: AiProvider): Promise<AiConfigStatus> {
+  return invoke("clear_ai_config", { provider });
 }
 
 export function saveAiModel(
+  provider: AiProvider,
   model: string,
   supportsEffort: boolean,
 ): Promise<AiConfigStatus> {
-  return invoke("save_ai_model", { model, supportsEffort });
+  return invoke("save_ai_model", { provider, model, supportsEffort });
 }
 
-/** Live-fetches the models the saved API key currently has access to.
- *  Rejects if no key is saved yet. */
+export function saveAiReasoningEffort(
+  provider: AiProvider,
+  effort: AiReasoningEffort,
+): Promise<AiConfigStatus> {
+  return invoke("save_ai_reasoning_effort", { provider, effort });
+}
+
+/** Live-fetches models available to the active API key. */
 export function listAiModels(): Promise<AiModelInfo[]> {
   return invoke("list_ai_models");
 }

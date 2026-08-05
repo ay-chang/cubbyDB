@@ -254,18 +254,24 @@ export interface SavedQuery {
 }
 
 // --- AI assistant ------------------------------------------------------------
-// Anthropic-only, deliberately — see the backend's `ai_config.rs` module doc.
+
+export type AiProvider = "anthropic" | "openai";
+export type AiReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
 /** What Settings shows for the AI assistant — the real API key never comes
  *  back from the backend once saved, only whether one is set. `model` is
  *  always resolved (the user's saved choice, or the hardcoded fallback), so
  *  there's always a concrete value to show even before one is picked. */
 export interface AiConfigStatus {
+  provider: AiProvider;
   anthropicKeySet: boolean;
   anthropicModel: string;
+  openaiKeySet: boolean;
+  openaiModel: string;
+  openaiReasoningEffort: AiReasoningEffort;
 }
 
-/** One model a provider currently offers, for the Settings model picker —
+/** One model the active provider currently offers, for the Settings model picker —
  *  fetched live so a new release shows up without an app update. `label` is
  *  a human-readable name when the provider's API supplies one (Anthropic's
  *  `display_name`); otherwise it's just `id` again (OpenAI's models
@@ -273,10 +279,10 @@ export interface AiConfigStatus {
 export interface AiModelInfo {
   id: string;
   label: string;
-  /** Whether this model accepts the `effort` request parameter. Not
-   *  universal — Haiku 4.5 rejects it — so it's captured when the user picks
-   *  a model and persisted with the choice. */
+  /** Whether this model accepts its provider's reasoning-effort parameter. */
   supportsEffort: boolean;
+  supportedReasoningEfforts: AiReasoningEffort[];
+  defaultReasoningEffort: AiReasoningEffort | null;
 }
 
 /** One turn of the AI chat. `role`/`content` are exactly what's sent

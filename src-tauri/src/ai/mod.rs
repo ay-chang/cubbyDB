@@ -1,17 +1,16 @@
 //! AI assistant service: the schema-aware system prompt, the shared types
-//! the (Anthropic-only) tool-call loop in `provider.rs` uses, and this
+//! the provider tool-call loops use, and this
 //! feature's own config/chat persistence (`config.rs`, `chats.rs`).
 //!
-//! Deliberately Anthropic-only, not a multi-provider abstraction: an earlier
-//! version of this supported OpenAI too, but with only one provider left
-//! there was nothing left to abstract — `commands::ai_chat` calls
-//! `provider::run_loop`/`provider::list_models` directly rather than
-//! through a dispatcher. Everything here is what's actually shared between
+//! Anthropic and OpenAI keep their wire formats in separate modules while
+//! sharing the prompt, tool execution, persistence, and frontend message
+//! shapes. Everything here is what's actually shared between
 //! "build the prompt" and "run the loop": the plain-text message shape the
 //! frontend speaks, the row-truncation rule, and the iteration cap.
 
 pub mod chats;
 pub mod config;
+pub mod openai;
 pub mod prompt;
 pub mod provider;
 pub mod tools;
@@ -82,8 +81,35 @@ pub struct AiChatResult {
     pub trace: Vec<ToolTrace>,
 }
 
-/// One model currently on offer, for the Settings model picker. `label` is
-/// Anthropic's human-readable `display_name`.
+/// Reasoning levels supported by OpenAI's Responses API.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasoningEffort {
+    None,
+    Low,
+    #[default]
+    Medium,
+    High,
+    Xhigh,
+    Max,
+    Ultra,
+}
+
+impl ReasoningEffort {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Xhigh => "xhigh",
+            Self::Max => "max",
+            Self::Ultra => "ultra",
+        }
+    }
+}
+
+/// One model currently on offer for the Settings picker.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelInfo {
@@ -93,6 +119,10 @@ pub struct ModelInfo {
     /// Haiku 4.5 rejects it with a 400 — so it's captured at pick time and
     /// persisted alongside the choice rather than assumed.
     pub supports_effort: bool,
+    /// Documented safe effort values for an OpenAI API model. Empty for
+    /// providers without this selector.
+    pub supported_reasoning_efforts: Vec<ReasoningEffort>,
+    pub default_reasoning_effort: Option<ReasoningEffort>,
 }
 
 /// Hard cap on ask<->tool round trips within one turn, so a model stuck
@@ -134,7 +164,9 @@ pub fn summarize_for_model(result: &QueryResult) -> String {
         out.push('\n');
     }
     if total > shown {
-        out.push_str(&format!("... ({total} rows total, showing first {shown})\n"));
+        out.push_str(&format!(
+            "... ({total} rows total, showing first {shown})\n"
+        ));
     }
     out
 }
