@@ -1,5 +1,13 @@
 import { useRef, useState } from "react";
 
+import {
+  formatBinding,
+  formatShortcutTitle,
+  matchesKeybindingModifiers,
+  TAB_JUMP_KEYBINDING_IDS,
+  useKeybindingStore,
+  useShortcutModifierState,
+} from "../../lib/keybindings";
 import { useActiveTabId, useActiveTabs, useStore } from "../../state/store";
 
 /**
@@ -15,6 +23,9 @@ export function EditorTabs({ onSaveQuery }: { onSaveQuery: () => void }) {
   const closeTab = useStore((s) => s.closeTab);
   const newTab = useStore((s) => s.newTab);
   const reorderTab = useStore((s) => s.reorderTab);
+  const settingsOpen = useStore((s) => s.settingsOpen);
+  const bindings = useKeybindingStore((s) => s.bindings);
+  const shortcutModifiers = useShortcutModifierState();
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<{
@@ -96,6 +107,8 @@ export function EditorTabs({ onSaveQuery }: { onSaveQuery: () => void }) {
     <div className="tabs" ref={containerRef}>
       {tabs.map((tab, index) => {
         const active = tab.id === activeTabId;
+        const jumpId = TAB_JUMP_KEYBINDING_IDS[index];
+        const jumpBinding = jumpId ? bindings[jumpId] : null;
         return (
           <div
             key={tab.id}
@@ -120,6 +133,18 @@ export function EditorTabs({ onSaveQuery }: { onSaveQuery: () => void }) {
                       : "◆"}
             </span>
             <span className="tab__title">{tab.title}</span>
+            {!settingsOpen &&
+              matchesKeybindingModifiers(shortcutModifiers, jumpBinding) && (
+              <span
+                className={
+                  "tab__jump-hint mono" +
+                  (active ? " tab__jump-hint--active" : "")
+                }
+                aria-hidden
+              >
+                {formatBinding(jumpBinding)}
+              </span>
+            )}
             {tab.kind === "query" && active && (
               <span
                 className="tab__save"
@@ -127,7 +152,11 @@ export function EditorTabs({ onSaveQuery }: { onSaveQuery: () => void }) {
                   e.stopPropagation();
                   onSaveQuery();
                 }}
-                title={tab.savedQueryId ? "Update saved query" : "Save as query (Cmd/Ctrl+S)"}
+                title={
+                  tab.savedQueryId
+                    ? "Update saved query"
+                    : formatShortcutTitle("Save as query", bindings["workspace.save"])
+                }
               >
                 {tab.savedQueryId ? "✓" : "⇩"}
               </span>
@@ -138,14 +167,18 @@ export function EditorTabs({ onSaveQuery }: { onSaveQuery: () => void }) {
                 e.stopPropagation();
                 closeTab(tab.id);
               }}
-              title="Close tab"
+              title={formatShortcutTitle("Close tab", bindings["workspace.closeTab"])}
             >
               ×
             </span>
           </div>
         );
       })}
-      <button className="tab__add" onClick={() => newTab()} title="New query tab">
+      <button
+        className="tab__add"
+        onClick={() => newTab()}
+        title={formatShortcutTitle("New query tab", bindings["workspace.newQuery"])}
+      >
         +
       </button>
     </div>

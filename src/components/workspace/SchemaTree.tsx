@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { formatCount } from "../../lib/format";
+import { formatBinding, useKeybindingStore } from "../../lib/keybindings";
 import {
   useActiveSchema,
   useActiveSchemaError,
@@ -22,6 +23,10 @@ export function SchemaTree() {
   const openTableStructure = useStore((s) => s.openTableStructure);
   const openFunctionDefinition = useStore((s) => s.openFunctionDefinition);
   const openSequenceDetails = useStore((s) => s.openSequenceDetails);
+  const toggleCommandPalette = useStore((s) => s.toggleCommandPalette);
+  const commandPaletteBinding = useKeybindingStore(
+    (s) => s.bindings["workspace.commandPalette"],
+  );
 
   const [filter, setFilter] = useState("");
   const [expandedSchemas, setExpandedSchemas] = useState<Set<string>>(new Set());
@@ -86,12 +91,26 @@ export function SchemaTree() {
     <div className="tree">
       <div className="tree__filter">
         <input
-          className="tree__filter-input"
+          className={
+            "tree__filter-input" +
+            (commandPaletteBinding ? " tree__filter-input--shortcut" : "")
+          }
           placeholder="Filter schema…"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           spellCheck={false}
         />
+        {commandPaletteBinding && (
+          <button
+            className="tree__filter-shortcut mono"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={toggleCommandPalette}
+            title="Search tables and columns across connections"
+            aria-label={`Open command palette (${formatBinding(commandPaletteBinding)})`}
+          >
+            {formatBinding(commandPaletteBinding)}
+          </button>
+        )}
       </div>
 
       <div className="tree__scroll">

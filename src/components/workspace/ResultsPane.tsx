@@ -12,6 +12,7 @@ import type { CopyResult } from "../../api/backend";
 import { copyToClipboard, readClipboard } from "../../api/backend";
 import { parseCsv } from "../../lib/csv";
 import { bestMatch } from "../../lib/fuzzyMatch";
+import { matchesKeybinding, useKeybindingStore } from "../../lib/keybindings";
 import type { Delimiter, QueryTab } from "../../state/store";
 import { useActiveSchema, useStore } from "../../state/store";
 import {
@@ -441,6 +442,11 @@ function ResultsGrid({
   const rowCopyDelimiter = useStore((s) => s.rowCopyDelimiter);
   const tableRowHeight = useStore((s) => s.tableRowHeight);
   const tableWrapText = useStore((s) => s.tableWrapText);
+  const settingsOpen = useStore((s) => s.settingsOpen);
+  const findBinding = useKeybindingStore((s) => s.bindings["results.find"]);
+  const jumpColumnBinding = useKeybindingStore(
+    (s) => s.bindings["results.jumpColumn"],
+  );
   const setCellEdit = useStore((s) => s.setCellEdit);
   const setNewCellEdit = useStore((s) => s.setNewCellEdit);
   const overwriteRow = useStore((s) => s.overwriteRow);
@@ -1338,15 +1344,15 @@ function ResultsGrid({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const mod = e.metaKey || e.ctrlKey;
-      if (mod && e.key.toLowerCase() === "f") {
+      if (settingsOpen || e.defaultPrevented || e.repeat) return;
+      if (matchesKeybinding(e, findBinding)) {
         e.preventDefault();
         setColJumpOpen(false);
         setFindOpen(true);
         requestAnimationFrame(() => findInputRef.current?.focus());
         return;
       }
-      if (mod && e.key.toLowerCase() === "g") {
+      if (matchesKeybinding(e, jumpColumnBinding)) {
         e.preventDefault();
         setFindOpen(false);
         setColJumpOpen(true);
@@ -1370,7 +1376,7 @@ function ResultsGrid({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [findOpen, findMatches]);
+  }, [findOpen, findMatches, findBinding, jumpColumnBinding, settingsOpen]);
 
   // Transform for each header cell during a drag (the sliding animation).
   const headerStyle = (pos: number): React.CSSProperties => {

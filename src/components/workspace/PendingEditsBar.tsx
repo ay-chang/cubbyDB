@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 
+import {
+  formatBinding,
+  matchesKeybinding,
+  useKeybindingStore,
+} from "../../lib/keybindings";
 import type { QueryTab } from "../../state/store";
 import { useStore } from "../../state/store";
 
@@ -8,11 +13,13 @@ import { useStore } from "../../state/store";
  * tab has unsaved cell edits — the "pending commit bar" from the design spec.
  * Amber-tinted so it reads as a distinct, temporary state; holds the change
  * count, any commit error (inline, never a modal), and the Discard / Update
- * actions. Cmd/Ctrl+S commits.
+ * actions. The configurable Save shortcut commits.
  */
 export function PendingEditsBar({ tab }: { tab: QueryTab }) {
   const discardEdits = useStore((s) => s.discardEdits);
   const commitEdits = useStore((s) => s.commitEdits);
+  const settingsOpen = useStore((s) => s.settingsOpen);
+  const saveBinding = useKeybindingStore((s) => s.bindings["workspace.save"]);
   const [committing, setCommitting] = useState(false);
 
   const editCount = tab.pendingEdits
@@ -50,14 +57,19 @@ export function PendingEditsBar({ tab }: { tab: QueryTab }) {
   commitRef.current = commit;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+      if (
+        !settingsOpen &&
+        !e.defaultPrevented &&
+        !e.repeat &&
+        matchesKeybinding(e, saveBinding)
+      ) {
         e.preventDefault();
         void commitRef.current();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [saveBinding, settingsOpen]);
 
   return (
     <div className="pending-bar">
@@ -79,7 +91,9 @@ export function PendingEditsBar({ tab }: { tab: QueryTab }) {
           disabled={committing}
         >
           {committing ? "Updating…" : "Update"}
-          <span className="pending-bar__kbd mono">⌘S</span>
+          {saveBinding && (
+            <span className="pending-bar__kbd mono">{formatBinding(saveBinding)}</span>
+          )}
         </button>
       </div>
     </div>

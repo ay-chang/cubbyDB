@@ -30,10 +30,11 @@ code comments or AGENTS.md's architecture section.
   saved connection pre-loaded in the form, ready to tweak (e.g. cloning a
   prod connection to make a staging one)
 - **Multiple connections at once**: connecting never closes another live
-  connection — the "+" in the top bar's connection switcher opens a form for
-  an *additional* database. Every open connection's session, tabs, and schema
-  tree stay alive in the background; a row of pills in the top bar lets you
-  jump between their workspaces instantly (no reconnect). Each pill has its
+  connection — the "+" in the top bar's connection switcher (or
+  Cmd/Ctrl+Shift+N) opens a form for an *additional* database. Every open
+  connection's session, tabs, and schema tree stay alive in the background;
+  a row of pills in the top bar lets you jump between their workspaces
+  instantly (no reconnect). Each pill has its
   own "×" to close just that connection without switching to it first, and
   the top bar's Disconnect button closes whichever one is currently visible.
   Only the most-recently-used connection is restored automatically on
@@ -72,6 +73,9 @@ code comments or AGENTS.md's architecture section.
 
 - Collapsible tree: schemas → tables/views → columns
 - Filter box — matches schema, table, or column names
+- The top-bar **Schema** button (Cmd/Ctrl+B by default) hides or restores the
+  sidebar, giving wide result sets the full window when the navigator is not
+  needed
 - Compact row-count badge per table/view (e.g. "1.2M", "88k")
 - Click a table/view to browse its rows in a new tab (or focus the existing
   one if already open)
@@ -108,6 +112,9 @@ code comments or AGENTS.md's architecture section.
   row there, since structure is the closest thing to a column's
   "definition" to jump to. Jumping to a result on a different connection
   switches to it first (same as clicking its pill in the top bar)
+- The schema filter shows the current quick-jump binding (Cmd/Ctrl+K by
+  default) as a compact clickable key hint, so the cross-connection search is
+  discoverable without taking space away from the schema tree
 
 ## SQL editor
 
@@ -128,7 +135,11 @@ code comments or AGENTS.md's architecture section.
 - Multiple tabs; drag to reorder; "+" to add, click to close.
   Cmd/Ctrl+T opens a new tab and Cmd/Ctrl+W closes the active one from
   anywhere in the workspace (both route through the same unsaved-edits
-  confirmation as the tab-strip's own "+"/"×")
+  confirmation as the tab-strip's own "+"/"×"). Cmd/Ctrl+Shift+[ and
+  Cmd/Ctrl+Shift+] move to the previous/next tab and wrap at either end.
+  Cmd/Ctrl+1 through Cmd/Ctrl+9 jump directly to the corresponding tab; while
+  the configured modifier is held, the first nine tabs show compact shortcut
+  pills inline after their titles, never covering the title or tab controls
 - **Cmd/Ctrl+Enter** runs the selection if you have one, otherwise the SQL
   statement your cursor is in — not the whole buffer. **Cmd/Ctrl+Shift+Enter**
   always runs the entire tab. (When the editor isn't focused, Cmd/Ctrl+Enter
@@ -381,7 +392,8 @@ Four top-level tabs: **General** (behavior), **Appearance** (with
 **Interface** / **Table** / **Editor** sub-tabs), **AI Assistant**, and
 **Keyboard Shortcuts**.
 Every setting applies live and is persisted (no restart needed for anything in
-here — it's all frontend-only).
+here — it's all frontend-only). Open Settings from the top-bar gear or with
+the fixed, platform-standard Cmd/Ctrl+, shortcut.
 
 - **General**: restore tabs on launch, starter SQL template, auto-refresh
   schema on connect, query-history display limit, CSV export delimiter,
@@ -399,10 +411,13 @@ here — it's all frontend-only).
 - **AI Assistant**: provider, separate API-key settings, current Codex
   subscription status/browser sign-in, provider model, and OpenAI/Codex
   reasoning level
-- **Keyboard Shortcuts**: a read-only catalog of every shortcut CubbyDB
-  supports, grouped by where it's active (General, SQL editor, Table filter,
-  Results grid, Command palette, Connection screen, Saved queries panel) —
-  not yet configurable, just documented
+- **Keyboard Shortcuts**: database and workspace commands can be rebound by
+  clicking the current combination and pressing a new one. Conflicting
+  workspace bindings are rejected inline; individual commands can be
+  cleared/reset, and Reset all restores the defaults. Custom bindings persist
+  across launches. Platform conventions such as Open Settings and native
+  text/grid/dialog interactions remain fixed, but appear in the same complete
+  shortcut catalog
 
 ## Error handling
 

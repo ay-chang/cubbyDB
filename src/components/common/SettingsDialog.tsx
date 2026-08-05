@@ -5,6 +5,19 @@ import { check as checkForUpdate, type Update } from "@tauri-apps/plugin-updater
 import * as api from "../../api/backend";
 import { errorMessage } from "../../api/backend";
 import { installUpdate } from "../../lib/appUpdate";
+import {
+  bindingDisplayTokens,
+  bindingFromEvent,
+  DEFAULT_KEYBINDINGS,
+  findKeybindingConflict,
+  isEditableKeybinding,
+  isSafeBinding,
+  KEYBINDING_DEFINITIONS,
+  KEYBINDING_GROUPS,
+  reservedBindingLabel,
+  type KeybindingId,
+  useKeybindingStore,
+} from "../../lib/keybindings";
 import { useStore } from "../../state/store";
 import type { Delimiter, SettingsSection, TableFont, Theme } from "../../state/store";
 import type { AiModelInfo, AiProvider, AiReasoningEffort } from "../../types";
@@ -1068,41 +1081,22 @@ function EditorSection() {
 }
 
 /**
- * The full catalog of keyboard shortcuts, grouped by where they're active.
- * Read-only for now — this documents current behavior, it doesn't configure
- * it. `⌘` doubles as Ctrl on Windows/Linux (every shortcut is bound to
- * `metaKey || ctrlKey`, not Mac-only).
- *
- * Keep this in sync whenever a shortcut is added, changed, or removed — see
- * the "keyboard shortcuts" convention in AGENTS.md.
+ * Built-in focused-control interactions. Application commands are generated
+ * from `KEYBINDING_DEFINITIONS` below so their documentation and runtime
+ * bindings share one source of truth. Keep this fixed catalog in sync when a
+ * focused control gains or loses a non-configurable interaction.
  */
-const SHORTCUT_GROUPS: { title: string; shortcuts: { keys: string[]; desc: string }[] }[] = [
-  {
-    title: "General",
-    shortcuts: [
-      { keys: ["⌘", "⏎"], desc: "Run the active tab's query" },
-      { keys: ["⎋"], desc: "Cancel the running query" },
-      { keys: ["⌘", "T"], desc: "New query tab" },
-      { keys: ["⌘", "W"], desc: "Close the active tab" },
-      { keys: ["⌘", "K"], desc: "Open the command palette" },
-      {
-        keys: ["⌘", "S"],
-        desc: "Save the current query — or, on a table tab with unsaved cell edits, commit those edits",
-      },
-    ],
-  },
+const SHORTCUT_GROUPS: {
+  title: string;
+  shortcuts: { keys: string[]; desc: string }[];
+}[] = [
   {
     title: "SQL editor",
     shortcuts: [
-      { keys: ["⌘", "⏎"], desc: "Run the statement under the cursor, or the current selection" },
-      { keys: ["⌘", "⇧", "⏎"], desc: "Run the entire buffer, regardless of cursor/selection" },
-      { keys: ["⌘", "⇧", "E"], desc: "Run EXPLAIN on the statement under the cursor" },
-      { keys: ["⌘", "⇧", "A"], desc: "Run EXPLAIN ANALYZE on the statement under the cursor" },
       { keys: ["⇥"], desc: "Accept the highlighted autocomplete suggestion, else indent" },
       { keys: ["⇧", "⇥"], desc: "Dedent the current line" },
       { keys: ["⌘", "Z"], desc: "Undo" },
       { keys: ["⌘", "⇧", "Z"], desc: "Redo" },
-      { keys: ["⌘", "F"], desc: "Open the editor's own find & replace" },
       { keys: ["Ctrl", "Space"], desc: "Open autocomplete suggestions" },
     ],
   },
@@ -1121,7 +1115,6 @@ const SHORTCUT_GROUPS: { title: string; shortcuts: { keys: string[]; desc: strin
       { keys: ["⌘", "Click row #"], desc: "Add or remove a row from the selection" },
       { keys: ["⌘", "C"], desc: "Copy the selected row(s), or the selected cell" },
       { keys: ["⌘", "V"], desc: "Paste over the selected row or cell" },
-      { keys: ["⌘", "F"], desc: "Open \"Find in results\"" },
       { keys: ["⏎"], desc: "In Find: jump to the next match" },
       { keys: ["⇧", "⏎"], desc: "In Find: jump to the previous match" },
       { keys: ["⎋"], desc: "Close \"Find in results\"" },
@@ -1132,18 +1125,11 @@ const SHORTCUT_GROUPS: { title: string; shortcuts: { keys: string[]; desc: strin
   {
     title: "Command palette",
     shortcuts: [
-      { keys: ["⌘", "K"], desc: "Open or close the palette" },
       { keys: ["⇥"], desc: "Cycle scope forward: All → Tables → Columns" },
       { keys: ["⇧", "⇥"], desc: "Cycle scope backward" },
       { keys: ["↑", "↓"], desc: "Move the highlighted result" },
       { keys: ["⏎"], desc: "Jump to the highlighted result" },
       { keys: ["⎋"], desc: "Close the palette" },
-    ],
-  },
-  {
-    title: "Connection screen",
-    shortcuts: [
-      { keys: ["⌘", "⏎"], desc: "Connect — or reconnect, if editing a saved connection" },
     ],
   },
   {
@@ -1156,12 +1142,165 @@ const SHORTCUT_GROUPS: { title: string; shortcuts: { keys: string[]; desc: strin
 ];
 
 function ShortcutsSection() {
+  const bindings = useKeybindingStore((s) => s.bindings);
+  const setBinding = useKeybindingStore((s) => s.setBinding);
+  const resetBinding = useKeybindingStore((s) => s.resetBinding);
+  const resetAll = useKeybindingStore((s) => s.resetAll);
+  const [recordingId, setRecordingId] = useState<KeybindingId | null>(null);
+  const [recordError, setRecordError] = useState<string | null>(null);
+  const hasCustomBindings = KEYBINDING_DEFINITIONS.some(
+    (item) =>
+      isEditableKeybinding(item.id) &&
+      bindings[item.id] !== DEFAULT_KEYBINDINGS[item.id],
+  );
+
+  useEffect(() => {
+    if (!recordingId) return;
+    const definition = KEYBINDING_DEFINITIONS.find(
+      (item) => item.id === recordingId,
+    );
+    if (!definition || !isEditableKeybinding(definition.id)) return;
+
+    // Capture at the window boundary while recording. Relying on the button's
+    // focus alone is brittle in a desktop webview: modifier chords can move
+    // focus or be claimed by the app before the focused control receives the
+    // key. preventDefault also ensures the shortcut being recorded never runs.
+    const capture = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.repeat) return;
+
+      const binding = bindingFromEvent(event);
+      if (!binding) return;
+      if (!isSafeBinding(binding)) {
+        setRecordError("Use Cmd/Ctrl with printable keys.");
+        return;
+      }
+      const reserved = reservedBindingLabel(binding);
+      if (reserved) {
+        setRecordError(`${reserved} is reserved for standard text and grid editing.`);
+        return;
+      }
+      const conflict = findKeybindingConflict(definition.id, binding, bindings);
+      if (conflict) {
+        setRecordError(`Already assigned to “${conflict.description}”.`);
+        return;
+      }
+      setBinding(definition.id, binding);
+      setRecordingId(null);
+      setRecordError(null);
+    };
+
+    window.addEventListener("keydown", capture, true);
+    return () => window.removeEventListener("keydown", capture, true);
+  }, [bindings, recordingId, setBinding]);
+
   return (
     <div className="settings-section">
-      <div className="settings-field__desc">
-        Every shortcut CubbyDB currently supports, grouped by where it's
-        active. This list is read-only for now.
+      <div className="shortcut-intro">
+        <div className="settings-field__desc">
+          Click an editable shortcut, then press a new key combination.
+          Platform conventions and focused-control interactions stay fixed.
+        </div>
+        <button
+          className="shortcut-reset-all"
+          onClick={() => {
+            resetAll();
+            setRecordingId(null);
+            setRecordError(null);
+          }}
+          disabled={!hasCustomBindings}
+        >
+          Reset all
+        </button>
       </div>
+
+      {KEYBINDING_GROUPS.map((title) => (
+        <div key={title} className="shortcut-group">
+          <div className="shortcut-group__title">{title}</div>
+          {KEYBINDING_DEFINITIONS.filter((item) => item.group === title).map((item) => {
+            const binding = bindings[item.id];
+            const editable = isEditableKeybinding(item.id);
+            const isRecording = recordingId === item.id;
+            const isCustom = binding !== DEFAULT_KEYBINDINGS[item.id];
+            return (
+              <div key={item.id} className="shortcut-row shortcut-row--command">
+                {editable ? (
+                  <button
+                    className={
+                      "shortcut-binding" +
+                      (isRecording ? " shortcut-binding--recording" : "") +
+                      (!binding ? " shortcut-binding--empty" : "")
+                    }
+                    onClick={() => {
+                      setRecordingId(isRecording ? null : item.id);
+                      setRecordError(null);
+                    }}
+                    aria-pressed={isRecording}
+                    aria-label={`Change shortcut for ${item.description}`}
+                  >
+                    {isRecording ? (
+                      <span className="shortcut-binding__prompt">Press keys…</span>
+                    ) : (
+                      bindingDisplayTokens(binding).map((key, index) => (
+                        <kbd key={`${key}-${index}`} className="shortcut-kbd">
+                          {key}
+                        </kbd>
+                      ))
+                    )}
+                  </button>
+                ) : (
+                  <span className="shortcut-binding shortcut-binding--fixed">
+                    {bindingDisplayTokens(binding).map((key, index) => (
+                      <kbd key={`${key}-${index}`} className="shortcut-kbd">
+                        {key}
+                      </kbd>
+                    ))}
+                  </span>
+                )}
+                <div className="shortcut-row__body">
+                  <span className="shortcut-row__desc">{item.description}</span>
+                  {isRecording && recordError && (
+                    <span className="shortcut-row__error">{recordError}</span>
+                  )}
+                </div>
+                {editable ? (
+                  <div className="shortcut-row__actions">
+                    <button
+                      className="shortcut-row__action"
+                      onClick={() => {
+                        setBinding(item.id, null);
+                        setRecordingId(null);
+                        setRecordError(null);
+                      }}
+                      disabled={!binding}
+                      title="Remove shortcut"
+                    >
+                      Clear
+                    </button>
+                    <button
+                      className="shortcut-row__action"
+                      onClick={() => {
+                        resetBinding(item.id);
+                        setRecordingId(null);
+                        setRecordError(null);
+                      }}
+                      disabled={!isCustom}
+                      title="Restore default shortcut"
+                    >
+                      Reset
+                    </button>
+                  </div>
+                ) : (
+                  <span className="shortcut-row__fixed-label">Fixed</span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+
+      <div className="shortcut-builtins__label">Built-in interactions</div>
       {SHORTCUT_GROUPS.map((group) => (
         <div key={group.title} className="shortcut-group">
           <div className="shortcut-group__title">{group.title}</div>
@@ -1170,7 +1309,7 @@ function ShortcutsSection() {
               <span className="shortcut-row__keys">
                 {s.keys.map((k, ki) => (
                   <kbd key={ki} className="shortcut-kbd">
-                    {k}
+                    {k === "⌘" ? bindingDisplayTokens("mod")[0] : k}
                   </kbd>
                 ))}
               </span>

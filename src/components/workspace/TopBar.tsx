@@ -1,6 +1,11 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useRef, useState } from "react";
 
+import {
+  formatShortcutTitle,
+  matchesKeybinding,
+  useKeybindingStore,
+} from "../../lib/keybindings";
 import { ConnectionScreen } from "../connection/ConnectionScreen";
 import { Spinner } from "../common/Spinner";
 import {
@@ -63,7 +68,13 @@ function useIsFullscreen(): boolean {
 }
 
 /** The 42px application top bar: connection switcher and actions. */
-export function TopBar() {
+export function TopBar({
+  schemaSidebarOpen,
+  onToggleSchemaSidebar,
+}: {
+  schemaSidebarOpen: boolean;
+  onToggleSchemaSidebar: () => void;
+}) {
   const isFullscreen = useIsFullscreen();
   const theme = useStore((s) => s.theme);
   const connections = useStore((s) => s.connections);
@@ -82,9 +93,41 @@ export function TopBar() {
   const editSessionId = useStore((s) => s.editConnectionSessionId);
   const openEditConnection = useStore((s) => s.openEditConnection);
   const closeEditConnection = useStore((s) => s.closeEditConnection);
+  const settingsOpen = useStore((s) => s.settingsOpen);
+  const refreshBinding = useKeybindingStore(
+    (s) => s.bindings["workspace.refresh"],
+  );
+  const sidebarBinding = useKeybindingStore(
+    (s) => s.bindings["workspace.toggleSidebar"],
+  );
+  const newConnectionBinding = useKeybindingStore(
+    (s) => s.bindings["workspace.newConnection"],
+  );
+  const settingsBinding = useKeybindingStore(
+    (s) => s.bindings["workspace.openSettings"],
+  );
   const [addOpen, setAddOpen] = useState(false);
   const [pillMenuSessionId, setPillMenuSessionId] = useState<string | null>(null);
   const schemaLoading = useActiveSchemaLoading();
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.repeat ||
+        settingsOpen ||
+        editSessionId ||
+        !matchesKeybinding(event, newConnectionBinding)
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      setAddOpen(true);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [editSessionId, newConnectionBinding, settingsOpen]);
   // Flashed briefly after a refresh completes, so a fast reload (the common
   // case) still gives visible confirmation instead of the spinner just
   // blinking past too quickly to register.
@@ -181,7 +224,7 @@ export function TopBar() {
           <button
             className="conn-switcher__add"
             onClick={() => setAddOpen(true)}
-            title="Add another connection"
+            title={formatShortcutTitle("Add another connection", newConnectionBinding)}
             aria-label="Add another connection"
           >
             +
@@ -190,6 +233,13 @@ export function TopBar() {
       </div>
 
       <div className="topbar__right">
+        <button
+          className={"topbar__btn" + (schemaSidebarOpen ? " topbar__btn--active" : "")}
+          onClick={onToggleSchemaSidebar}
+          title={formatShortcutTitle("Show or hide schema sidebar", sidebarBinding)}
+        >
+          Schema
+        </button>
         <button
           className={"topbar__btn" + (aiPanelOpen ? " topbar__btn--active" : "")}
           onClick={toggleAiPanel}
@@ -219,7 +269,10 @@ export function TopBar() {
           }
           onClick={handleRefresh}
           disabled={schemaLoading}
-          title="Refresh schema and the active tab's data (⌘R)"
+          title={formatShortcutTitle(
+            "Refresh schema and the active tab's data",
+            refreshBinding,
+          )}
         >
           {schemaLoading ? (
             <>
@@ -241,7 +294,7 @@ export function TopBar() {
         <button
           className="topbar__btn topbar__btn--icon"
           onClick={() => openSettings()}
-          title="Settings"
+          title={formatShortcutTitle("Settings", settingsBinding)}
           aria-label="Settings"
         >
           <svg

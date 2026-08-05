@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import {
+  matchesKeybinding,
+  TAB_JUMP_KEYBINDING_IDS,
+  useKeybindingStore,
+} from "../../lib/keybindings";
 import { useActiveTabId, useActiveTabs, useStore } from "../../state/store";
 import { AiPanel } from "./AiPanel";
 import { CommandPalette } from "./CommandPalette";
@@ -34,12 +39,18 @@ export function Workspace() {
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
 
-  const { saveDialogOpen, openSaveDialog, closeSaveDialog } = useGlobalRunShortcut();
-
+  const [sidebarVisible, setSidebarVisible] = useState(true);
   const [sidebarWidth, setSidebarWidth] = useState(300);
   const [editorHeight, setEditorHeight] = useState(280);
   const [aiPanelWidth, setAiPanelWidth] = useState(380);
   const mainRef = useRef<HTMLDivElement>(null);
+  const toggleSidebar = useCallback(
+    () => setSidebarVisible((visible) => !visible),
+    [],
+  );
+  const { saveDialogOpen, openSaveDialog, closeSaveDialog } = useWorkspaceShortcuts(
+    toggleSidebar,
+  );
 
   // Sidebar drag (resizable 200–360px, per spec).
   const startSidebarDrag = useDrag((dx, startWidth) => {
@@ -65,16 +76,23 @@ export function Workspace() {
 
   return (
     <div className="workspace">
-      <TopBar />
+      <TopBar
+        schemaSidebarOpen={sidebarVisible}
+        onToggleSchemaSidebar={toggleSidebar}
+      />
       <UpdateBanner />
       <div className="workspace__body">
-        <div className="workspace__sidebar" style={{ width: sidebarWidth }}>
-          <SchemaTree />
-        </div>
-        <div
-          className="workspace__resizer workspace__resizer--v"
-          onMouseDown={startSidebarDrag}
-        />
+        {sidebarVisible && (
+          <>
+            <div className="workspace__sidebar" style={{ width: sidebarWidth }}>
+              <SchemaTree />
+            </div>
+            <div
+              className="workspace__resizer workspace__resizer--v"
+              onMouseDown={startSidebarDrag}
+            />
+          </>
+        )}
 
         <div className="workspace__main" ref={mainRef}>
           {activeTab ? (
@@ -180,46 +198,51 @@ function useDrag(
 }
 
 /**
- * Global workspace shortcuts that work even when the editor isn't focused:
- * Cmd/Ctrl+Enter runs the active tab's whole query (the editor's own keymap
- * handles the smarter statement/selection version while it has focus),
- * Escape cancels the active tab's query if it's currently running,
- * Cmd/Ctrl+T opens a new query tab, Cmd/Ctrl+W closes the active tab
- * (routed through the store's own unsaved-edits confirmation), Cmd/Ctrl+K
- * toggles the quick-jump command palette, Cmd/Ctrl+S opens the "save as
- * query" dialog when the active tab is a `query` tab (a `table` tab's own
- * Cmd/Ctrl+S, for committing pending cell edits, lives in
- * `PendingEditsBar` — the two never both mount for the same tab kind, so
- * there's no collision), and Cmd/Ctrl+R refreshes: it takes over the
- * browser/webview's native reload (which would otherwise just reload the
- * whole app) and instead calls `refreshActive` — the schema tree plus a
- * silent re-run of the active tab's query — reachable without leaving the
- * keyboard, e.g. after inserting a row via the API and wanting the grid to
- * pick it up.
+ * Global application-command shortcuts. Every match comes from the persisted
+ * keybinding registry; CodeMirror and focused grid controls run first and can
+ * claim an event before it reaches this fallback workspace layer.
  */
-function useGlobalRunShortcut() {
+function useWorkspaceShortcuts(toggleSidebar: () => void) {
   const runTab = useStore((s) => s.runTab);
   const cancelQuery = useStore((s) => s.cancelQuery);
   const newTab = useStore((s) => s.newTab);
   const closeTab = useStore((s) => s.closeTab);
+  const setActiveTab = useStore((s) => s.setActiveTab);
   const toggleCommandPalette = useStore((s) => s.toggleCommandPalette);
   const refreshActive = useStore((s) => s.refreshActive);
+  const settingsOpen = useStore((s) => s.settingsOpen);
+  const bindings = useKeybindingStore((s) => s.bindings);
   const activeTabId = useActiveTabId();
   const tabs = useActiveTabs();
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && activeTabId) {
+      // Focused controls (notably CodeMirror and shortcut recording buttons)
+      // get first refusal. Settings also shouldn't mutate the workspace behind
+      // its modal while somebody is editing a binding.
+      if (e.defaultPrevented) return;
+      // Rebinding these commands must not expose the webview's underlying
+      // reload/close behavior at their former defaults.
+      if (
+        matchesKeybinding(e, "mod+r") ||
+        matchesKeybinding(e, "mod+w") ||
+        e.key.toLowerCase() === "f5"
+      ) {
+        e.preventDefault();
+      }
+      if (settingsOpen || e.repeat) return;
+
+      if (matchesKeybinding(e, bindings["query.run"]) && activeTabId) {
         e.preventDefault();
         void runTab(activeTabId);
         return;
       }
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "r") {
+      if (matchesKeybinding(e, bindings["workspace.refresh"])) {
         e.preventDefault();
         void refreshActive();
         return;
       }
-      if (e.key === "Escape") {
+      if (matchesKeybinding(e, bindings["query.cancel"])) {
         const activeTab = tabs.find((t) => t.id === activeTabId);
         if (activeTab?.running) {
           e.preventDefault();
@@ -227,32 +250,74 @@ function useGlobalRunShortcut() {
         }
         return;
       }
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "t") {
+      if (matchesKeybinding(e, bindings["workspace.newQuery"])) {
         e.preventDefault();
         void newTab();
         return;
       }
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "w") {
+      if (matchesKeybinding(e, bindings["workspace.closeTab"])) {
         e.preventDefault();
         if (activeTabId) closeTab(activeTabId);
         return;
       }
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+      if (matchesKeybinding(e, bindings["workspace.commandPalette"])) {
         e.preventDefault();
         toggleCommandPalette();
         return;
       }
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+      if (matchesKeybinding(e, bindings["workspace.save"])) {
         const activeTab = tabs.find((t) => t.id === activeTabId);
         if (activeTab?.kind === "query") {
           e.preventDefault();
           setSaveDialogOpen(true);
         }
+        return;
+      }
+      if (matchesKeybinding(e, bindings["workspace.toggleSidebar"])) {
+        e.preventDefault();
+        toggleSidebar();
+        return;
+      }
+      if (
+        matchesKeybinding(e, bindings["workspace.previousTab"]) ||
+        matchesKeybinding(e, bindings["workspace.nextTab"])
+      ) {
+        if (tabs.length < 2) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const current = Math.max(0, tabs.findIndex((tab) => tab.id === activeTabId));
+        const delta = matchesKeybinding(e, bindings["workspace.previousTab"]) ? -1 : 1;
+        setActiveTab(tabs[(current + delta + tabs.length) % tabs.length].id);
+        return;
+      }
+      const jumpIndex = TAB_JUMP_KEYBINDING_IDS.findIndex((id) =>
+        matchesKeybinding(e, bindings[id]),
+      );
+      if (jumpIndex !== -1) {
+        const target = tabs[jumpIndex];
+        if (!target) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setActiveTab(target.id);
+        return;
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [runTab, cancelQuery, newTab, closeTab, toggleCommandPalette, refreshActive, activeTabId, tabs]);
+  }, [
+    runTab,
+    cancelQuery,
+    newTab,
+    closeTab,
+    setActiveTab,
+    toggleCommandPalette,
+    refreshActive,
+    settingsOpen,
+    bindings,
+    activeTabId,
+    tabs,
+    toggleSidebar,
+  ]);
 
   return {
     saveDialogOpen,

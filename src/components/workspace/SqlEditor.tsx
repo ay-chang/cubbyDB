@@ -4,6 +4,11 @@ import { EditorView, keymap } from "@codemirror/view";
 import CodeMirror from "@uiw/react-codemirror";
 import { useCallback, useMemo, useRef } from "react";
 
+import {
+  bindingToCodeMirror,
+  formatShortcutTitle,
+  useKeybindingStore,
+} from "../../lib/keybindings";
 import { buildSqlNamespace, SQL_KEYWORDS, sqlLanguage } from "../../lib/sqlSchema";
 import { statementAt } from "../../lib/sqlStatements";
 import { useActiveSchema, useStore } from "../../state/store";
@@ -14,11 +19,9 @@ import { singleQuoteKeymap } from "./smartQuotes";
  * The SQL editor for one tab. CodeMirror 6 with Postgres dialect highlighting
  * and schema-aware autocomplete (table names after FROM/JOIN, column names
  * after `alias.`, sourced from the active connection's live schema tree).
- * Cmd/Ctrl+Enter runs the selection (if any) or the statement under the
- * cursor; Cmd/Ctrl+Shift+Enter always runs the whole buffer; Cmd/Ctrl+Shift+E
- * runs EXPLAIN and Cmd/Ctrl+Shift+A runs EXPLAIN ANALYZE on the same
- * selection-or-statement target as Cmd/Ctrl+Enter; Tab accepts the
- * highlighted completion when the autocomplete popup is open.
+ * The configurable query shortcuts run the selection/statement, whole buffer,
+ * EXPLAIN, or EXPLAIN ANALYZE. Tab accepts the highlighted completion when the
+ * autocomplete popup is open.
  */
 export function SqlEditor(props: {
   value: string;
@@ -46,6 +49,7 @@ export function SqlEditor(props: {
   }, []);
 
   const lineWrap = useStore((s) => s.editorLineWrap);
+  const bindings = useKeybindingStore((s) => s.bindings);
   const schema = useActiveSchema();
   const sqlNamespace = useMemo(() => buildSqlNamespace(schema), [schema]);
   // A default (unqualified) schema only makes sense to guess when there's
@@ -53,43 +57,42 @@ export function SqlEditor(props: {
   // just without a bare "table name with no schema prefix" shortcut.
   const defaultSchema = schema.length === 1 ? schema[0].name : undefined;
 
+  const queryKeymap = useMemo(() => {
+    const commands = [
+      {
+        binding: bindings["query.run"],
+        run: (view: EditorView) => runRef.current(selectionOrStatement(view)),
+      },
+      {
+        binding: bindings["query.runAll"],
+        run: (view: EditorView) => runRef.current(view.state.doc.toString()),
+      },
+      {
+        binding: bindings["query.explain"],
+        run: (view: EditorView) =>
+          runRef.current(`EXPLAIN ${selectionOrStatement(view)}`),
+      },
+      {
+        binding: bindings["query.explainAnalyze"],
+        run: (view: EditorView) =>
+          runRef.current(`EXPLAIN ANALYZE ${selectionOrStatement(view)}`),
+      },
+    ];
+
+    return commands.flatMap(({ binding, run }) => {
+      const key = bindingToCodeMirror(binding);
+      return key
+        ? [{ key, preventDefault: true, run: (view: EditorView) => (run(view), true) }]
+        : [];
+    });
+  }, [bindings]);
+
   const extensions = useMemo(
     () => [
       sqlLanguage(sqlNamespace, defaultSchema, undefined, SQL_KEYWORDS, schema),
       Prec.highest(
         keymap.of([
-          {
-            key: "Mod-Enter",
-            preventDefault: true,
-            run: (view) => {
-              runRef.current(selectionOrStatement(view));
-              return true;
-            },
-          },
-          {
-            key: "Mod-Shift-Enter",
-            preventDefault: true,
-            run: (view) => {
-              runRef.current(view.state.doc.toString());
-              return true;
-            },
-          },
-          {
-            key: "Mod-Shift-e",
-            preventDefault: true,
-            run: (view) => {
-              runRef.current(`EXPLAIN ${selectionOrStatement(view)}`);
-              return true;
-            },
-          },
-          {
-            key: "Mod-Shift-a",
-            preventDefault: true,
-            run: (view) => {
-              runRef.current(`EXPLAIN ANALYZE ${selectionOrStatement(view)}`);
-              return true;
-            },
-          },
+          ...queryKeymap,
           // Falls through (returns false) to normal Tab behavior when no
           // completion popup is open.
           { key: "Tab", run: acceptCompletion },
@@ -99,7 +102,7 @@ export function SqlEditor(props: {
       cubbyEditorTheme,
       ...(lineWrap ? [EditorView.lineWrapping] : []),
     ],
-    [lineWrap, sqlNamespace, defaultSchema, schema],
+    [lineWrap, sqlNamespace, defaultSchema, schema, queryKeymap],
   );
 
   return (
@@ -134,7 +137,7 @@ export function SqlEditor(props: {
       />
       <button
         className="editor__run-btn"
-        title="Run (⌘⏎)"
+        title={formatShortcutTitle("Run", bindings["query.run"])}
         onClick={handleRunClick}
       >
         <svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true">

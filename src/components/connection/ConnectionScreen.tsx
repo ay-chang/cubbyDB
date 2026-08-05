@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 
 import * as api from "../../api/backend";
 import { errorMessage } from "../../api/backend";
+import { matchesKeybinding, useKeybindingStore } from "../../lib/keybindings";
 import {
   ACCENT_COLOR_LABELS,
   ACCENT_COLOR_OPTIONS,
@@ -132,6 +133,9 @@ export function ConnectionScreen(props: {
   editSessionId?: string;
 } = {}) {
   const { embedded, onConnected, editSessionId } = props;
+  const connectBinding = useKeybindingStore(
+    (s) => s.bindings["connection.connect"],
+  );
   const savedConnections = useStore((s) => s.savedConnections);
   const loadSavedConnections = useStore((s) => s.loadSavedConnections);
   const connectTo = useStore((s) => s.connectTo);
@@ -366,7 +370,7 @@ export function ConnectionScreen(props: {
   }
 
   function onFormKeyDown(e: React.KeyboardEvent) {
-    if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && hasInput && !connecting) {
+    if (!e.repeat && matchesKeybinding(e, connectBinding) && hasInput && !connecting) {
       e.preventDefault();
       if (editSessionId) void handleReconnect();
       else void handleConnect();
