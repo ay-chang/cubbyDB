@@ -98,20 +98,18 @@ code comments or AGENTS.md's architecture section.
   spinner + "Refreshing…" while the schema reloads, then briefly flashes
   "Refreshed ✓" — so even a near-instant refresh (the common case) is
   never silently indistinguishable from a no-op
-- **Cmd/Ctrl+K quick-jump**: fuzzy-search every table and column across
-  *every open connection* — not just the visible one, so searching while
-  staging and prod are both connected finds either. With nothing typed it
-  lists every table (grouped by connection, then alphabetically); typing
-  narrows to fuzzy-matching tables *and* columns together across all of
-  them, ranked by match quality, with the matched characters highlighted.
-  Each result is tagged with which connection it's from (a small badge,
-  shown only once more than one connection is open — no clutter with just
-  one). Enter (or click) on a table opens/focuses its browse-rows tab — the
-  same as clicking it in the sidebar; on a column, it opens/focuses that
-  table's **structure** tab and scrolls to + briefly flashes that column's
-  row there, since structure is the closest thing to a column's
-  "definition" to jump to. Jumping to a result on a different connection
-  switches to it first (same as clicking its pill in the top bar)
+- **Cmd/Ctrl+K workspace palette**: search and switch across common actions,
+  Settings sections, live connections, open tabs, tables, columns, saved
+  queries, and recent query history. Its empty All view prioritizes useful
+  actions, open tabs, connections, and recently opened database objects
+  instead of dumping the full schema; dedicated Tables / Columns / Scripts /
+  History scopes keep large databases manageable. Results retain connection
+  badges and color tags, fuzzy-match highlighting, and enough context to
+  distinguish similarly named objects. Enter opens or runs the highlighted
+  result, while the persistent footer documents arrow-key navigation, Enter,
+  and Escape. Selecting a table opens its rows; selecting a column opens its
+  table structure and highlights the column; cross-connection results switch
+  connections first
 - The schema filter shows the current quick-jump binding (Cmd/Ctrl+K by
   default) as a compact clickable key hint, so the cross-connection search is
   discoverable without taking space away from the schema tree

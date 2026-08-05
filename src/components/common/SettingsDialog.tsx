@@ -1125,10 +1125,10 @@ const SHORTCUT_GROUPS: {
   {
     title: "Command palette",
     shortcuts: [
-      { keys: ["⇥"], desc: "Cycle scope forward: All → Tables → Columns" },
+      { keys: ["⇥"], desc: "Cycle scope forward: All → Tables → Columns → Scripts → History" },
       { keys: ["⇧", "⇥"], desc: "Cycle scope backward" },
       { keys: ["↑", "↓"], desc: "Move the highlighted result" },
-      { keys: ["⏎"], desc: "Jump to the highlighted result" },
+      { keys: ["⏎"], desc: "Open or run the highlighted result" },
       { keys: ["⎋"], desc: "Close the palette" },
     ],
   },

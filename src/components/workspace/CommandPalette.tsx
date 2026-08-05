@@ -2,130 +2,202 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { formatCount } from "../../lib/format";
 import type { FuzzyMatch } from "../../lib/fuzzyMatch";
-import { bestMatch } from "../../lib/fuzzyMatch";
+import { formatBinding, useKeybindingStore } from "../../lib/keybindings";
 import { accentPaletteFor, THEME_MODE, useStore } from "../../state/store";
-import type { SavedQuery, TableKind } from "../../types";
+import {
+  buildPaletteGroups,
+  PALETTE_SCOPES,
+  tabIcon,
+  type PaletteItem,
+  type PaletteScope,
+} from "./commandPaletteItems";
 
-type Item =
-  | {
-      id: string;
-      kind: "table";
-      sessionId: string;
-      connectionName: string;
-      schema: string;
-      table: string;
-      tableKind: TableKind;
-      estimatedRows: number | null;
-      match: FuzzyMatch & { candidate: number };
-    }
-  | {
-      id: string;
-      kind: "column";
-      sessionId: string;
-      connectionName: string;
-      schema: string;
-      table: string;
-      column: string;
-      dataType: string;
-      match: FuzzyMatch & { candidate: number };
-    }
-  | {
-      id: string;
-      kind: "script";
-      query: SavedQuery;
-      match: FuzzyMatch & { candidate: number };
-    };
-
-const MAX_RESULTS = 40;
-const NO_MATCH: FuzzyMatch & { candidate: number } = { score: 0, indices: [], candidate: -1 };
-
-/** A single-line, length-capped preview of a saved script's SQL for the
- *  palette row's meta column — full text lives in the Saved Queries panel. */
-function scriptPreview(sql: string): string {
-  const line = sql.trim().replace(/\s+/g, " ");
-  return line.length > 60 ? line.slice(0, 60) + "…" : line;
+function singleLine(text: string, limit: number): string {
+  const line = text.trim().replace(/\s+/g, " ");
+  return line.length > limit ? line.slice(0, limit) + "…" : line;
 }
 
-/**
- * Which kinds of thing the palette is searching. "All" is the default —
- * tables, columns (once you've typed something), and saved scripts (same
- * condition) all mixed together — and the narrower scopes exist for when you
- * know what you're after and the mixed list gets in the way — searching a
- * wide schema for "id" otherwise buries every table under a hundred `id`
- * columns. "Scripts" searches saved queries instead — those are global (not
- * tied to any one connection, see `SavedQuery`), so this scope (and its
- * contribution to "All") shows the exact same list no matter which database
- * is active. Tab cycles forward, Shift+Tab back, wrapping both ways so Tab
- * alone reaches all four.
- */
-type Scope = "all" | "tables" | "columns" | "scripts";
-const SCOPES: Array<{ id: Scope; label: string; placeholder: string }> = [
-  { id: "all", label: "All", placeholder: "Search tables and columns…" },
-  { id: "tables", label: "Tables", placeholder: "Search tables…" },
-  { id: "columns", label: "Columns", placeholder: "Search columns…" },
-  { id: "scripts", label: "Scripts", placeholder: "Search saved scripts…" },
-];
+function formatHistoryTime(ms: number): string {
+  return new Date(ms).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 /** Render `text` with the characters at `indices` wrapped in <mark>. */
-function highlight(text: string, indices: number[]): React.ReactNode {
-  if (indices.length === 0) return text;
-  const idxSet = new Set(indices);
+function highlight(text: string, match: FuzzyMatch | null): React.ReactNode {
+  if (!match || match.indices.length === 0) return text;
+  const indices = new Set(match.indices);
   const parts: React.ReactNode[] = [];
   let buffer = "";
-  let inMatch = false;
+  let matching = false;
   let key = 0;
-  for (let i = 0; i < text.length; i++) {
-    const isMatch = idxSet.has(i);
-    if (isMatch !== inMatch && buffer) {
-      parts.push(inMatch ? <mark key={key++}>{buffer}</mark> : buffer);
+  for (let index = 0; index < text.length; index += 1) {
+    const nextMatching = indices.has(index);
+    if (nextMatching !== matching && buffer) {
+      parts.push(matching ? <mark key={key++}>{buffer}</mark> : buffer);
       buffer = "";
     }
-    buffer += text[i];
-    inMatch = isMatch;
+    buffer += text[index];
+    matching = nextMatching;
   }
-  if (buffer) parts.push(inMatch ? <mark key={key++}>{buffer}</mark> : buffer);
+  if (buffer) parts.push(matching ? <mark key={key++}>{buffer}</mark> : buffer);
   return parts;
 }
 
+function itemIcon(item: PaletteItem): string {
+  switch (item.kind) {
+    case "action":
+      switch (item.action) {
+        case "new-query":
+          return "+";
+        case "refresh":
+          return "↻";
+        case "ask-ai":
+          return "◇";
+        case "saved-queries":
+          return "▤";
+        case "query-history":
+          return "◷";
+      }
+    case "setting":
+      return "⚙";
+    case "connection":
+      return "●";
+    case "tab":
+      return tabIcon(item.tab.kind);
+    case "table":
+      return item.tableKind === "view" ? "▨" : "▦";
+    case "column":
+      return "·";
+    case "script":
+      return "▤";
+    case "history":
+      return item.entry.success ? "✓" : "×";
+  }
+}
+
+function itemLabel(item: PaletteItem): React.ReactNode {
+  const titleMatch = item.match.candidate === 0 ? item.match : null;
+  switch (item.kind) {
+    case "action":
+    case "setting":
+      return highlight(item.label, titleMatch);
+    case "connection":
+      return highlight(item.connectionName, titleMatch);
+    case "tab":
+      return highlight(item.tab.title, titleMatch);
+    case "table":
+      return (
+        <>
+          <span className="cmdk-item__path">{item.schema}.</span>
+          {highlight(item.table, titleMatch)}
+        </>
+      );
+    case "column":
+      return (
+        <>
+          <span className="cmdk-item__path">
+            {item.schema}.{item.table}.
+          </span>
+          {highlight(item.column, titleMatch)}
+        </>
+      );
+    case "script":
+      return highlight(item.query.name, titleMatch);
+    case "history":
+      // Search uses the complete SQL, while the row normalizes whitespace and
+      // truncates it; raw fuzzy-match indices would point at the wrong glyphs.
+      return singleLine(item.entry.sql, 92);
+  }
+}
+
+function itemMeta(item: PaletteItem): string {
+  switch (item.kind) {
+    case "action":
+    case "setting":
+      return item.description;
+    case "connection":
+      return [item.active ? "Current" : null, item.database, item.host]
+        .filter(Boolean)
+        .join(" · ");
+    case "tab":
+      return item.tab.running
+        ? "Running"
+        : item.tab.error
+          ? "Error"
+          : item.active
+            ? "Current tab"
+            : item.tab.kind;
+    case "table":
+      return formatCount(item.estimatedRows);
+    case "column":
+      return item.dataType;
+    case "script":
+      return singleLine(item.query.sql, 60);
+    case "history":
+      return `${item.entry.success ? "Completed" : "Failed"} · ${formatHistoryTime(item.entry.executedAt)}`;
+  }
+}
+
+function emptyMessage(scope: PaletteScope, hasQuery: boolean): string {
+  if (hasQuery) return "No matches.";
+  switch (scope) {
+    case "columns":
+      return "Type to search columns.";
+    case "scripts":
+      return "No saved scripts yet.";
+    case "history":
+      return "No query history yet.";
+    case "tables":
+      return "No tables or views.";
+    case "all":
+      return "No workspace items.";
+  }
+}
+
 /**
- * Cmd/Ctrl+K quick-jump: fuzzy-search every table and column across *every
- * open connection*, not just the visible one — so searching while staging
- * and prod are both connected finds tables/columns in either. Each result
- * is tagged with which connection it's from (shown as a badge once more
- * than one connection is open); jumping to a result on a different
- * connection switches to it first. Enter on a table opens/focuses its
- * browse-rows tab (same as clicking it in the sidebar); Enter on a column
- * opens/focuses that table's structure tab and scrolls to + briefly
- * highlights that column's row there — there's no "column" surface to jump
- * to directly, so this is the closest thing to "go to this column's
- * definition." The Scripts scope searches saved queries instead: since those
- * are global rather than per-connection, the same list shows up no matter
- * which database is active, and Enter opens the script as a tab on whichever
- * connection is currently active (see `openSavedQuery`).
+ * Cmd/Ctrl+K is CubbyDB's workspace switcher. It keeps the database-specific
+ * scopes that make very large schemas manageable, while All combines common
+ * actions, open tabs, live connections, recent relations, saved queries, and
+ * query history. Results retain the connection colors used elsewhere in the
+ * workspace so staging and production remain visually distinct.
  */
 export function CommandPalette() {
   const open = useStore((s) => s.commandPaletteOpen);
   const close = useStore((s) => s.closeCommandPalette);
   const connections = useStore((s) => s.connections);
   const activeConnectionId = useStore((s) => s.activeConnectionId);
+  const recentObjects = useStore((s) => s.recentDatabaseObjects);
+  const savedQueries = useStore((s) => s.savedQueries);
+  const history = useStore((s) => s.history);
+  const theme = useStore((s) => s.theme);
   const switchConnection = useStore((s) => s.switchConnection);
+  const setActiveTab = useStore((s) => s.setActiveTab);
+  const newTab = useStore((s) => s.newTab);
+  const refreshActive = useStore((s) => s.refreshActive);
   const openSelectTop = useStore((s) => s.openSelectTop);
   const jumpToColumn = useStore((s) => s.jumpToColumn);
-  const savedQueries = useStore((s) => s.savedQueries);
   const openSavedQuery = useStore((s) => s.openSavedQuery);
-  const theme = useStore((s) => s.theme);
+  const rerunFromHistory = useStore((s) => s.rerunFromHistory);
+  const refreshHistory = useStore((s) => s.refreshHistory);
+  const loadSavedQueries = useStore((s) => s.loadSavedQueries);
+  const historyOpen = useStore((s) => s.historyOpen);
+  const savedQueriesOpen = useStore((s) => s.savedQueriesOpen);
+  const aiPanelOpen = useStore((s) => s.aiPanelOpen);
+  const toggleHistory = useStore((s) => s.toggleHistory);
+  const toggleSavedQueries = useStore((s) => s.toggleSavedQueries);
+  const toggleAiPanel = useStore((s) => s.toggleAiPanel);
+  const openSettings = useStore((s) => s.openSettings);
+  const bindings = useKeybindingStore((s) => s.bindings);
 
   const [query, setQuery] = useState("");
-  const [scope, setScope] = useState<Scope>("all");
+  const [scope, setScope] = useState<PaletteScope>("all");
   const [selected, setSelected] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
-  // The browser fires `mouseenter` on whatever list item ends up under an
-  // already-stationary cursor the instant it appears — on open, and again
-  // whenever the list reflows under a typed query — which would otherwise
-  // silently steal the keyboard-driven selection away from row 0. Hover only
-  // starts choosing a row once the mouse has demonstrably moved since the
-  // list last reset, tracked here rather than in state since it never needs
-  // to trigger a render on its own.
+  const listRef = useRef<HTMLDivElement>(null);
   const mouseArmedRef = useRef(false);
 
   useEffect(() => {
@@ -134,164 +206,108 @@ export function CommandPalette() {
     setScope("all");
     setSelected(0);
     mouseArmedRef.current = false;
+    void refreshHistory();
+    void loadSavedQueries();
     requestAnimationFrame(() => inputRef.current?.focus());
-  }, [open]);
-
-  /** Move `delta` scopes along the strip, wrapping at both ends. */
-  const cycleScope = (delta: number) => {
-    setScope((prev) => {
-      const i = SCOPES.findIndex((s) => s.id === prev);
-      return SCOPES[(i + delta + SCOPES.length) % SCOPES.length].id;
-    });
-  };
+  }, [loadSavedQueries, open, refreshHistory]);
 
   const slots = useMemo(() => Object.values(connections), [connections]);
-  const showConnBadge = slots.length > 1;
-
-  /** Score every saved script against `q` (or, with `q` empty, every script
-   *  at score 0 — `bestMatch` already treats an empty query as a match-all).
-   *  Shared by the dedicated Scripts scope and, when there's something
-   *  typed, folded into the All scope below. */
-  const matchScripts = (q: string): Array<{ item: Item; score: number }> => {
-    const scored: Array<{ item: Item; score: number }> = [];
-    for (const sq of savedQueries) {
-      const m = bestMatch(q, [sq.name]);
-      if (!m) continue;
-      scored.push({
-        item: { id: `s:${sq.id}`, kind: "script", query: sq, match: m },
-        score: m.score,
-      });
-    }
-    return scored;
-  };
-
-  const results = useMemo(() => {
-    const q = query.trim();
-
-    // Scripts are global — one list, the same regardless of which
-    // connection is active — so this scope skips the per-connection loop
-    // below entirely and searches `savedQueries` directly.
-    if (scope === "scripts") {
-      const scored = matchScripts(q);
-      if (q) scored.sort((a, b) => b.score - a.score);
-      return scored.slice(0, MAX_RESULTS).map((x) => x.item);
-    }
-
-    const wantTables = scope === "all" || scope === "tables";
-    const wantColumns = scope === "all" || scope === "columns";
-    const scored: Array<{ item: Item; score: number }> = [];
-    for (const slot of slots) {
-      const sessionId = slot.sessionId;
-      const connectionName = slot.current.name;
-      for (const s of slot.schema) {
-        for (const t of s.tables) {
-          if (wantTables && q) {
-            const m = bestMatch(q, [t.name, `${s.name}.${t.name}`]);
-            if (m) {
-              scored.push({
-                item: {
-                  id: `t:${sessionId}:${s.name}.${t.name}`,
-                  kind: "table",
-                  sessionId,
-                  connectionName,
-                  schema: s.name,
-                  table: t.name,
-                  tableKind: t.kind,
-                  estimatedRows: t.estimatedRows,
-                  match: m,
-                },
-                score: m.score,
-              });
-            }
-          } else if (wantTables) {
-            scored.push({
-              item: {
-                id: `t:${sessionId}:${s.name}.${t.name}`,
-                kind: "table",
-                sessionId,
-                connectionName,
-                schema: s.name,
-                table: t.name,
-                tableKind: t.kind,
-                estimatedRows: t.estimatedRows,
-                match: NO_MATCH,
-              },
-              score: 0,
-            });
-          }
-          // Skip columns entirely when the box is empty — dumping every
-          // column from every table would swamp the "browse tables" default,
-          // and in the Columns scope it would be tens of thousands of entries
-          // to build and sort for a list that shows 40. The empty state below
-          // says to type instead.
-          if (!q || !wantColumns) continue;
-          for (const c of t.columns) {
-            const m = bestMatch(q, [c.name, `${t.name}.${c.name}`]);
-            if (m) {
-              scored.push({
-                item: {
-                  id: `c:${sessionId}:${s.name}.${t.name}.${c.name}`,
-                  kind: "column",
-                  sessionId,
-                  connectionName,
-                  schema: s.name,
-                  table: t.name,
-                  column: c.name,
-                  dataType: c.dataType,
-                  match: m,
-                },
-                score: m.score,
-              });
-            }
-          }
-        }
-      }
-    }
-    // Fold in saved scripts too, same as tables/columns above — but only
-    // once there's something typed, so the default "All" view (no query)
-    // still shows just tables, same as it always has.
-    if (scope === "all" && q) {
-      scored.push(...matchScripts(q));
-    }
-    if (q) {
-      scored.sort((a, b) => b.score - a.score);
-    } else {
-      // Group by connection, then alphabetically within it.
-      scored.sort((a, b) => {
-        const a2 = a.item as Extract<Item, { kind: "table" }>;
-        const b2 = b.item as Extract<Item, { kind: "table" }>;
-        return (
-          a2.connectionName.localeCompare(b2.connectionName) ||
-          `${a2.schema}.${a2.table}`.localeCompare(`${b2.schema}.${b2.table}`)
-        );
-      });
-    }
-    return scored.slice(0, MAX_RESULTS).map((x) => x.item);
-  }, [slots, query, scope, savedQueries]);
+  const groups = useMemo(
+    () =>
+      buildPaletteGroups({
+        scope,
+        query,
+        slots,
+        activeConnectionId,
+        savedQueries,
+        history,
+        recentObjects,
+      }),
+    [activeConnectionId, history, query, recentObjects, savedQueries, scope, slots],
+  );
+  const results = useMemo(() => groups.flatMap((group) => group.items), [groups]);
+  const showConnectionBadge = slots.length > 1;
 
   useEffect(() => {
     setSelected(0);
-    // The result list just reordered — same reasoning as the `open` reset
-    // above, so the same guard against a stationary mouse applies again.
     mouseArmedRef.current = false;
   }, [query, scope]);
 
-  const activate = (item: Item) => {
-    if (item.kind === "script") {
-      void openSavedQuery(item.query);
-      close();
-      return;
-    }
-    if (item.sessionId !== activeConnectionId) switchConnection(item.sessionId);
-    if (item.kind === "table") {
-      void openSelectTop(item.schema, item.table);
-    } else {
-      void jumpToColumn(item.schema, item.table, item.column);
-    }
+  useEffect(() => {
+    if (selected >= results.length) setSelected(Math.max(0, results.length - 1));
+  }, [results.length, selected]);
+
+  useEffect(() => {
+    listRef.current
+      ?.querySelector<HTMLElement>(`[data-palette-index="${selected}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [selected]);
+
+  const cycleScope = (delta: number) => {
+    setScope((current) => {
+      const index = PALETTE_SCOPES.findIndex((candidate) => candidate.id === current);
+      return PALETTE_SCOPES[(index + delta + PALETTE_SCOPES.length) % PALETTE_SCOPES.length].id;
+    });
+  };
+
+  const moveSelection = (delta: number) => {
+    if (results.length === 0) return;
+    setSelected((current) => (current + delta + results.length) % results.length);
+  };
+
+  const activate = (item: PaletteItem) => {
     close();
+    switch (item.kind) {
+      case "connection":
+        switchConnection(item.sessionId);
+        return;
+      case "tab":
+        if (item.sessionId !== activeConnectionId) switchConnection(item.sessionId);
+        setActiveTab(item.tab.id);
+        return;
+      case "table":
+        if (item.sessionId !== activeConnectionId) switchConnection(item.sessionId);
+        void openSelectTop(item.schema, item.table);
+        return;
+      case "column":
+        if (item.sessionId !== activeConnectionId) switchConnection(item.sessionId);
+        void jumpToColumn(item.schema, item.table, item.column);
+        return;
+      case "script":
+        void openSavedQuery(item.query);
+        return;
+      case "history":
+        rerunFromHistory(item.entry.sql);
+        return;
+      case "setting":
+        openSettings(item.section);
+        return;
+      case "action":
+        switch (item.action) {
+          case "new-query":
+            void newTab();
+            return;
+          case "refresh":
+            void refreshActive();
+            return;
+          case "ask-ai":
+            if (!aiPanelOpen) toggleAiPanel();
+            return;
+          case "saved-queries":
+            if (!savedQueriesOpen) toggleSavedQueries();
+            return;
+          case "query-history":
+            if (!historyOpen) toggleHistory();
+            return;
+        }
+    }
   };
 
   if (!open) return null;
+
+  let resultIndex = 0;
+  const hasQuery = query.trim().length > 0;
+  const activeScope = PALETTE_SCOPES.find((candidate) => candidate.id === scope)!;
 
   return (
     <div className="cmdk-overlay" onClick={close}>
@@ -299,152 +315,169 @@ export function CommandPalette() {
         className="cmdk-panel"
         role="dialog"
         aria-modal="true"
-        aria-label="Search tables, columns, and saved scripts"
-        onClick={(e) => e.stopPropagation()}
+        aria-label="Search CubbyDB"
+        onClick={(event) => event.stopPropagation()}
       >
         <input
           ref={inputRef}
           className="cmdk-input"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder={SCOPES.find((s) => s.id === scope)!.placeholder}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder={activeScope.placeholder}
+          aria-controls="command-palette-results"
+          aria-activedescendant={results[selected] ? `palette-${results[selected].id}` : undefined}
           spellCheck={false}
           autoCapitalize="off"
           autoCorrect="off"
-          onKeyDown={(e) => {
-            if (e.key === "Tab") {
-              // Focus stays in the box — there's nothing else in the palette
-              // worth tabbing to, and typing has to keep working mid-cycle.
-              e.preventDefault();
-              e.stopPropagation();
-              cycleScope(e.shiftKey ? -1 : 1);
-            } else if (e.key === "Escape") {
-              e.preventDefault();
-              e.stopPropagation();
+          onKeyDown={(event) => {
+            if (event.key === "Tab") {
+              event.preventDefault();
+              event.stopPropagation();
+              cycleScope(event.shiftKey ? -1 : 1);
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              event.stopPropagation();
               close();
-            } else if (e.key === "ArrowDown") {
-              e.preventDefault();
-              e.stopPropagation();
-              setSelected((i) => Math.min(i + 1, results.length - 1));
-            } else if (e.key === "ArrowUp") {
-              e.preventDefault();
-              e.stopPropagation();
-              setSelected((i) => Math.max(i - 1, 0));
-            } else if (e.key === "Enter") {
-              e.preventDefault();
-              e.stopPropagation();
+            } else if (event.key === "ArrowDown") {
+              event.preventDefault();
+              event.stopPropagation();
+              moveSelection(1);
+            } else if (event.key === "ArrowUp") {
+              event.preventDefault();
+              event.stopPropagation();
+              moveSelection(-1);
+            } else if (event.key === "Enter") {
+              event.preventDefault();
+              event.stopPropagation();
               const item = results[selected];
               if (item) activate(item);
             }
           }}
         />
+
         <div className="cmdk-scopes" role="tablist" aria-label="Search scope">
-          {SCOPES.map((s) => (
+          {PALETTE_SCOPES.map((candidate) => (
             <button
-              key={s.id}
+              key={candidate.id}
               type="button"
               role="tab"
-              aria-selected={s.id === scope}
-              className={"cmdk-scope" + (s.id === scope ? " cmdk-scope--active" : "")}
+              aria-selected={candidate.id === scope}
+              className={
+                "cmdk-scope" +
+                (candidate.id === scope ? " cmdk-scope--active" : "")
+              }
               onClick={() => {
-                setScope(s.id);
+                setScope(candidate.id);
                 inputRef.current?.focus();
               }}
             >
-              {s.label}
+              {candidate.label}
             </button>
           ))}
           <span className="cmdk-scopes__hint mono">⇥ / ⇧⇥</span>
         </div>
-        <div className="cmdk-list" onMouseMove={() => { mouseArmedRef.current = true; }}>
+
+        <div
+          id="command-palette-results"
+          ref={listRef}
+          className="cmdk-list"
+          role="listbox"
+          onMouseMove={() => {
+            mouseArmedRef.current = true;
+          }}
+        >
           {results.length === 0 ? (
-            <div className="cmdk-empty">
-              {query.trim()
-                ? "No matches."
-                : scope === "columns"
-                  ? "Type to search columns."
-                  : scope === "scripts"
-                    ? "No saved scripts yet."
-                    : "No tables."}
-            </div>
+            <div className="cmdk-empty">{emptyMessage(scope, hasQuery)}</div>
           ) : (
-            results.map((item, i) => {
-              // Tables/columns from a color-tagged connection (see
-              // `ConnectionColorMenu` in TopBar.tsx) carry that tag into the
-              // list — searching across staging *and* prod at once is
-              // exactly when mixing them up is easiest to do by accident.
-              const connColor =
-                item.kind !== "script" ? (connections[item.sessionId]?.color ?? null) : null;
-              const connPalette = connColor ? accentPaletteFor(connColor, THEME_MODE[theme]) : null;
-              // Always the full-row tint here, regardless of that
-              // connection's own border/fill preference for the results
-              // pane — a thin border is easy to miss in a dense list where
-              // whole-row color is what actually reads at a glance.
-              const connStyle = connPalette
-                ? ({ "--conn-color-tint": connPalette.accentTint } as React.CSSProperties)
-                : undefined;
-              return (
-              <div
-                key={item.id}
-                className={
-                  "cmdk-item" +
-                  (i === selected ? " cmdk-item--active" : "") +
-                  (connPalette ? " cmdk-item--conn-fill" : "")
-                }
-                style={connStyle}
-                onMouseEnter={() => {
-                  if (mouseArmedRef.current) setSelected(i);
-                }}
-                onClick={() => activate(item)}
-              >
-                <span className="cmdk-item__icon">
-                  {item.kind === "table"
-                    ? item.tableKind === "view"
-                      ? "▨"
-                      : "▦"
-                    : item.kind === "column"
-                      ? "·"
-                      : "▤"}
-                </span>
-                {item.kind !== "script" && showConnBadge && (
-                  <span className="cmdk-item__conn">{item.connectionName}</span>
-                )}
-                <span className="cmdk-item__label">
-                  {item.kind === "table" ? (
-                    <>
-                      <span className="cmdk-item__path">{item.schema}.</span>
-                      {highlight(item.table, item.match.candidate === 0 ? item.match.indices : [])}
-                    </>
-                  ) : item.kind === "column" ? (
-                    <>
-                      <span className="cmdk-item__path">
-                        {item.schema}.{item.table}.
+            groups.map((group) => (
+              <div key={group.id} className="cmdk-group" role="group" aria-label={group.label}>
+                <div className="cmdk-group__label">{group.label}</div>
+                {group.items.map((item) => {
+                  const index = resultIndex++;
+                  const connectionItem =
+                    item.kind === "table" ||
+                    item.kind === "column" ||
+                    item.kind === "tab" ||
+                    item.kind === "connection"
+                      ? item
+                      : null;
+                  const connectionColor = connectionItem
+                    ? (connections[connectionItem.sessionId]?.color ?? null)
+                    : null;
+                  const connectionPalette = connectionColor
+                    ? accentPaletteFor(connectionColor, THEME_MODE[theme])
+                    : null;
+                  const connectionStyle = connectionPalette
+                    ? ({ "--conn-color-tint": connectionPalette.accentTint } as React.CSSProperties)
+                    : undefined;
+                  const keybindingId =
+                    item.kind === "action" || item.kind === "setting"
+                      ? item.keybindingId
+                      : undefined;
+                  const binding = keybindingId ? bindings[keybindingId] : null;
+                  const connectionName =
+                    item.kind === "table" || item.kind === "column" || item.kind === "tab"
+                      ? item.connectionName
+                      : item.kind === "history"
+                        ? item.entry.connectionName
+                        : null;
+                  return (
+                    <div
+                      id={`palette-${item.id}`}
+                      key={item.id}
+                      role="option"
+                      aria-selected={index === selected}
+                      data-palette-index={index}
+                      className={
+                        "cmdk-item" +
+                        (index === selected ? " cmdk-item--active" : "") +
+                        (connectionPalette ? " cmdk-item--conn-fill" : "")
+                      }
+                      style={connectionStyle}
+                      onMouseEnter={() => {
+                        if (mouseArmedRef.current) setSelected(index);
+                      }}
+                      onClick={() => activate(item)}
+                    >
+                      <span className="cmdk-item__icon" aria-hidden>
+                        {itemIcon(item)}
                       </span>
-                      {highlight(
-                        item.column,
-                        item.match.candidate === 0 ? item.match.indices : [],
+                      {connectionName && showConnectionBadge && (
+                        <span className="cmdk-item__conn">{connectionName}</span>
                       )}
-                    </>
-                  ) : (
-                    highlight(item.query.name, item.match.candidate === 0 ? item.match.indices : [])
-                  )}
-                </span>
-                <span
-                  className={
-                    "cmdk-item__meta mono" +
-                    (item.kind === "script" ? " cmdk-item__meta--script" : "")
-                  }
-                >
-                  {item.kind === "table"
-                    ? formatCount(item.estimatedRows)
-                    : item.kind === "column"
-                      ? item.dataType
-                      : scriptPreview(item.query.sql)}
-                </span>
+                      <span className="cmdk-item__label">{itemLabel(item)}</span>
+                      <span
+                        className={
+                          "cmdk-item__meta mono" +
+                          (item.kind === "script" || item.kind === "history" ||
+                          item.kind === "action" || item.kind === "setting"
+                            ? " cmdk-item__meta--wide"
+                            : "")
+                        }
+                      >
+                        {itemMeta(item)}
+                      </span>
+                      {binding && (
+                        <kbd className="cmdk-item__shortcut mono">{formatBinding(binding)}</kbd>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-              );
-            })
+            ))
           )}
+        </div>
+
+        <div className="cmdk-footer" aria-hidden>
+          <span className="cmdk-footer__hint">
+            <kbd>↑</kbd><kbd>↓</kbd><span>Navigate</span>
+          </span>
+          <span className="cmdk-footer__hint">
+            <kbd>↵</kbd><span>Select</span>
+          </span>
+          <span className="cmdk-footer__hint">
+            <kbd>Esc</kbd><span>Close</span>
+          </span>
         </div>
       </div>
     </div>

@@ -70,7 +70,7 @@ export const KEYBINDING_DEFINITIONS = [
   {
     id: "workspace.commandPalette",
     group: "General",
-    description: "Open the table and column command palette",
+    description: "Open the workspace command palette",
     defaultBinding: "mod+k",
     context: "workspace",
   },
