@@ -14,6 +14,7 @@ import {
   isSafeBinding,
   KEYBINDING_DEFINITIONS,
   KEYBINDING_GROUPS,
+  matchesKeybinding,
   reservedBindingLabel,
   type KeybindingId,
   useKeybindingStore,
@@ -42,6 +43,7 @@ import {
   TABLE_ROW_HEIGHT_OPTIONS,
 } from "../../state/store";
 import type { NullDisplay } from "../../state/store";
+import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import {
   SETTINGS_SEARCH_ITEMS,
   SETTINGS_SECTIONS,
@@ -91,6 +93,18 @@ export function SettingsDialog() {
       setSearchTarget(null);
     }
   }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnWindowShortcut = (event: KeyboardEvent) => {
+      if (event.repeat || !matchesKeybinding(event, "mod+w")) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      close();
+    };
+    window.addEventListener("keydown", closeOnWindowShortcut);
+    return () => window.removeEventListener("keydown", closeOnWindowShortcut);
+  }, [close, open]);
 
   const searchableItems = useMemo(buildSettingsSearchCatalog, []);
   const searchResults = useMemo(
@@ -457,6 +471,11 @@ function AiAssistantSection() {
     : provider === "openai"
       ? (aiConfig?.openaiKeySet ?? false)
       : (aiConfig?.anthropicKeySet ?? false);
+  const keyHint = provider === "openai"
+    ? aiConfig?.openaiKeyHint
+    : provider === "anthropic"
+      ? aiConfig?.anthropicKeyHint
+      : null;
   const currentModel = provider === "codex"
     ? aiConfig?.codexModel
     : provider === "openai"
@@ -557,24 +576,56 @@ function AiAssistantSection() {
       {provider === "codex" ? (
         <div className="settings-field settings-field--spaced" data-setting-id="ai.credentials">
           <div className="settings-field__label">ChatGPT account</div>
-          <div className="settings-field__desc">
-            {aiConfig?.codexAuthenticated
-              ? `Signed in${aiConfig.codexEmail ? ` as ${aiConfig.codexEmail}` : ""}${aiConfig.codexPlanType ? ` (${aiConfig.codexPlanType} plan)` : ""}.`
-              : aiConfig?.codexError
-                ? aiConfig.codexError
-                : "Sign in in your browser to use the Codex allowance included with your ChatGPT plan."}
-            {aiConfig?.codexVersion ? ` Codex CLI ${aiConfig.codexVersion}.` : ""}
-          </div>
-          {!aiConfig?.codexAuthenticated && (
-            <div className="settings-select-row">
-              <button
-                className="btn btn--primary"
-                onClick={handleCodexLogin}
-                disabled={codexSigningIn || (aiConfig !== null && !aiConfig.codexInstalled)}
-              >
-                {codexSigningIn ? "Waiting for browser…" : "Sign in with ChatGPT"}
-              </button>
+          {aiConfig?.codexAuthenticated ? (
+            <div className="ai-credential-status ai-credential-status--set">
+              <span className="ai-credential-status__dot" aria-hidden />
+              <div className="ai-credential-status__body">
+                <div className="ai-credential-status__primary">
+                  <span>Signed in</span>
+                  {aiConfig.codexEmail && (
+                    <>
+                      <span className="ai-credential-status__separator">as</span>
+                      <RedactedSensitiveText value={aiConfig.codexEmail} />
+                    </>
+                  )}
+                </div>
+                <div className="ai-credential-status__meta">
+                  {[
+                    aiConfig.codexPlanType ? `${aiConfig.codexPlanType} plan` : null,
+                    aiConfig.codexVersion ? `Codex CLI ${aiConfig.codexVersion}` : null,
+                  ].filter(Boolean).join(" · ")}
+                </div>
+              </div>
             </div>
+          ) : (
+            <>
+              <div
+                className={
+                  "ai-credential-status" +
+                  (aiConfig?.codexError ? " ai-credential-status--error" : "")
+                }
+              >
+                <span className="ai-credential-status__dot" aria-hidden />
+                <div className="ai-credential-status__body">
+                  <div className="ai-credential-status__primary">
+                    {aiConfig?.codexError ? "Sign-in unavailable" : "Not signed in"}
+                  </div>
+                  <div className="ai-credential-status__meta">
+                    {aiConfig?.codexError ??
+                      "Sign in to use the Codex allowance included with your ChatGPT plan."}
+                  </div>
+                </div>
+              </div>
+              <div className="settings-select-row">
+                <button
+                  className="btn btn--primary"
+                  onClick={handleCodexLogin}
+                  disabled={codexSigningIn || (aiConfig !== null && !aiConfig.codexInstalled)}
+                >
+                  {codexSigningIn ? "Waiting for browser…" : "Sign in with ChatGPT"}
+                </button>
+              </div>
+            </>
           )}
           {codexLoginError && (
             <div className="settings-field__desc settings-field__desc--error">
@@ -590,11 +641,24 @@ function AiAssistantSection() {
         <div className="settings-field settings-field--spaced" data-setting-id="ai.credentials">
           <div className="settings-field__label">{providerName} API key</div>
           <div className="settings-field__desc">
-            Powers the Ask AI panel. The key stays in CubbyDB's local app-data file and is never
-            returned to the UI after you save it.{" "}
-            {keySet
-              ? "A key is saved."
-              : "No key saved yet — the Ask AI panel won't work until you add one."}
+            Powers the Ask AI panel. The key stays in CubbyDB's local app-data file; only the
+            masked identifier below is returned to the UI.
+          </div>
+          <div
+            className={
+              "ai-credential-status" +
+              (keySet ? " ai-credential-status--set" : "")
+            }
+          >
+            <span className="ai-credential-status__dot" aria-hidden />
+            <div className="ai-credential-status__body">
+              <div className="ai-credential-status__primary">
+                {keySet ? "Configured" : "Not configured"}
+              </div>
+              <div className="ai-credential-status__meta mono">
+                {keySet ? (keyHint ?? "Saved key") : `Add an ${providerName} API key to continue.`}
+              </div>
+            </div>
           </div>
           <div className="settings-select-row">
             <input
@@ -602,7 +666,7 @@ function AiAssistantSection() {
               type="password"
               placeholder={
                 keySet
-                  ? "•••• saved — enter a new key to replace it"
+                  ? "Enter a new key to replace the configured key"
                   : provider === "openai"
                     ? "sk-…"
                     : "sk-ant-…"
@@ -616,7 +680,7 @@ function AiAssistantSection() {
               onClick={handleSave}
               disabled={!keyInput.trim() || saving}
             >
-              Save
+              {saving ? "Saving…" : keySet ? "Replace" : "Save"}
             </button>
             {keySet && (
               <button className="btn btn--outline" onClick={() => void clearAiConfig(provider)}>
@@ -1247,6 +1311,13 @@ const SHORTCUT_GROUPS: {
   title: string;
   shortcuts: { keys: string[]; desc: string }[];
 }[] = [
+  {
+    title: "Settings dialog",
+    shortcuts: [
+      { keys: ["⌘", "W"], desc: "Close Settings without closing the database tab behind it" },
+      { keys: ["⎋"], desc: "Clear the current Settings search" },
+    ],
+  },
   {
     title: "SQL editor",
     shortcuts: [

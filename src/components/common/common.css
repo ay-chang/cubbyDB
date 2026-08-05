@@ -989,6 +989,93 @@ button.shortcut-binding:focus-visible {
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
+/* Credential state is explicit and separate from the replacement input, so
+   an empty password box never reads as "no key" after one has been saved. */
+.ai-credential-status {
+  margin-top: 12px;
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+}
+.ai-credential-status--set {
+  border-color: var(--success-border);
+  background: var(--success-bg);
+}
+.ai-credential-status--error {
+  border-color: var(--error-border);
+  background: var(--error-bg);
+}
+.ai-credential-status__dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--text-ghost);
+}
+.ai-credential-status--set .ai-credential-status__dot {
+  background: var(--success);
+}
+.ai-credential-status--error .ai-credential-status__dot {
+  background: var(--error);
+}
+.ai-credential-status__body {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+.ai-credential-status__primary {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.ai-credential-status--set .ai-credential-status__primary {
+  color: var(--success-text);
+}
+.ai-credential-status--error .ai-credential-status__primary {
+  color: var(--error-text);
+}
+.ai-credential-status__separator {
+  color: var(--text-faint);
+  font-weight: 400;
+}
+.ai-credential-status__meta {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+.redacted-sensitive {
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 3px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color var(--transition), filter var(--transition);
+}
+.redacted-sensitive:hover {
+  color: var(--text);
+}
+.redacted-sensitive--hidden {
+  filter: blur(2px);
+  user-select: none;
+}
+.redacted-sensitive--revealed {
+  filter: none;
+}
+
 /* A multi-line settings input (e.g. the starter-SQL template), styled to
    match .settings-select. */
 .settings-textarea {

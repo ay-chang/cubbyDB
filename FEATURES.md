@@ -391,7 +391,8 @@ Four top-level tabs: **General** (behavior), **Appearance** (with
 **Keyboard Shortcuts**.
 Every setting applies live and is persisted (no restart needed for anything in
 here — it's all frontend-only). Open Settings from the top-bar gear or with
-the fixed, platform-standard Cmd/Ctrl+, shortcut.
+the fixed, platform-standard Cmd/Ctrl+, shortcut. While Settings is open,
+Cmd/Ctrl+W closes the dialog rather than the database tab behind it.
 
 - The Settings rail includes search across every preference, appearance
   control, AI option, application command, and built-in keyboard interaction.
@@ -412,10 +413,14 @@ the fixed, platform-standard Cmd/Ctrl+, shortcut.
   borders, header-row shading (a subtle darkening so the column-header row
   stands out from the data below), wrap-vs-truncate long text, NULL display
   style
+- **Appearance → Sidebar**: schema-tree row height
 - **Appearance → Editor**: font, font size, line-wrap
 - **AI Assistant**: provider, separate API-key settings, current Codex
   subscription status/browser sign-in, provider model, and OpenAI/Codex
-  reasoning level
+  reasoning level. Saved API keys show an explicit configured state plus only
+  a masked prefix/suffix identifier; the full key never returns to the UI.
+  The Codex account email is blurred by default and can be revealed or hidden
+  with an explicit click
 - **Keyboard Shortcuts**: database and workspace commands can be rebound by
   clicking the current combination and pressing a new one. Conflicting
   workspace bindings are rejected inline; individual commands can be
