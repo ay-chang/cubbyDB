@@ -49,6 +49,11 @@ export interface LastConnection {
   name: string;
   engine: Engine;
   params: ConnectionParams;
+  /** The saved connection this came from, if any — carried through launch's
+   *  auto-reconnect so it comes back up linked to its saved record (and its
+   *  color) instead of as an unlinked ad-hoc session. `null`/absent for a
+   *  connection that was never saved. */
+  id?: string | null;
 }
 
 export type TableKind = "table" | "view";

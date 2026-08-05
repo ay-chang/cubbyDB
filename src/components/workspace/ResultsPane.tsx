@@ -359,10 +359,11 @@ const VIRTUALIZE_MIN_COLS = 16;
  * and repaints on its own (compositor) timeline, while React only catches up
  * a frame or more later via the `scroll` event — so anything the user flings
  * past within that gap must already be rendered. At the default 32px row
- * that's ~960px of vertical runway in each direction, which covers a hard
- * trackpad fling.
+ * that's ~1920px of vertical runway in each direction — comfortably more
+ * than a hard trackpad fling covers between two `requestAnimationFrame`
+ * ticks, which is what a smaller buffer here used to visibly run out of.
  */
-const VIRTUALIZE_OVERSCAN = 30;
+const VIRTUALIZE_OVERSCAN = 60;
 const COL_OVERSCAN = 4;
 /** Blank space kept below the last row once scrolled to the bottom, so it
  *  doesn't sit flush against the window edge. Applied via `.grid__body`'s
@@ -508,11 +509,26 @@ function ResultsGrid({
     x: number;
     y: number;
   } | null>(null);
-  // Client-side sort: original column index + direction, cycling default → asc
-  // → desc → default. Sorts the loaded rows.
-  const [sort, setSort] = useState<{ col: number; dir: "asc" | "desc" } | null>(
+  // Sort state, cycling default → asc → desc → default. For `table` tabs this
+  // is a real `ORDER BY` applied by the backend (persisted on the tab as
+  // `sortColumn`/`sortDesc` via `setTableSort`) so it covers every row in the
+  // table, not just whichever page happens to be loaded — client-side sort
+  // over just the current page silently gave the wrong order for anything
+  // past the first page. Other tab kinds have no backing table to re-query,
+  // and their results are never paginated (loaded in full, up to the safety
+  // cap), so a plain client-side sort over what's already loaded is correct.
+  const setTableSort = useStore((s) => s.setTableSort);
+  const [localSort, setLocalSort] = useState<{ col: number; dir: "asc" | "desc" } | null>(
     null,
   );
+  const sort = isTable
+    ? tab.sortColumn != null
+      ? {
+          col: result.columns.findIndex((c) => c.name === tab.sortColumn),
+          dir: (tab.sortDesc ? "desc" : "asc") as "asc" | "desc",
+        }
+      : null
+    : localSort;
   // The cell currently swapped for an inline edit input, if any. `isNew` marks
   // a draft (not-yet-inserted) row, whose edits go to `setNewCellEdit`.
   const [editing, setEditing] = useState<{
@@ -567,14 +583,19 @@ function ResultsGrid({
   // in the source, not just by the time the callback actually runs.
   const sortedRowIndices = useMemo(() => {
     const indices = result.rows.map((_, i) => i);
-    if (!sort || sort.col >= result.columns.length) return indices;
+    // `table` tabs' sort is a real `ORDER BY` — the backend already returned
+    // these rows in the right order, so sorting again here would just be
+    // reapplying (usually redundant, but not guaranteed to agree with SQL's
+    // own collation/NULL ordering) on top of it.
+    if (isTable) return indices;
+    if (!sort || sort.col < 0 || sort.col >= result.columns.length) return indices;
     const { col, dir } = sort;
     const numeric = numericCols[col];
     indices.sort((a, b) =>
       compareCells(result.rows[a][col], result.rows[b][col], numeric, dir),
     );
     return indices;
-  }, [result, sort, numericCols]);
+  }, [result, sort, numericCols, isTable]);
 
   /**
    * Gutter click with modifiers: plain = select just this row, ⌘/Ctrl+click =
@@ -634,6 +655,16 @@ function ResultsGrid({
     setSelected({ r, col });
     setRowSel([]);
   }, []);
+  // Escape and clicking the empty corner (gutter/header intersection) both
+  // just clear whatever's selected — same "unhighlight the row and column"
+  // outcome as clicking elsewhere in the grid, without needing a live target
+  // to click on.
+  const clearSelection = useCallback(() => {
+    setSelected(null);
+    setRowSel([]);
+    rowAnchorRef.current = null;
+    setFkMenu(null);
+  }, []);
   const onCellDoubleClick = useCallback(
     (r: number, col: number, currentValue: string | null) => {
       setEditing({ r, col, draft: currentValue ?? "" });
@@ -691,7 +722,7 @@ function ResultsGrid({
     setRowSel([]);
     rowAnchorRef.current = null;
     setFkMenu(null);
-    setSort(null);
+    setLocalSort(null);
     setEditing(null);
     setFindOpen(false);
     setFindQuery("");
@@ -774,7 +805,31 @@ function ResultsGrid({
     };
 
     const onKey = (e: KeyboardEvent) => {
-      if (document.activeElement instanceof HTMLInputElement) return;
+      // Skip while any real text-entry surface has focus — a plain
+      // `<input>`/`<textarea>` (e.g. Find, the AI chat box), or a
+      // contenteditable one. The table-browser filter bar in particular is a
+      // CodeMirror editor, whose focused element is a `contenteditable` div
+      // rather than an `HTMLInputElement`: without the `isContentEditable`
+      // check here, clicking into it and pasting was silently hijacked by
+      // this grid's own cell-paste handling below instead of reaching the
+      // filter bar.
+      const active = document.activeElement;
+      if (
+        active instanceof HTMLInputElement ||
+        active instanceof HTMLTextAreaElement ||
+        (active instanceof HTMLElement && active.isContentEditable)
+      ) {
+        return;
+      }
+      if (e.key === "Escape") {
+        // Deselect rather than letting Escape fall through to whatever else
+        // it's bound to elsewhere (e.g. the tab-level shortcut) — with a
+        // cell or row focused, Escape's job is just to back out of that.
+        e.preventDefault();
+        e.stopPropagation();
+        clearSelection();
+        return;
+      }
       const mod = e.metaKey || e.ctrlKey;
       if (!mod) return;
       const isCopy = e.key === "c" || e.key === "C";
@@ -834,6 +889,7 @@ function ResultsGrid({
     addRows,
     showCopyStatus,
     rowCopyDelimiter,
+    clearSelection,
   ]);
 
   // Column geometry in display order: `starts[pos]` is the x offset of the
@@ -1123,8 +1179,19 @@ function ResultsGrid({
   };
 
   // Cycle a column's sort: default -> ascending -> descending -> default.
+  // `table` tabs push this down to the backend as a real `ORDER BY` (see the
+  // `sort` derivation above); everything else just re-sorts the already-
+  // loaded rows in place.
   const cycleSort = (col: number) => {
-    setSort((prev) => {
+    if (isTable) {
+      const name = result.columns[col]?.name;
+      if (!name) return;
+      if (tab.sortColumn !== name) void setTableSort(tab.id, name, false);
+      else if (!tab.sortDesc) void setTableSort(tab.id, name, true);
+      else void setTableSort(tab.id, null, false);
+      return;
+    }
+    setLocalSort((prev) => {
       if (!prev || prev.col !== col) return { col, dir: "asc" };
       if (prev.dir === "asc") return { col, dir: "desc" };
       return null;
@@ -1556,7 +1623,11 @@ function ResultsGrid({
         data-wrap={tableWrapText ? "on" : "off"}
       >
         <div className="grid__head" style={headStyle} ref={headRef}>
-          <div className="grid__gutter grid__gutter--head" />
+          <div
+            className="grid__gutter grid__gutter--head"
+            onClick={clearSelection}
+            title="Click to deselect"
+          />
           {order.map((colIndex, pos) => (
             <div
               key={colIndex}

@@ -3,7 +3,12 @@ import { useEffect, useRef, useState } from "react";
 
 import { ConnectionScreen } from "../connection/ConnectionScreen";
 import { Spinner } from "../common/Spinner";
-import { ACCENT_COLOR_SWATCH, useActiveSchemaLoading, useStore } from "../../state/store";
+import {
+  accentPaletteFor,
+  THEME_MODE,
+  useActiveSchemaLoading,
+  useStore,
+} from "../../state/store";
 
 /** True on macOS, where the window is configured (`tauri.conf.json`,
  *  `titleBarStyle: "Overlay"`) with no native title bar — just the traffic
@@ -60,6 +65,7 @@ function useIsFullscreen(): boolean {
 /** The 42px application top bar: connection switcher and actions. */
 export function TopBar() {
   const isFullscreen = useIsFullscreen();
+  const theme = useStore((s) => s.theme);
   const connections = useStore((s) => s.connections);
   const activeConnectionId = useStore((s) => s.activeConnectionId);
   const switchConnection = useStore((s) => s.switchConnection);
@@ -127,7 +133,9 @@ export function TopBar() {
               }
               style={
                 slot.color
-                  ? ({ "--conn-tag-color": ACCENT_COLOR_SWATCH[slot.color] } as React.CSSProperties)
+                  ? ({
+                      "--conn-tag-color": accentPaletteFor(slot.color, THEME_MODE[theme]).accent,
+                    } as React.CSSProperties)
                   : undefined
               }
               onClick={() => switchConnection(slot.sessionId)}

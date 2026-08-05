@@ -111,9 +111,18 @@
 /* A tagged connection (set in its own edit form, opened by right-clicking
    the pill) gets a thin colored underline rather than recoloring the whole
    pill — same "accent, not takeover" restraint as the results-pane border it
-   mirrors. */
-.conn-pill--tagged {
-  box-shadow: inset 0 -2px 0 var(--conn-tag-color);
+   mirrors. A pseudo-element rather than `box-shadow`: a shadow inherits the
+   pill's own border-radius and curls up at both ends to trace it, which read
+   as sloppy — this is a flat bar, square corners, independent of the pill's
+   shape. */
+.conn-pill--tagged::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -2px;
+  height: 2px;
+  background: var(--conn-tag-color);
 }
 .conn-pill__close {
   color: var(--text-ghost);
@@ -1490,6 +1499,7 @@
   border-right: 1px solid var(--table-border-cell);
   overflow-wrap: break-word;
   min-width: 0;
+  cursor: pointer;
 }
 /* The actual truncatable text lives in this inner span, not directly on
    `.grid__cell` — a raw text node dropped straight into a `display: flex`
@@ -1615,9 +1625,11 @@
 }
 .grid__gutter--head {
   z-index: 2;
-  cursor: default;
+  cursor: pointer;
 }
-/* The header gutter isn't a select handle — keep it inert. */
+/* The header gutter isn't a select handle like the row ones below it — it
+   just clears whatever's selected — so its hover stays a quiet neutral tint
+   rather than the accent color `.grid__gutter:hover` uses elsewhere. */
 .grid__gutter--head:hover {
   color: var(--text-fainter);
   background: var(--surface-header);

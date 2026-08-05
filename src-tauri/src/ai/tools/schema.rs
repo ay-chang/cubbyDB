@@ -130,7 +130,7 @@ pub async fn sample_rows(ctx: &ToolContext<'_>, input: &Value) -> Result<ToolOut
 
     let sql = ctx
         .session
-        .select_top_sql(&schema_name, &table_name, None, limit, 0);
+        .select_top_sql(&schema_name, &table_name, None, limit, 0, None);
     let result = ctx.session.run_read_only_query(&sql).await?;
 
     Ok(ToolOutcome {

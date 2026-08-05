@@ -360,10 +360,13 @@ pub trait DbSession: Send + Sync {
     /// read from a write (CTEs, `; DROP ...`, etc. all defeat a text check).
     async fn run_read_only_query(&self, sql: &str) -> Result<QueryResult, DbError>;
 
-    /// Build the `SELECT * FROM table [WHERE filter] LIMIT n [OFFSET m]` used by
-    /// the table browser. `filter` is a user-authored predicate (the WHERE bar),
-    /// inserted verbatim. `offset` paginates (0 for the first page).
-    /// Centralizing this keeps all generated SQL in the backend.
+    /// Build the `SELECT * FROM table [WHERE filter] [ORDER BY col] LIMIT n
+    /// [OFFSET m]` used by the table browser. `filter` is a user-authored
+    /// predicate (the WHERE bar), inserted verbatim. `offset` paginates (0
+    /// for the first page). `sort` is `(column, descending)` — sorting is
+    /// applied by the database itself so it covers every row in the table,
+    /// not just whichever page is currently loaded. Centralizing this keeps
+    /// all generated SQL in the backend.
     fn select_top_sql(
         &self,
         schema: &str,
@@ -371,6 +374,7 @@ pub trait DbSession: Send + Sync {
         filter: Option<&str>,
         limit: u32,
         offset: u32,
+        sort: Option<(&str, bool)>,
     ) -> String;
 
     /// Apply an edit to exactly one row via a primary-key-scoped `UPDATE`.

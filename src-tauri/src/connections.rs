@@ -145,6 +145,14 @@ pub struct LastConnection {
     #[serde(default)]
     pub engine: Engine,
     pub params: ConnectionParams,
+    /// The saved connection this came from, if any — threaded back through
+    /// launch's auto-reconnect (`connect`'s `connection_id` argument) so a
+    /// saved, tagged connection doesn't silently come back up as an
+    /// unlinked ad-hoc session on every restart. `None` for a connection
+    /// that was never saved. `#[serde(default)]` so records written before
+    /// this field existed still deserialize.
+    #[serde(default)]
+    pub id: Option<String>,
 }
 
 /// Reads/writes the single "last connection" record.

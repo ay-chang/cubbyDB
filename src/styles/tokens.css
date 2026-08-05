@@ -507,8 +507,12 @@
   --scrollbar-thumb-hover: #464d5c;
   --on-accent: #ffffff;
 
-  --text: #abb2bf;
-  --text-muted: #7f848e;
+  /* Same call as Dark's own --text above: the theme's authentic Atom/VS Code
+     value (#abb2bf) still read as dim against the actual dark surface here,
+     so this goes all the way to pure white too, with --text-muted brightened
+     to match. */
+  --text: #ffffff;
+  --text-muted: #c3c8d6;
   --text-faint: #5c6370;
   /* Brightened from the initial pass, which shifted these by the same delta
      as the surface/border recalibration above — that preserved their

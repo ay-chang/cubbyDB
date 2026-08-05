@@ -124,6 +124,7 @@ pub async fn connect(
             name: name.clone(),
             engine,
             params: params.clone(),
+            id: connection_id.clone(),
         }) {
             eprintln!("[cubbydb] failed to persist last connection: {e}");
         }
@@ -185,6 +186,7 @@ pub async fn reconnect_session(
         name: name.clone(),
         engine,
         params: params.clone(),
+        id: connection_id.clone(),
     }) {
         eprintln!("[cubbydb] failed to persist last connection: {e}");
     }
@@ -378,6 +380,8 @@ pub async fn select_top_sql(
     filter: Option<String>,
     limit: Option<u32>,
     offset: Option<u32>,
+    sort_column: Option<String>,
+    sort_desc: Option<bool>,
 ) -> Result<String, DbError> {
     let active = state.active.lock().await;
     let active = active.get(&session_id).ok_or_else(DbError::not_connected)?;
@@ -387,6 +391,9 @@ pub async fn select_top_sql(
         filter.as_deref(),
         limit.unwrap_or(DEFAULT_ROW_LIMIT),
         offset.unwrap_or(0),
+        sort_column
+            .as_deref()
+            .map(|c| (c, sort_desc.unwrap_or(false))),
     ))
 }
 

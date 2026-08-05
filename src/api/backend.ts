@@ -121,6 +121,8 @@ export function selectTopSql(
   filter?: string | null,
   limit?: number,
   offset?: number,
+  sortColumn?: string | null,
+  sortDesc?: boolean,
 ): Promise<string> {
   return invoke("select_top_sql", {
     sessionId,
@@ -129,6 +131,8 @@ export function selectTopSql(
     filter: filter ?? null,
     limit: limit ?? null,
     offset: offset ?? null,
+    sortColumn: sortColumn ?? null,
+    sortDesc: sortDesc ?? null,
   });
 }
 

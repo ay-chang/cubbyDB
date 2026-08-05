@@ -78,6 +78,14 @@ export interface QueryTab {
    * page via `LIMIT/OFFSET`. Absent (treated as 0) for `query` tabs.
    */
   page?: number;
+  /**
+   * For `table` tabs: the column currently sorted on, if any. Applied as a
+   * real `ORDER BY` in the backend (see `tableSql`) rather than sorted
+   * client-side, so it covers every row in the table, not just the page
+   * that happens to be loaded.
+   */
+  sortColumn?: string | null;
+  sortDesc?: boolean;
 }
 
 /** How many rows one page of the table browser shows. */
@@ -1052,6 +1060,11 @@ interface AppStore {
 
   // --- pagination (table tabs) ---
   setTablePage: (tabId: string, page: number) => Promise<void>;
+  /** Sort a `table` tab by a column, applied as a real `ORDER BY` in the
+   *  backend (covers the whole table, not just the loaded page) — resets
+   *  back to the first page since the row ordering has changed. `column:
+   *  null` clears the sort back to the table's natural order. */
+  setTableSort: (tabId: string, column: string | null, desc: boolean) => Promise<void>;
 
   // --- history ---
   toggleHistory: () => void;
@@ -1683,8 +1696,18 @@ function tableSql(
   table: string,
   filter: string | null,
   page: number,
+  sort?: { column: string; desc: boolean } | null,
 ): Promise<string> {
-  return api.selectTopSql(sessionId, schema, table, filter, PAGE_SIZE, page * PAGE_SIZE);
+  return api.selectTopSql(
+    sessionId,
+    schema,
+    table,
+    filter,
+    PAGE_SIZE,
+    page * PAGE_SIZE,
+    sort?.column ?? null,
+    sort?.desc ?? false,
+  );
 }
 
 /** Locate which connection owns a given tab id (tabs are only ever looked up
@@ -2074,7 +2097,7 @@ export const useStore = create<AppStore>((set, get) => {
           get().restoreTabsOnLaunch ? loadPersistedTabs() : null;
 
         await get().connectTo(
-          { params: last.params, name: last.name },
+          { params: last.params, name: last.name, id: last.id ?? undefined },
           { rememberAsLast: false },
         );
 
@@ -2674,12 +2697,15 @@ export const useStore = create<AppStore>((set, get) => {
       // Regenerate the table query with the WHERE predicate in the backend.
       // Changing the filter resets to the first page. `runTab` itself guards
       // against discarding unsaved edits.
+      const sort =
+        tab.sortColumn != null ? { column: tab.sortColumn, desc: tab.sortDesc ?? false } : null;
       const sql = await tableSql(
         slot.sessionId,
         tab.source.schema,
         tab.source.table,
         filter.trim() || null,
         0,
+        sort,
       );
       set((s) => ({
         connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
@@ -3043,16 +3069,45 @@ export const useStore = create<AppStore>((set, get) => {
       if (!tab.source) return;
       const next = Math.max(0, page);
       if (next === (tab.page ?? 0)) return;
+      const sort =
+        tab.sortColumn != null ? { column: tab.sortColumn, desc: tab.sortDesc ?? false } : null;
       const sql = await tableSql(
         slot.sessionId,
         tab.source.schema,
         tab.source.table,
         tab.filter?.trim() || null,
         next,
+        sort,
       );
       set((s) => ({
         connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
           tabs.map((t) => (t.id === tabId ? { ...t, sql, page: next } : t)),
+        ),
+      }));
+      await get().runTab(tabId);
+    },
+
+    async setTableSort(tabId, column, desc) {
+      const owner = findTabOwner(get().connections, tabId);
+      if (!owner || owner.tab.running) return;
+      const { connectionId, slot, tab } = owner;
+      if (!tab.source) return;
+      if (tab.sortColumn === column && (tab.sortDesc ?? false) === desc) return;
+      // Sorting changes which rows land on which page, so — like changing
+      // the filter — this always resets back to the first page.
+      const sql = await tableSql(
+        slot.sessionId,
+        tab.source.schema,
+        tab.source.table,
+        tab.filter?.trim() || null,
+        0,
+        column != null ? { column, desc } : null,
+      );
+      set((s) => ({
+        connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+          tabs.map((t) =>
+            t.id === tabId ? { ...t, sql, page: 0, sortColumn: column, sortDesc: desc } : t,
+          ),
         ),
       }));
       await get().runTab(tabId);

@@ -283,6 +283,7 @@ impl DbSession for PostgresSession {
         filter: Option<&str>,
         limit: u32,
         offset: u32,
+        sort: Option<(&str, bool)>,
     ) -> String {
         let mut sql = format!(
             "SELECT * FROM {}.{}",
@@ -295,6 +296,13 @@ impl DbSession for PostgresSession {
                 sql.push_str("\nWHERE ");
                 sql.push_str(f);
             }
+        }
+        if let Some((column, desc)) = sort {
+            sql.push_str(&format!(
+                "\nORDER BY {} {}",
+                quote_ident(column),
+                if desc { "DESC" } else { "ASC" }
+            ));
         }
         sql.push_str(&format!("\nLIMIT {limit}"));
         if offset > 0 {
@@ -1802,21 +1810,33 @@ mod tests {
         eprintln!("zero-match update_row error path ok: {}", no_match.message);
 
         // --- Pagination: select_top_sql builds LIMIT/OFFSET correctly ---
-        let p0 = session.select_top_sql("public", "cubbydb_edit_test", None, 500, 0);
+        let p0 = session.select_top_sql("public", "cubbydb_edit_test", None, 500, 0, None);
         assert!(p0.contains("LIMIT 500"));
         assert!(!p0.contains("OFFSET"), "page 0 must not add an OFFSET");
-        let p1 = session.select_top_sql("public", "cubbydb_edit_test", None, 500, 500);
+        let p1 = session.select_top_sql("public", "cubbydb_edit_test", None, 500, 500, None);
         assert!(p1.contains("LIMIT 500 OFFSET 500"));
         eprintln!("pagination SQL ok: {p1:?}");
 
+        // Sorting is pushed down as a real ORDER BY, not applied client-side.
+        let sorted = session.select_top_sql(
+            "public",
+            "cubbydb_edit_test",
+            None,
+            500,
+            0,
+            Some(("id", true)),
+        );
+        assert!(sorted.contains("ORDER BY \"id\" DESC"));
+        eprintln!("sort SQL ok: {sorted:?}");
+
         // If the seeded `widgets` table (1200 rows) is present, page through it.
         if let Ok(page0) = session
-            .run_query(&session.select_top_sql("public", "widgets", None, 500, 0))
+            .run_query(&session.select_top_sql("public", "widgets", None, 500, 0, None))
             .await
         {
             assert_eq!(page0.rows.len(), 500, "first page should be full");
             let page2 = session
-                .run_query(&session.select_top_sql("public", "widgets", None, 500, 1000))
+                .run_query(&session.select_top_sql("public", "widgets", None, 500, 1000, None))
                 .await
                 .expect("third page");
             assert_eq!(page2.rows.len(), 200, "last page should hold the remainder");

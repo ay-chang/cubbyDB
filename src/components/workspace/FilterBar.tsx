@@ -21,15 +21,32 @@ import { singleQuoteKeymap } from "./smartQuotes";
 const filterEditorTheme = EditorView.theme({
   "&": { fontSize: "12.5px", backgroundColor: "transparent" },
   ".cm-scroller": { fontFamily: "var(--font-mono)", overflow: "hidden" },
-  // A couple px of right padding, not 0 — with `overflow: hidden` above, a
-  // cursor sitting exactly at the end of the text (the common case while
-  // typing) has no room to render and gets clipped, invisibly, since typing
-  // itself doesn't depend on the cursor being visible. CodeMirror's own base
-  // theme reserves the same buffer for this exact reason.
-  ".cm-content": { padding: "0 3px 0 0", caretColor: "var(--accent)" },
+  // A couple px of padding on *both* sides, not just the right — with
+  // `overflow: hidden` above, a cursor sitting exactly at the start or end
+  // of the text has no room to render and gets clipped, invisibly, since
+  // neither typing nor arrowing back to it depends on the cursor being
+  // visible. The cursor's own CSS (CodeMirror's base theme) gives it a
+  // `margin-left: -0.6px` to center it on the character boundary, so even
+  // position 0 — no left padding at all — pokes just past `.cm-content`'s
+  // own edge into the clipped zone. Originally only the right side carried
+  // this buffer (CodeMirror's own base theme reserves the same one there),
+  // which fixed the end-of-text case but left position 0 clipped exactly
+  // the same way.
+  ".cm-content": { padding: "0 3px 0 2px", caretColor: "var(--accent)" },
   ".cm-line": { padding: 0 },
   "&.cm-focused": { outline: "none" },
   ".cm-cursor": { borderLeftColor: "var(--accent)" },
+  // CodeMirror's own base theme hides `.cm-cursor` by default and only shows
+  // it via `&.cm-focused > .cm-scroller > .cm-cursorLayer .cm-cursor` — a
+  // selector that requires `.cm-scroller` to be a *direct* child of the
+  // focused `.cm-editor` root. That held for the multi-line SQL editor, but
+  // this compact single-line instance never matched it (the caret was there
+  // the whole time, just permanently `display: none`d) — typing worked fine
+  // since that never depended on the cursor being visible. A broader
+  // descendant selector (`.cm-focused .cm-cursor`, no `>`) still only
+  // matches while actually focused, so it hides again on blur exactly like
+  // the original, just without depending on that exact nesting.
+  "&.cm-focused .cm-cursor": { display: "block" },
   // Selection colors come from the shared `cubbySelectionTheme` below — see
   // its comment for why they can't just be set here.
 });
@@ -116,6 +133,25 @@ export function FilterBar({ tab }: { tab: QueryTab }) {
         if (update.docChanged && update.state.doc.length === 0) {
           requestAnimationFrame(() => update.view.requestMeasure());
         }
+      }),
+      // The cursor's `drawSelection` layer only ever redraws itself in
+      // response to an actual transaction that changes the doc, the
+      // selection, or the geometry (`cursorLayer.update` in CodeMirror's own
+      // source gates on exactly those three) — a bare DOM focus event isn't
+      // one of those, so `view.requestMeasure()` on focus (a prior attempt
+      // at this fix) never actually re-triggered that layer, only the
+      // view's own generic measure pass. This editor mounts (and does its
+      // one and only unforced draw) inside a header that's still settling
+      // its final flex layout in that same paint, so that first draw
+      // computes an empty/invalid cursor rect and never gets revisited —
+      // typing happens to work because *that* is a real doc-changing
+      // transaction. Re-dispatching the current selection on focus is a
+      // no-op to the document but *is* a real transaction, so it forces the
+      // same redraw typing does, now that the field is actually laid out.
+      EditorView.domEventHandlers({
+        focus: (_event, view) => {
+          view.dispatch({ selection: view.state.selection });
+        },
       }),
     ],
     [sqlNamespace, tab.source?.schema, tab.source?.table],
