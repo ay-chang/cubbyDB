@@ -930,6 +930,7 @@
    own chrome is made to disappear into it (see `filterEditorTheme`). */
 .filter-bar__input {
   width: 100%;
+  min-width: 0;
   height: 28px;
   display: flex;
   align-items: center;
@@ -946,6 +947,7 @@
 }
 .filter-bar__input .cm-editor {
   width: 100%;
+  min-width: 0;
   height: 100%;
 }
 .filter-bar__input .cm-placeholder {
