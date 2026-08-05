@@ -8,7 +8,7 @@ use crate::db::DbError;
 
 pub async fn run_sql(ctx: &ToolContext<'_>, input: &Value) -> Result<ToolOutcome, DbError> {
     let sql = arg_str(input, "sql")?;
-    let result = ctx.session.run_read_only_query(&sql).await?;
+    let result = ctx.db.run_query(&sql).await?;
     Ok(ToolOutcome {
         content: summarize_for_model(&result),
         trace: ToolTrace {
@@ -39,7 +39,7 @@ pub async fn explain_query(ctx: &ToolContext<'_>, input: &Value) -> Result<ToolO
     let options = if analyze { "ANALYZE, FORMAT JSON" } else { "FORMAT JSON" };
     let explain_sql = format!("EXPLAIN ({options}) {sql}");
 
-    let result = ctx.session.run_read_only_query(&explain_sql).await?;
+    let result = ctx.db.run_query(&explain_sql).await?;
     Ok(ToolOutcome {
         content: summarize_for_model(&result),
         trace: ToolTrace {

@@ -841,10 +841,10 @@ pub async fn ai_chat(
             let mut active = app_state.active.lock().await;
             {
                 let session = active.get(&session_id).ok_or_else(DbError::not_connected)?;
-                let ctx = crate::ai::tools::ToolContext {
-                    session: session.session.as_ref(),
-                    schema: schema_ref,
-                };
+                let ctx = crate::ai::tools::ToolContext::new(
+                    session.session.as_ref(),
+                    schema_ref,
+                );
                 match crate::ai::tools::execute(&ctx, &name, &input).await {
                     Err(e) if e.kind == DbErrorKind::Connection => { /* retry below */ }
                     other => return other,
@@ -852,10 +852,10 @@ pub async fn ai_chat(
             }
             reconnect_in_place(&mut active, &session_id, app_state).await?;
             let session = active.get(&session_id).ok_or_else(DbError::not_connected)?;
-            let ctx = crate::ai::tools::ToolContext {
-                session: session.session.as_ref(),
-                schema: schema_ref,
-            };
+            let ctx = crate::ai::tools::ToolContext::new(
+                session.session.as_ref(),
+                schema_ref,
+            );
             crate::ai::tools::execute(&ctx, &name, &input).await
         }
     };

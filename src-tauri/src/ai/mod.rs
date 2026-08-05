@@ -14,6 +14,7 @@ pub mod config;
 pub mod openai;
 pub mod prompt;
 pub mod provider;
+mod read_only;
 pub mod tools;
 
 use serde::{Deserialize, Serialize};

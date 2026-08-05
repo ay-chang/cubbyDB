@@ -346,7 +346,7 @@ where
 
     let workspace = data_dir.join("codex-workspace");
     let instructions = format!(
-        "{system_prompt}\n\nYou are running inside CubbyDB, not a coding workspace. Use only the supplied database tools. Never use shell, filesystem, network, MCP, skills, or code-editing tools. Do not ask for approval."
+        "{system_prompt}\n\nYou are running inside CubbyDB, not a coding workspace. Your only permitted capabilities are the supplied read-only database tools. Never use shell, filesystem, network, MCP, skills, code-editing tools, or any mutation command. Do not ask for approval. If a capability is not one of the supplied tools, it is unavailable."
     );
     let thread = client
         .request(
@@ -354,9 +354,15 @@ where
             json!({
                 "model": model,
                 "cwd": workspace,
+                "runtimeWorkspaceRoots": [workspace],
                 "approvalPolicy": "never",
                 "sandbox": "read-only",
                 "ephemeral": true,
+                "environments": [],
+                "selectedCapabilityRoots": [],
+                "config": {
+                    "web_search": "disabled",
+                },
                 "baseInstructions": instructions,
                 "dynamicTools": dynamic_tools,
             }),

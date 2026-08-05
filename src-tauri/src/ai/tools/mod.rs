@@ -1,9 +1,10 @@
 //! The agent's tool surface: schemas the model sees, and the dispatch that
 //! runs them.
 //!
-//! Everything that touches the database goes through `DbSession`, and every
-//! statement any tool here executes goes through `run_read_only_query` — the
-//! `BEGIN READ ONLY … ROLLBACK` wrapper in `db/postgres.rs`.
+//! Everything that touches the database goes through `ReadOnlyDb`, a narrow
+//! capability wrapper that does not expose any mutation method. Every SQL
+//! statement then passes the driver's command allowlist and the PostgreSQL
+//! `BEGIN READ ONLY … ROLLBACK` boundary.
 //!
 //! Session *lifecycle* deliberately stays out of here: `commands::ai_chat`
 //! owns the lock and the reconnect-on-drop retry, and hands this module a
@@ -15,14 +16,24 @@ pub mod sql;
 use serde_json::{json, Value};
 
 use super::ToolTrace;
+use crate::ai::read_only::ReadOnlyDb;
 use crate::db::{DbError, DbErrorKind, DbSession, SchemaNode};
 
 /// What a tool needs to do its job. `schema` is the tree the frontend
 /// already fetched and passed in with the turn — no tool re-reads the
 /// catalog for it.
 pub struct ToolContext<'a> {
-    pub session: &'a dyn DbSession,
-    pub schema: &'a [SchemaNode],
+    db: ReadOnlyDb<'a>,
+    schema: &'a [SchemaNode],
+}
+
+impl<'a> ToolContext<'a> {
+    pub fn new(session: &'a dyn DbSession, schema: &'a [SchemaNode]) -> Self {
+        Self {
+            db: ReadOnlyDb::new(session),
+            schema,
+        }
+    }
 }
 
 /// One tool's result: what the model reads, and what the user sees in the
@@ -45,7 +56,7 @@ pub fn tool_definitions() -> Value {
     json!([
         {
             "name": "run_sql",
-            "description": "Execute a single read-only SQL SELECT against the connected PostgreSQL database and return its rows. Use this whenever the answer depends on actual data rather than structure. The statement runs inside a READ ONLY transaction that is always rolled back, so INSERT/UPDATE/DELETE/DDL will be rejected.",
+            "description": "Execute exactly one read-only SELECT-family statement against the connected PostgreSQL database and return its rows. Use this whenever the answer depends on actual data rather than structure. A hardcoded command allowlist rejects writes, DDL, session commands, and multiple statements before execution; PostgreSQL then runs the statement in a READ ONLY transaction that is always rolled back.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -92,7 +103,7 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "explain_query",
-            "description": "Return the PostgreSQL query plan for a statement. Use this for questions about performance, index usage, or why a query is slow. Set analyze to true to execute the statement and report real timings instead of estimates.",
+            "description": "Return the PostgreSQL query plan for one read-only SELECT-family statement. Use this for questions about performance, index usage, or why a query is slow. Set analyze to true to execute only that read-only statement and report real timings instead of estimates. Write, DDL, session, and multi-statement input is rejected before execution.",
             "input_schema": {
                 "type": "object",
                 "properties": {

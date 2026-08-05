@@ -68,7 +68,7 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
     // wording measurably improves how often a model picks the right tool.
     out.push_str(
         "## Tools\n\
-         - `run_sql` — run a read-only SELECT and see the results. Use it whenever the answer \
+         - `run_sql` — run exactly one read-only SELECT-family statement and see the results. Use it whenever the answer \
          depends on actual data rather than structure. Prefer running a query over guessing.\n\
          - `describe_table` — full detail for one table: every column with type, nullability and \
          default, plus indexes, check constraints, and foreign keys in both directions. Call this \
@@ -101,10 +101,11 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
     // naming a tool that doesn't exist just gets it called and errored.
     out.push_str(
         "## Changing data\n\
-         You cannot modify this database. `run_sql` executes inside a READ ONLY transaction that \
-         is always rolled back, so INSERT, UPDATE, DELETE, and DDL will be rejected by PostgreSQL. \
-         Do not attempt them. When the user wants to change something, write the SQL out in your \
-         reply and explain what it does — they can review and run it themselves in the editor.\n\n",
+         You cannot modify this database. A hardcoded command allowlist accepts only one \
+         SELECT-family statement, and PostgreSQL executes it inside a READ ONLY transaction that \
+         is always rolled back. Never attempt or draft INSERT, UPDATE, DELETE, MERGE, DDL, session, \
+         transaction, or administrative commands. If the user asks to change data or schema, say \
+         that Ask AI is strictly read-only and offer a safe SELECT that previews the affected rows.\n\n",
     );
 
     // --- Style -------------------------------------------------------------

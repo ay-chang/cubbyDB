@@ -307,8 +307,11 @@ code comments or AGENTS.md's architecture section.
 - **Ask AI** is a schema-aware chat for writing SQL and answering questions
   about the connected database. It can inspect table structure, search the
   schema, sample rows, run read-only SQL, and explain queries; every database
-  tool runs in a read-only transaction and its activity is shown beneath the
-  answer
+  tool is compile-time limited to a dedicated read-only database capability.
+  Model-generated SQL must be exactly one SELECT-family statement: a
+  hardcoded allowlist rejects writes, DDL, session/transaction commands, and
+  multi-statement input before PostgreSQL runs it in an always-rolled-back
+  read-only transaction. Tool activity is shown beneath the answer
 - Supports three independent provider routes: bring-your-own **Anthropic** and
   **OpenAI** API keys, plus the user's current **Codex CLI / ChatGPT
   subscription** login. Switching providers does not replace the others'
@@ -317,8 +320,10 @@ code comments or AGENTS.md's architecture section.
   model discovery, and inference to the official Codex CLI. An existing
   `codex login` is recognized automatically; when it is not signed in,
   Settings can start the official browser login. CubbyDB never reads or copies
-  Codex tokens. Each turn is ephemeral and runs in an empty CubbyDB-owned
-  workspace with approvals disabled and a read-only sandbox
+  Codex tokens. Each turn is ephemeral, runs in an empty CubbyDB-owned
+  workspace with approvals disabled and a read-only sandbox, and disables web
+  search, external environments, and capability roots so the supplied
+  read-only database tools are its only useful capabilities
 - Available models are fetched live from the selected provider after its API
   key is saved or its Codex account is signed in. New installs default to
   Anthropic for backward compatibility. OpenAI and Codex use explicit GPT-5.6

@@ -34,10 +34,7 @@ pub async fn describe_table(ctx: &ToolContext<'_>, input: &Value) -> Result<Tool
     let schema_name = arg_str(input, "schema")?;
     let table_name = arg_str(input, "table")?;
 
-    let structure = ctx
-        .session
-        .table_structure(&schema_name, &table_name)
-        .await?;
+    let structure = ctx.db.table_structure(&schema_name, &table_name).await?;
 
     let mut out = format!("{schema_name}.{table_name}\n\nColumns:\n");
     for c in &structure.columns {
@@ -128,10 +125,8 @@ pub async fn sample_rows(ctx: &ToolContext<'_>, input: &Value) -> Result<ToolOut
         .map(|n| (n as u32).clamp(1, MAX_SAMPLE_ROWS))
         .unwrap_or(DEFAULT_SAMPLE_ROWS);
 
-    let sql = ctx
-        .session
-        .select_top_sql(&schema_name, &table_name, None, limit, 0, None);
-    let result = ctx.session.run_read_only_query(&sql).await?;
+    let sql = ctx.db.select_top_sql(&schema_name, &table_name, limit);
+    let result = ctx.db.run_query(&sql).await?;
 
     Ok(ToolOutcome {
         content: summarize_for_model(&result),
