@@ -1,6 +1,6 @@
 [package]
 name = "cubbydb"
-version = "0.1.7"
+version = "0.1.8"
 description = "A modern, restrained desktop Postgres client."
 authors = ["CubbyDB contributors"]
 license = "MIT"
