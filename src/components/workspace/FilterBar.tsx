@@ -32,7 +32,10 @@ const filterEditorTheme = EditorView.theme({
   // this buffer (CodeMirror's own base theme reserves the same one there),
   // which fixed the end-of-text case but left position 0 clipped exactly
   // the same way.
-  ".cm-content": { padding: "0 3px 0 2px", caretColor: "var(--accent)" },
+  // Four vertical pixels center the 1.4-line-height text inside the field's
+  // 26px inner box; the asymmetric horizontal padding preserves the caret
+  // breathing room described above.
+  ".cm-content": { padding: "4px 3px 4px 2px", caretColor: "var(--accent)" },
   ".cm-line": { padding: 0 },
   "&.cm-focused": { outline: "none" },
   ".cm-cursor": { borderLeftColor: "var(--accent)" },
@@ -163,6 +166,7 @@ export function FilterBar({ tab }: { tab: QueryTab }) {
       <div className="filter-bar__input-wrap">
         <div className="filter-bar__input">
           <CodeMirror
+            className="filter-bar__editor"
             value={draft}
             onChange={setDraft}
             extensions={extensions}
