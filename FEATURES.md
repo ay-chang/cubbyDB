@@ -309,15 +309,25 @@ code comments or AGENTS.md's architecture section.
   schema, sample rows, run read-only SQL, and explain queries; every database
   tool runs in a read-only transaction and its activity is shown beneath the
   answer
-- Supports independent bring-your-own **Anthropic** and **OpenAI** API keys.
-  Switching providers does not replace the other provider's credentials or
-  model choice
+- Supports three independent provider routes: bring-your-own **Anthropic** and
+  **OpenAI** API keys, plus the user's current **Codex CLI / ChatGPT
+  subscription** login. Switching providers does not replace the others'
+  credentials or model choices
+- Codex subscription mode delegates sign-in, credential storage, refresh,
+  model discovery, and inference to the official Codex CLI. An existing
+  `codex login` is recognized automatically; when it is not signed in,
+  Settings can start the official browser login. CubbyDB never reads or copies
+  Codex tokens. Each turn is ephemeral and runs in an empty CubbyDB-owned
+  workspace with approvals disabled and a read-only sandbox
 - Available models are fetched live from the selected provider after its API
-  key is saved. New installs default to Anthropic for backward compatibility.
-  OpenAI uses explicit GPT-5.6 model IDs instead of the ambiguous `gpt-5.6`
-  alias and defaults to **GPT-5.6 Luna**
-- OpenAI has a separate persisted reasoning-level selector. The choices follow
-  the selected model's advertised capabilities, and the default is **medium**
+  key is saved or its Codex account is signed in. New installs default to
+  Anthropic for backward compatibility. OpenAI and Codex use explicit GPT-5.6
+  model IDs instead of the ambiguous `gpt-5.6` alias; both default to
+  **GPT-5.6 Luna**
+- OpenAI and Codex have a separate persisted reasoning-level selector. The
+  choices follow the selected model's advertised capabilities, and the
+  default is **medium**. Codex passes both the chosen model and effort to its
+  app-server turn
 - API keys stay in CubbyDB's local app-data config with `0600` permissions on
   Unix and are never returned to the frontend after saving. They are currently
   stored as plaintext, matching saved database passwords
@@ -381,8 +391,9 @@ here — it's all frontend-only).
   stands out from the data below), wrap-vs-truncate long text, NULL display
   style
 - **Appearance → Editor**: font, font size, line-wrap
-- **AI Assistant**: provider, separate API-key settings, provider model, and
-  OpenAI reasoning level
+- **AI Assistant**: provider, separate API-key settings, current Codex
+  subscription status/browser sign-in, provider model, and OpenAI/Codex
+  reasoning level
 - **Keyboard Shortcuts**: a read-only catalog of every shortcut CubbyDB
   supports, grouped by where it's active (General, SQL editor, Table filter,
   Results grid, Command palette, Connection screen, Saved queries panel) —

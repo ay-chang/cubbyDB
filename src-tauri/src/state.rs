@@ -76,4 +76,8 @@ impl AppState {
     pub fn ai_chat_store(&self) -> AiChatStore {
         AiChatStore::new(&self.data_dir)
     }
+
+    pub fn data_dir(&self) -> &std::path::Path {
+        &self.data_dir
+    }
 }
