@@ -354,6 +354,12 @@ export function clearAiConfig(provider: AiProvider): Promise<AiConfigStatus> {
   return invoke("clear_ai_config", { provider });
 }
 
+/** Opens Codex CLI's browser-based ChatGPT subscription login. CubbyDB never
+ * receives the resulting access or refresh token. */
+export function startCodexLogin(): Promise<void> {
+  return invoke("start_codex_login");
+}
+
 export function saveAiModel(
   provider: AiProvider,
   model: string,
@@ -369,7 +375,7 @@ export function saveAiReasoningEffort(
   return invoke("save_ai_reasoning_effort", { provider, effort });
 }
 
-/** Live-fetches models available to the active API key. */
+/** Live-fetches models available to the active API key or Codex account. */
 export function listAiModels(): Promise<AiModelInfo[]> {
   return invoke("list_ai_models");
 }

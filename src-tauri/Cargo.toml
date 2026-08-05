@@ -29,7 +29,7 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 
 # Async runtime for the database driver.
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "process", "io-util", "time"] }
 
 # Postgres driver. `tokio-postgres` is the well-maintained async client. We read
 # result sets with `simple_query`, which returns every value in its canonical

@@ -1087,6 +1087,7 @@ interface AppStore {
   saveAiProvider: (provider: AiProvider) => Promise<void>;
   saveAiConfig: (provider: AiProvider, apiKey: string) => Promise<void>;
   clearAiConfig: (provider: AiProvider) => Promise<void>;
+  startCodexLogin: () => Promise<void>;
   saveAiModel: (
     provider: AiProvider,
     model: string,
@@ -3352,11 +3353,24 @@ export const useStore = create<AppStore>((set, get) => {
     },
 
     async clearAiConfig(provider) {
-      const name = provider === "openai" ? "OpenAI" : "Anthropic";
+      const name = provider === "openai" ? "OpenAI" : provider === "codex" ? "Codex" : "Anthropic";
       const ok = await requestConfirm(`Remove the saved ${name} API key?`, "Remove key");
       if (!ok) return;
       const aiConfig = await api.clearAiConfig(provider);
       set({ aiConfig });
+    },
+
+    async startCodexLogin() {
+      await api.startCodexLogin();
+      // The browser callback completes inside the Codex CLI process. Poll its
+      // public account status so Settings updates without ever handling a token.
+      for (let attempt = 0; attempt < 120; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1_500));
+        const aiConfig = await api.getAiConfig();
+        set({ aiConfig });
+        if (aiConfig.codexAuthenticated) return;
+      }
+      throw new Error("ChatGPT sign-in did not finish in time. You can try again.");
     },
 
     async saveAiModel(provider, model, supportsEffort) {

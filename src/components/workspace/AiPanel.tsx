@@ -82,11 +82,15 @@ export function AiPanel() {
 
   const providerName = aiConfig?.provider === "openai"
     ? "OpenAI"
-    : "Anthropic";
+    : aiConfig?.provider === "codex"
+      ? "Codex"
+      : "Anthropic";
   const hasKey = aiConfig
-    ? aiConfig.provider === "openai"
-      ? aiConfig.openaiKeySet
-      : aiConfig.anthropicKeySet
+    ? aiConfig.provider === "codex"
+      ? aiConfig.codexAuthenticated
+      : aiConfig.provider === "openai"
+        ? aiConfig.openaiKeySet
+        : aiConfig.anthropicKeySet
     : true;
 
   const send = () => {
@@ -160,7 +164,9 @@ export function AiPanel() {
             )}
             {aiConfig && !hasKey && (
               <p className="ai-panel__empty">
-                {`Add an ${providerName} API key to use the AI assistant. `}
+                {aiConfig.provider === "codex"
+                  ? "Sign in with ChatGPT to use your Codex subscription. "
+                  : `Add an ${providerName} API key to use the AI assistant. `}
                 <span
                   className="ai-panel__settings-link"
                   onClick={() => openSettings("aiAssistant")}

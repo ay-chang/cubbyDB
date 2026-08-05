@@ -286,6 +286,7 @@ function AiAssistantSection() {
   const clearAiConfig = useStore((s) => s.clearAiConfig);
   const saveAiModel = useStore((s) => s.saveAiModel);
   const saveAiReasoningEffort = useStore((s) => s.saveAiReasoningEffort);
+  const startCodexLogin = useStore((s) => s.startCodexLogin);
 
   useEffect(() => {
     if (!aiConfig) void loadAiConfig();
@@ -294,16 +295,24 @@ function AiAssistantSection() {
   // Never pre-filled with the real (never-returned) key.
   const [keyInput, setKeyInput] = useState("");
   const [saving, setSaving] = useState(false);
+  const [codexSigningIn, setCodexSigningIn] = useState(false);
+  const [codexLoginError, setCodexLoginError] = useState<string | null>(null);
 
   const provider = aiConfig?.provider ?? "anthropic";
-  const providerName = provider === "openai" ? "OpenAI" : "Anthropic";
-  const keySet = provider === "openai"
-    ? (aiConfig?.openaiKeySet ?? false)
-    : (aiConfig?.anthropicKeySet ?? false);
-  const currentModel = provider === "openai"
-    ? aiConfig?.openaiModel
-    : aiConfig?.anthropicModel;
-  const currentReasoningEffort = aiConfig?.openaiReasoningEffort ?? "medium";
+  const providerName = provider === "openai" ? "OpenAI" : provider === "codex" ? "Codex" : "Anthropic";
+  const keySet = provider === "codex"
+    ? (aiConfig?.codexAuthenticated ?? false)
+    : provider === "openai"
+      ? (aiConfig?.openaiKeySet ?? false)
+      : (aiConfig?.anthropicKeySet ?? false);
+  const currentModel = provider === "codex"
+    ? aiConfig?.codexModel
+    : provider === "openai"
+      ? aiConfig?.openaiModel
+      : aiConfig?.anthropicModel;
+  const currentReasoningEffort = provider === "codex"
+    ? (aiConfig?.codexReasoningEffort ?? "medium")
+    : (aiConfig?.openaiReasoningEffort ?? "medium");
 
   // Live-fetched, not persisted anywhere — just what populates the dropdown.
   // Re-runs once a key becomes available (e.g. right after `handleSave`
@@ -313,7 +322,9 @@ function AiAssistantSection() {
   const [modelsError, setModelsError] = useState<string | null>(null);
   const selectedModelInfo = modelOptions.find((model) => model.id === currentModel);
   const fallbackReasoningEfforts: AiReasoningEffort[] = currentModel?.startsWith("gpt-5.6")
-    ? ["none", "low", "medium", "high", "xhigh", "max"]
+    ? provider === "codex"
+      ? ["low", "medium", "high", "xhigh", "max"]
+      : ["none", "low", "medium", "high", "xhigh", "max"]
     : ["low", "medium", "high"];
   const reasoningOptions = selectedModelInfo?.supportedReasoningEfforts.length
     ? selectedModelInfo.supportedReasoningEfforts
@@ -357,12 +368,25 @@ function AiAssistantSection() {
     );
   };
 
+  const handleCodexLogin = () => {
+    setCodexSigningIn(true);
+    setCodexLoginError(null);
+    void startCodexLogin().then(
+      () => setCodexSigningIn(false),
+      (error) => {
+        setCodexLoginError(errorMessage(error));
+        setCodexSigningIn(false);
+      },
+    );
+  };
+
   return (
     <div className="settings-section">
       <div className="settings-field">
         <div className="settings-field__label">Provider</div>
         <div className="settings-field__desc">
-          Choose what powers Ask AI. API keys and model choices stay separate for each provider.
+          Choose what powers Ask AI. API keys and model choices stay separate, while Codex uses
+          your ChatGPT subscription through the official Codex CLI.
         </div>
         <select
           className="settings-select"
@@ -374,10 +398,44 @@ function AiAssistantSection() {
         >
           <option value="anthropic">Anthropic</option>
           <option value="openai">OpenAI</option>
+          <option value="codex">Codex subscription</option>
         </select>
       </div>
 
-      <div className="settings-field settings-field--spaced">
+      {provider === "codex" ? (
+        <div className="settings-field settings-field--spaced">
+          <div className="settings-field__label">ChatGPT account</div>
+          <div className="settings-field__desc">
+            {aiConfig?.codexAuthenticated
+              ? `Signed in${aiConfig.codexEmail ? ` as ${aiConfig.codexEmail}` : ""}${aiConfig.codexPlanType ? ` (${aiConfig.codexPlanType} plan)` : ""}.`
+              : aiConfig?.codexError
+                ? aiConfig.codexError
+                : "Sign in in your browser to use the Codex allowance included with your ChatGPT plan."}
+            {aiConfig?.codexVersion ? ` Codex CLI ${aiConfig.codexVersion}.` : ""}
+          </div>
+          {!aiConfig?.codexAuthenticated && (
+            <div className="settings-select-row">
+              <button
+                className="btn btn--primary"
+                onClick={handleCodexLogin}
+                disabled={codexSigningIn || (aiConfig !== null && !aiConfig.codexInstalled)}
+              >
+                {codexSigningIn ? "Waiting for browser…" : "Sign in with ChatGPT"}
+              </button>
+            </div>
+          )}
+          {codexLoginError && (
+            <div className="settings-field__desc settings-field__desc--error">
+              {codexLoginError}
+            </div>
+          )}
+          <div className="settings-field__desc">
+            Uses the current Codex CLI profile, just like running `codex` in a terminal. Codex
+            stores and refreshes the credential; CubbyDB never reads or copies the token.
+          </div>
+        </div>
+      ) : (
+        <div className="settings-field settings-field--spaced">
           <div className="settings-field__label">{providerName} API key</div>
           <div className="settings-field__desc">
             Powers the Ask AI panel. The key stays in CubbyDB's local app-data file and is never
@@ -414,7 +472,8 @@ function AiAssistantSection() {
               </button>
             )}
           </div>
-      </div>
+        </div>
+      )}
 
       <div className="settings-field settings-field--spaced">
         <div className="settings-field__label">Model</div>
@@ -422,7 +481,9 @@ function AiAssistantSection() {
           {modelsError
             ? `Couldn't load the model list: ${modelsError}`
             : !keySet
-              ? "Add an API key above to choose a model."
+              ? provider === "codex"
+                ? "Sign in with ChatGPT above to choose a model."
+                : "Add an API key above to choose a model."
               : modelsLoading
                 ? "Loading available models…"
                 : `Fetched live from ${providerName} — new models show up here automatically.`}
@@ -441,7 +502,7 @@ function AiAssistantSection() {
             void (async () => {
               await saveAiModel(provider, id, picked?.supportsEffort ?? false);
               if (
-                provider === "openai" &&
+                (provider === "openai" || provider === "codex") &&
                 picked?.supportedReasoningEfforts.length &&
                 !picked.supportedReasoningEfforts.includes(currentReasoningEffort)
               ) {
@@ -467,12 +528,12 @@ function AiAssistantSection() {
         </select>
       </div>
 
-      {provider === "openai" && (
+      {(provider === "openai" || provider === "codex") && (
         <div className="settings-field settings-field--spaced">
           <div className="settings-field__label">Reasoning level</div>
           <div className="settings-field__desc">
             Stored separately from the model. Higher levels can improve difficult answers but take
-            longer and use more of your API allowance.
+            longer and use more of your API or Codex allowance.
           </div>
           <select
             className="settings-select"

@@ -9,6 +9,7 @@
 //! frontend speaks, the row-truncation rule, and the iteration cap.
 
 pub mod chats;
+pub mod codex;
 pub mod config;
 pub mod openai;
 pub mod prompt;
@@ -81,7 +82,8 @@ pub struct AiChatResult {
     pub trace: Vec<ToolTrace>,
 }
 
-/// Reasoning levels supported by OpenAI's Responses API.
+/// Reasoning levels shared by OpenAI's Responses API and Codex app-server.
+/// Codex advertises the subset each model supports through `model/list`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ReasoningEffort {
@@ -109,7 +111,8 @@ impl ReasoningEffort {
     }
 }
 
-/// One model currently on offer for the Settings picker.
+/// One model currently on offer for the Settings picker, including the exact
+/// reasoning levels advertised by Codex app-server when available.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelInfo {
@@ -119,8 +122,8 @@ pub struct ModelInfo {
     /// Haiku 4.5 rejects it with a 400 — so it's captured at pick time and
     /// persisted alongside the choice rather than assumed.
     pub supports_effort: bool,
-    /// Documented safe effort values for an OpenAI API model. Empty for
-    /// providers without this selector.
+    /// Exact effort values advertised by Codex, or the documented safe set
+    /// for an OpenAI API model. Empty for providers without this selector.
     pub supported_reasoning_efforts: Vec<ReasoningEffort>,
     pub default_reasoning_effort: Option<ReasoningEffort>,
 }

@@ -255,7 +255,7 @@ export interface SavedQuery {
 
 // --- AI assistant ------------------------------------------------------------
 
-export type AiProvider = "anthropic" | "openai";
+export type AiProvider = "anthropic" | "openai" | "codex";
 export type AiReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
 /** What Settings shows for the AI assistant — the real API key never comes
@@ -269,6 +269,14 @@ export interface AiConfigStatus {
   openaiKeySet: boolean;
   openaiModel: string;
   openaiReasoningEffort: AiReasoningEffort;
+  codexModel: string;
+  codexReasoningEffort: AiReasoningEffort;
+  codexInstalled: boolean;
+  codexAuthenticated: boolean;
+  codexEmail: string | null;
+  codexPlanType: string | null;
+  codexVersion: string | null;
+  codexError: string | null;
 }
 
 /** One model the active provider currently offers, for the Settings model picker —

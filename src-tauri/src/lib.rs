@@ -65,6 +65,7 @@ pub fn run() {
             commands::save_ai_provider,
             commands::save_ai_config,
             commands::clear_ai_config,
+            commands::start_codex_login,
             commands::save_ai_model,
             commands::save_ai_reasoning_effort,
             commands::list_ai_models,

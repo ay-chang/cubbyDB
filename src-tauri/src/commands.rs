@@ -666,7 +666,24 @@ pub async fn clear_query_history(state: State<'_, AppState>) -> Result<(), DbErr
 #[tauri::command]
 pub async fn get_ai_config(state: State<'_, AppState>) -> Result<AiConfigStatus, DbError> {
     let config = state.ai_config_store().get()?;
-    Ok((&config).into())
+    Ok(ai_config_status(state.inner(), &config).await)
+}
+
+async fn ai_config_status(
+    state: &AppState,
+    config: &crate::ai::config::AiConfig,
+) -> AiConfigStatus {
+    let mut status: AiConfigStatus = config.into();
+    if config.provider() == AiProvider::Codex {
+        let codex = crate::ai::codex::status(state.data_dir()).await;
+        status.codex_installed = codex.installed;
+        status.codex_authenticated = codex.authenticated;
+        status.codex_email = codex.email;
+        status.codex_plan_type = codex.plan_type;
+        status.codex_version = codex.version;
+        status.codex_error = codex.error;
+    }
+    status
 }
 
 /// Selects which configured provider handles new assistant turns.
@@ -676,7 +693,7 @@ pub async fn save_ai_provider(
     provider: AiProvider,
 ) -> Result<AiConfigStatus, DbError> {
     let config = state.ai_config_store().set_provider(provider)?;
-    Ok((&config).into())
+    Ok(ai_config_status(state.inner(), &config).await)
 }
 
 /// Saves a provider API key without returning the secret to the frontend.
@@ -687,7 +704,7 @@ pub async fn save_ai_config(
     api_key: String,
 ) -> Result<AiConfigStatus, DbError> {
     let config = state.ai_config_store().set_api_key(provider, api_key)?;
-    Ok((&config).into())
+    Ok(ai_config_status(state.inner(), &config).await)
 }
 
 #[tauri::command]
@@ -696,7 +713,7 @@ pub async fn clear_ai_config(
     provider: AiProvider,
 ) -> Result<AiConfigStatus, DbError> {
     let config = state.ai_config_store().clear_api_key(provider)?;
-    Ok((&config).into())
+    Ok(ai_config_status(state.inner(), &config).await)
 }
 
 #[tauri::command]
@@ -709,7 +726,7 @@ pub async fn save_ai_model(
     let config = state
         .ai_config_store()
         .set_model(provider, model, supports_effort)?;
-    Ok((&config).into())
+    Ok(ai_config_status(state.inner(), &config).await)
 }
 
 #[tauri::command]
@@ -721,7 +738,14 @@ pub async fn save_ai_reasoning_effort(
     let config = state
         .ai_config_store()
         .set_reasoning_effort(provider, effort)?;
-    Ok((&config).into())
+    Ok(ai_config_status(state.inner(), &config).await)
+}
+
+/// Starts the Codex CLI's official ChatGPT OAuth flow. Codex owns the browser
+/// callback and credential storage; CubbyDB receives no token.
+#[tauri::command]
+pub async fn start_codex_login(state: State<'_, AppState>) -> Result<(), DbError> {
+    crate::ai::codex::start_login(state.data_dir()).await
 }
 
 /// Live-fetches the models the saved API key currently has access to, for
@@ -742,6 +766,7 @@ pub async fn list_ai_models(state: State<'_, AppState>) -> Result<Vec<ModelInfo>
                 .ok_or_else(|| DbError::new(DbErrorKind::Internal, "Save an API key first."))?;
             crate::ai::openai::list_models(api_key).await
         }
+        AiProvider::Codex => crate::ai::codex::list_models(state.data_dir()).await,
     }
 }
 
@@ -761,18 +786,23 @@ pub async fn ai_chat(
 ) -> Result<AiChatResult, DbError> {
     let config = state.ai_config_store().get()?;
     let provider = config.provider();
-    let api_key = config.api_key().ok_or_else(|| {
-        let provider_name = match provider {
-            AiProvider::Anthropic => "Anthropic",
-            AiProvider::Openai => "OpenAI",
-        };
-        DbError::new(
-            DbErrorKind::Internal,
-            format!(
-                "No {provider_name} API key configured. Add one in Settings \u{2192} AI Assistant."
-            ),
-        )
-    })?.to_string();
+    let api_key = if provider == AiProvider::Codex {
+        None
+    } else {
+        Some(config.api_key().ok_or_else(|| {
+            let provider_name = match provider {
+                AiProvider::Anthropic => "Anthropic",
+                AiProvider::Openai => "OpenAI",
+                AiProvider::Codex => unreachable!(),
+            };
+            DbError::new(
+                DbErrorKind::Internal,
+                format!(
+                    "No {provider_name} API key configured. Add one in Settings \u{2192} AI Assistant."
+                ),
+            )
+        })?.to_string())
+    };
 
     // Server version and connection name come from the live session so the
     // prompt can state what the model is actually talking to. Read and
@@ -836,7 +866,7 @@ pub async fn ai_chat(
     match provider {
         AiProvider::Anthropic => {
             crate::ai::provider::run_loop(
-                &api_key,
+                api_key.as_deref().unwrap_or_default(),
                 model,
                 send_effort,
                 system_prompt,
@@ -847,9 +877,20 @@ pub async fn ai_chat(
         }
         AiProvider::Openai => {
             crate::ai::openai::run_loop(
-                &api_key,
+                api_key.as_deref().unwrap_or_default(),
                 model,
                 send_effort.then_some(reasoning_effort.unwrap_or_default()),
+                system_prompt,
+                messages,
+                run_tool,
+            )
+            .await
+        }
+        AiProvider::Codex => {
+            crate::ai::codex::run_loop(
+                state.data_dir(),
+                model,
+                reasoning_effort.unwrap_or_default(),
                 system_prompt,
                 messages,
                 run_tool,

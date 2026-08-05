@@ -24,6 +24,7 @@ pub enum AiProvider {
     #[default]
     Anthropic,
     Openai,
+    Codex,
 }
 
 /// The AI assistant's full config. Never sent to the frontend as-is — see
@@ -57,6 +58,12 @@ pub struct AiConfig {
     pub openai_model_supports_effort: Option<bool>,
     #[serde(default)]
     pub openai_reasoning_effort: Option<ReasoningEffort>,
+    /// Codex subscription access is authenticated by the Codex CLI, so no
+    /// credential is stored in this config — only the model choice.
+    #[serde(default)]
+    pub codex_model: Option<String>,
+    #[serde(default)]
+    pub codex_reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl AiConfig {
@@ -68,6 +75,7 @@ impl AiConfig {
         match self.provider {
             AiProvider::Anthropic => self.anthropic_api_key.as_deref(),
             AiProvider::Openai => self.openai_api_key.as_deref(),
+            AiProvider::Codex => None,
         }
     }
 
@@ -84,6 +92,10 @@ impl AiConfig {
                 .as_deref()
                 .filter(|model| *model != "gpt-5.6")
                 .unwrap_or(crate::ai::openai::DEFAULT_MODEL),
+            AiProvider::Codex => self
+                .codex_model
+                .as_deref()
+                .unwrap_or(crate::ai::codex::DEFAULT_MODEL),
         }
     }
 
@@ -91,6 +103,7 @@ impl AiConfig {
         match self.provider {
             AiProvider::Anthropic => None,
             AiProvider::Openai => Some(self.openai_reasoning_effort.unwrap_or_default()),
+            AiProvider::Codex => Some(self.codex_reasoning_effort.unwrap_or_default()),
         }
     }
 
@@ -100,6 +113,7 @@ impl AiConfig {
         match self.provider {
             AiProvider::Anthropic => self.anthropic_model_supports_effort.unwrap_or(false),
             AiProvider::Openai => self.openai_model_supports_effort.unwrap_or(true),
+            AiProvider::Codex => false,
         }
     }
 }
@@ -117,6 +131,14 @@ pub struct AiConfigStatus {
     pub openai_key_set: bool,
     pub openai_model: String,
     pub openai_reasoning_effort: ReasoningEffort,
+    pub codex_model: String,
+    pub codex_reasoning_effort: ReasoningEffort,
+    pub codex_installed: bool,
+    pub codex_authenticated: bool,
+    pub codex_email: Option<String>,
+    pub codex_plan_type: Option<String>,
+    pub codex_version: Option<String>,
+    pub codex_error: Option<String>,
 }
 
 impl From<&AiConfig> for AiConfigStatus {
@@ -135,6 +157,17 @@ impl From<&AiConfig> for AiConfigStatus {
                 .filter(|model| model != "gpt-5.6")
                 .unwrap_or_else(|| crate::ai::openai::DEFAULT_MODEL.to_string()),
             openai_reasoning_effort: config.openai_reasoning_effort.unwrap_or_default(),
+            codex_model: config
+                .codex_model
+                .clone()
+                .unwrap_or_else(|| crate::ai::codex::DEFAULT_MODEL.to_string()),
+            codex_reasoning_effort: config.codex_reasoning_effort.unwrap_or_default(),
+            codex_installed: false,
+            codex_authenticated: false,
+            codex_email: None,
+            codex_plan_type: None,
+            codex_version: None,
+            codex_error: None,
         }
     }
 }
@@ -185,6 +218,12 @@ impl AiConfigStore {
         match provider {
             AiProvider::Anthropic => config.anthropic_api_key = Some(api_key),
             AiProvider::Openai => config.openai_api_key = Some(api_key),
+            AiProvider::Codex => {
+                return Err(DbError::new(
+                    DbErrorKind::Internal,
+                    "Codex uses ChatGPT sign-in, not an API key.",
+                ));
+            }
         }
         self.write(&config)?;
         Ok(config)
@@ -195,6 +234,7 @@ impl AiConfigStore {
         match provider {
             AiProvider::Anthropic => config.anthropic_api_key = None,
             AiProvider::Openai => config.openai_api_key = None,
+            AiProvider::Codex => {}
         }
         self.write(&config)?;
         Ok(config)
@@ -217,6 +257,7 @@ impl AiConfigStore {
                 config.openai_model = Some(model);
                 config.openai_model_supports_effort = Some(supports_effort);
             }
+            AiProvider::Codex => config.codex_model = Some(model),
         }
         self.write(&config)?;
         Ok(config)
@@ -237,6 +278,7 @@ impl AiConfigStore {
                 ));
             }
             AiProvider::Openai => config.openai_reasoning_effort = Some(effort),
+            AiProvider::Codex => config.codex_reasoning_effort = Some(effort),
         }
         self.write(&config)?;
         Ok(config)
@@ -286,7 +328,9 @@ mod tests {
         assert_eq!(value["provider"], "openai");
         assert_eq!(value["anthropicKeySet"], true);
         assert_eq!(value["openaiKeySet"], true);
+        assert_eq!(value["codexAuthenticated"], false);
         assert_eq!(value["openaiReasoningEffort"], "medium");
+        assert_eq!(value["codexReasoningEffort"], "medium");
         assert!(!value.to_string().contains("secret"));
     }
 
