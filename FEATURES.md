@@ -302,6 +302,28 @@ code comments or AGENTS.md's architecture section.
 - Clearable; capped on disk (~1000 entries). The panel's own fetch/display
   limit is separately configurable (Settings → General)
 
+## AI assistant
+
+- **Ask AI** is a schema-aware chat for writing SQL and answering questions
+  about the connected database. It can inspect table structure, search the
+  schema, sample rows, run read-only SQL, and explain queries; every database
+  tool runs in a read-only transaction and its activity is shown beneath the
+  answer
+- Supports independent bring-your-own **Anthropic** and **OpenAI** API keys.
+  Switching providers does not replace the other provider's credentials or
+  model choice
+- Available models are fetched live from the selected provider after its API
+  key is saved. New installs default to Anthropic for backward compatibility.
+  OpenAI uses explicit GPT-5.6 model IDs instead of the ambiguous `gpt-5.6`
+  alias and defaults to **GPT-5.6 Luna**
+- OpenAI has a separate persisted reasoning-level selector. The choices follow
+  the selected model's advertised capabilities, and the default is **medium**
+- API keys stay in CubbyDB's local app-data config with `0600` permissions on
+  Unix and are never returned to the frontend after saving. They are currently
+  stored as plaintext, matching saved database passwords
+- Chats are scoped to the saved connection and persist across restarts. An
+  ad-hoc unsaved connection keeps chat history only for its current session
+
 ## Tabs & session persistence
 
 - Five tab kinds: "query" (editor + results), "table" (opened from the
@@ -340,8 +362,9 @@ code comments or AGENTS.md's architecture section.
 
 ## Settings
 
-Three top-level tabs: **General** (behavior), **Appearance** (with
-**Interface** / **Table** / **Editor** sub-tabs), and **Keyboard Shortcuts**.
+Four top-level tabs: **General** (behavior), **Appearance** (with
+**Interface** / **Table** / **Editor** sub-tabs), **AI Assistant**, and
+**Keyboard Shortcuts**.
 Every setting applies live and is persisted (no restart needed for anything in
 here — it's all frontend-only).
 
@@ -358,6 +381,8 @@ here — it's all frontend-only).
   stands out from the data below), wrap-vs-truncate long text, NULL display
   style
 - **Appearance → Editor**: font, font size, line-wrap
+- **AI Assistant**: provider, separate API-key settings, provider model, and
+  OpenAI reasoning level
 - **Keyboard Shortcuts**: a read-only catalog of every shortcut CubbyDB
   supports, grouped by where it's active (General, SQL editor, Table filter,
   Results grid, Command palette, Connection screen, Saved queries panel) —

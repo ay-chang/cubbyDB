@@ -15,6 +15,8 @@ import type {
   AiChatSummary,
   AiConfigStatus,
   AiMessage,
+  AiProvider,
+  AiReasoningEffort,
   ColumnValue,
   ConnectionParams,
   DbError,
@@ -1082,9 +1084,18 @@ interface AppStore {
    *  waits for the reply, and appends both. */
   sendAiMessage: (text: string) => Promise<void>;
   loadAiConfig: () => Promise<void>;
-  saveAiConfig: (apiKey: string) => Promise<void>;
-  clearAiConfig: () => Promise<void>;
-  saveAiModel: (model: string, supportsEffort: boolean) => Promise<void>;
+  saveAiProvider: (provider: AiProvider) => Promise<void>;
+  saveAiConfig: (provider: AiProvider, apiKey: string) => Promise<void>;
+  clearAiConfig: (provider: AiProvider) => Promise<void>;
+  saveAiModel: (
+    provider: AiProvider,
+    model: string,
+    supportsEffort: boolean,
+  ) => Promise<void>;
+  saveAiReasoningEffort: (
+    provider: AiProvider,
+    effort: AiReasoningEffort,
+  ) => Promise<void>;
   /** Flips between the conversation and the saved-chats list; loads the list
    *  on open, same "toggle then refetch" idiom as `toggleSavedQueries`. */
   toggleAiHistoryView: () => void;
@@ -3330,20 +3341,31 @@ export const useStore = create<AppStore>((set, get) => {
       }
     },
 
-    async saveAiConfig(apiKey) {
-      const aiConfig = await api.saveAiConfig(apiKey);
+    async saveAiProvider(provider) {
+      const aiConfig = await api.saveAiProvider(provider);
       set({ aiConfig });
     },
 
-    async clearAiConfig() {
-      const ok = await requestConfirm("Remove the saved Anthropic API key?", "Remove key");
+    async saveAiConfig(provider, apiKey) {
+      const aiConfig = await api.saveAiConfig(provider, apiKey);
+      set({ aiConfig });
+    },
+
+    async clearAiConfig(provider) {
+      const name = provider === "openai" ? "OpenAI" : "Anthropic";
+      const ok = await requestConfirm(`Remove the saved ${name} API key?`, "Remove key");
       if (!ok) return;
-      const aiConfig = await api.clearAiConfig();
+      const aiConfig = await api.clearAiConfig(provider);
       set({ aiConfig });
     },
 
-    async saveAiModel(model, supportsEffort) {
-      const aiConfig = await api.saveAiModel(model, supportsEffort);
+    async saveAiModel(provider, model, supportsEffort) {
+      const aiConfig = await api.saveAiModel(provider, model, supportsEffort);
+      set({ aiConfig });
+    },
+
+    async saveAiReasoningEffort(provider, effort) {
+      const aiConfig = await api.saveAiReasoningEffort(provider, effort);
       set({ aiConfig });
     },
 

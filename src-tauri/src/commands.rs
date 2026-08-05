@@ -7,9 +7,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use tauri::State;
 
-use crate::ai::{ActiveTableRef, AiChatResult, ChatMessage, ModelInfo};
 use crate::ai::chats::{AiChatSummary, AiChatThread};
-use crate::ai::config::AiConfigStatus;
+use crate::ai::config::{AiConfigStatus, AiProvider};
+use crate::ai::{ActiveTableRef, AiChatResult, ChatMessage, ModelInfo, ReasoningEffort};
 use crate::connections::{LastConnection, SavedConnection};
 use crate::db::{
     driver_for, ColumnValue, ConnectionInfo, ConnectionParams, DbError, DbErrorKind, DeleteImpact,
@@ -500,7 +500,11 @@ pub async fn get_delete_impact(
     let mut active = state.active.lock().await;
     {
         let session = active.get(&session_id).ok_or_else(DbError::not_connected)?;
-        match session.session.delete_impact(&schema, &table, &primary_keys).await {
+        match session
+            .session
+            .delete_impact(&schema, &table, &primary_keys)
+            .await
+        {
             Err(e) if e.kind == DbErrorKind::Connection => { /* retry below */ }
             other => return other,
         }
@@ -527,7 +531,11 @@ pub async fn delete_rows_cascade(
     let mut active = state.active.lock().await;
     {
         let session = active.get(&session_id).ok_or_else(DbError::not_connected)?;
-        match session.session.delete_row_cascade(&schema, &table, &primary_keys).await {
+        match session
+            .session
+            .delete_row_cascade(&schema, &table, &primary_keys)
+            .await
+        {
             Err(e) if e.kind == DbErrorKind::Connection => { /* retry below */ }
             other => return other,
         }
@@ -661,29 +669,58 @@ pub async fn get_ai_config(state: State<'_, AppState>) -> Result<AiConfigStatus,
     Ok((&config).into())
 }
 
-/// Sets the Anthropic API key.
+/// Selects which configured provider handles new assistant turns.
+#[tauri::command]
+pub async fn save_ai_provider(
+    state: State<'_, AppState>,
+    provider: AiProvider,
+) -> Result<AiConfigStatus, DbError> {
+    let config = state.ai_config_store().set_provider(provider)?;
+    Ok((&config).into())
+}
+
+/// Saves a provider API key without returning the secret to the frontend.
 #[tauri::command]
 pub async fn save_ai_config(
     state: State<'_, AppState>,
+    provider: AiProvider,
     api_key: String,
 ) -> Result<AiConfigStatus, DbError> {
-    let config = state.ai_config_store().set_api_key(api_key)?;
+    let config = state.ai_config_store().set_api_key(provider, api_key)?;
     Ok((&config).into())
 }
 
 #[tauri::command]
-pub async fn clear_ai_config(state: State<'_, AppState>) -> Result<AiConfigStatus, DbError> {
-    let config = state.ai_config_store().clear_api_key()?;
+pub async fn clear_ai_config(
+    state: State<'_, AppState>,
+    provider: AiProvider,
+) -> Result<AiConfigStatus, DbError> {
+    let config = state.ai_config_store().clear_api_key(provider)?;
     Ok((&config).into())
 }
 
 #[tauri::command]
 pub async fn save_ai_model(
     state: State<'_, AppState>,
+    provider: AiProvider,
     model: String,
     supports_effort: bool,
 ) -> Result<AiConfigStatus, DbError> {
-    let config = state.ai_config_store().set_model(model, supports_effort)?;
+    let config = state
+        .ai_config_store()
+        .set_model(provider, model, supports_effort)?;
+    Ok((&config).into())
+}
+
+#[tauri::command]
+pub async fn save_ai_reasoning_effort(
+    state: State<'_, AppState>,
+    provider: AiProvider,
+    effort: ReasoningEffort,
+) -> Result<AiConfigStatus, DbError> {
+    let config = state
+        .ai_config_store()
+        .set_reasoning_effort(provider, effort)?;
     Ok((&config).into())
 }
 
@@ -692,15 +729,25 @@ pub async fn save_ai_model(
 #[tauri::command]
 pub async fn list_ai_models(state: State<'_, AppState>) -> Result<Vec<ModelInfo>, DbError> {
     let config = state.ai_config_store().get()?;
-    let api_key = config
-        .api_key()
-        .ok_or_else(|| DbError::new(DbErrorKind::Internal, "Save an API key first."))?;
-    crate::ai::provider::list_models(api_key).await
+    match config.provider() {
+        AiProvider::Anthropic => {
+            let api_key = config
+                .api_key()
+                .ok_or_else(|| DbError::new(DbErrorKind::Internal, "Save an API key first."))?;
+            crate::ai::provider::list_models(api_key).await
+        }
+        AiProvider::Openai => {
+            let api_key = config
+                .api_key()
+                .ok_or_else(|| DbError::new(DbErrorKind::Internal, "Save an API key first."))?;
+            crate::ai::openai::list_models(api_key).await
+        }
+    }
 }
 
 /// One AI turn: builds the schema-aware system prompt from the schema tree
 /// the frontend already has (no need to re-fetch it here), then runs
-/// Anthropic's tool-call loop, executing any requested SQL read-only against
+/// the selected provider's tool-call loop, executing requested SQL read-only against
 /// this session's live connection (see `db::DbSession::run_read_only_query`)
 /// with the same reconnect-on-drop retry every other session-scoped command
 /// uses.
@@ -713,15 +760,19 @@ pub async fn ai_chat(
     messages: Vec<ChatMessage>,
 ) -> Result<AiChatResult, DbError> {
     let config = state.ai_config_store().get()?;
-    let api_key = config
-        .api_key()
-        .ok_or_else(|| {
-            DbError::new(
-                DbErrorKind::Internal,
-                "No API key configured. Add one in Settings \u{2192} AI Assistant.",
-            )
-        })?
-        .to_string();
+    let provider = config.provider();
+    let api_key = config.api_key().ok_or_else(|| {
+        let provider_name = match provider {
+            AiProvider::Anthropic => "Anthropic",
+            AiProvider::Openai => "OpenAI",
+        };
+        DbError::new(
+            DbErrorKind::Internal,
+            format!(
+                "No {provider_name} API key configured. Add one in Settings \u{2192} AI Assistant."
+            ),
+        )
+    })?.to_string();
 
     // Server version and connection name come from the live session so the
     // prompt can state what the model is actually talking to. Read and
@@ -781,15 +832,31 @@ pub async fn ai_chat(
 
     let model = config.model();
     let send_effort = config.model_supports_effort();
-    crate::ai::provider::run_loop(
-        &api_key,
-        model,
-        send_effort,
-        system_prompt,
-        messages,
-        run_tool,
-    )
-    .await
+    let reasoning_effort = config.reasoning_effort();
+    match provider {
+        AiProvider::Anthropic => {
+            crate::ai::provider::run_loop(
+                &api_key,
+                model,
+                send_effort,
+                system_prompt,
+                messages,
+                run_tool,
+            )
+            .await
+        }
+        AiProvider::Openai => {
+            crate::ai::openai::run_loop(
+                &api_key,
+                model,
+                send_effort.then_some(reasoning_effort.unwrap_or_default()),
+                system_prompt,
+                messages,
+                run_tool,
+            )
+            .await
+        }
+    }
 }
 
 // --- Saved AI chats -----------------------------------------------------------

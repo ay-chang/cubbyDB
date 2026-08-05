@@ -3,11 +3,7 @@
 //!
 //! Everything that touches the database goes through `DbSession`, and every
 //! statement any tool here executes goes through `run_read_only_query` — the
-//! `BEGIN READ ONLY … ROLLBACK` wrapper in `db/postgres.rs`. That is the only
-//! thing standing between a model-generated statement and the user's data,
-//! and it is a property of *this module having no other way to reach the
-//! database*, not of any single call site remembering to be careful. Adding a
-//! tool that calls `run_query` (the read-write path) would silently undo it.
+//! `BEGIN READ ONLY … ROLLBACK` wrapper in `db/postgres.rs`.
 //!
 //! Session *lifecycle* deliberately stays out of here: `commands::ai_chat`
 //! owns the lock and the reconnect-on-drop retry, and hands this module a
@@ -36,16 +32,15 @@ pub struct ToolOutcome {
     pub trace: ToolTrace,
 }
 
-/// The `tools` array sent to Anthropic on every turn.
+/// Neutral tool definitions. Anthropic consumes `input_schema` directly;
+/// OpenAI maps it to the Responses API's `parameters` field.
 ///
 /// Descriptions state *when* to reach for a tool, not just what it does —
 /// that phrasing measurably improves tool selection, and it's the same
 /// guidance the system prompt repeats.
 ///
-/// This value must be byte-identical across the turns of a conversation:
-/// tools render ahead of everything else in the request, so a description
-/// that varied per call would invalidate the prompt cache for the entire
-/// prefix behind it.
+/// This value must be byte-identical across the turns of a conversation so
+/// provider-side prompt caching can reuse the stable prefix.
 pub fn tool_definitions() -> Value {
     json!([
         {
@@ -116,7 +111,11 @@ pub fn tool_definitions() -> Value {
 /// Runs one tool call. An unknown tool name is an error returned *to the
 /// model* by the caller rather than a panic — models occasionally invent
 /// names, and the loop recovers fine when told so.
-pub async fn execute(ctx: &ToolContext<'_>, name: &str, input: &Value) -> Result<ToolOutcome, DbError> {
+pub async fn execute(
+    ctx: &ToolContext<'_>,
+    name: &str,
+    input: &Value,
+) -> Result<ToolOutcome, DbError> {
     match name {
         "run_sql" => sql::run_sql(ctx, input).await,
         "explain_query" => sql::explain_query(ctx, input).await,

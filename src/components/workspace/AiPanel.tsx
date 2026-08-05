@@ -80,7 +80,14 @@ export function AiPanel() {
     el.style.height = `${Math.min(el.scrollHeight + border, AI_INPUT_MAX_HEIGHT)}px`;
   }, [draft]);
 
-  const hasKey = aiConfig ? aiConfig.anthropicKeySet : true;
+  const providerName = aiConfig?.provider === "openai"
+    ? "OpenAI"
+    : "Anthropic";
+  const hasKey = aiConfig
+    ? aiConfig.provider === "openai"
+      ? aiConfig.openaiKeySet
+      : aiConfig.anthropicKeySet
+    : true;
 
   const send = () => {
     const text = draft.trim();
@@ -153,7 +160,7 @@ export function AiPanel() {
             )}
             {aiConfig && !hasKey && (
               <p className="ai-panel__empty">
-                Add an Anthropic API key to use the AI assistant.{" "}
+                {`Add an ${providerName} API key to use the AI assistant. `}
                 <span
                   className="ai-panel__settings-link"
                   onClick={() => openSettings("aiAssistant")}
@@ -201,7 +208,7 @@ export function AiPanel() {
               ref={inputRef}
               className="ai-input"
               rows={1}
-              placeholder={hasKey ? "Ask a question…" : "Add an API key in Settings to start"}
+              placeholder={hasKey ? "Ask a question…" : "Configure AI in Settings to start"}
               value={draft}
               disabled={!hasKey}
               onChange={(e) => setDraft(e.target.value)}

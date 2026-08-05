@@ -46,7 +46,7 @@ postgres-native-tls = "0.5"
 # Trait objects with async methods (the database-driver abstraction).
 async-trait = "0.1"
 
-# HTTP client for the AI assistant's calls to the Anthropic API.
+# HTTP client for the AI assistant's calls to the Anthropic and OpenAI APIs.
 # native-tls (not rustls) to match the TLS story already used for Postgres.
 reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
 
