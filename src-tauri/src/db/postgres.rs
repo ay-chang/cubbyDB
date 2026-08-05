@@ -249,15 +249,16 @@ impl DbSession for PostgresSession {
     }
 
     async fn run_read_only_query(&self, sql: &str) -> Result<QueryResult, DbError> {
+        super::validate_read_only_statement(sql)?;
         let (final_sql, limit_applied) = apply_default_limit(sql, super::DEFAULT_ROW_LIMIT);
 
         // Manual BEGIN/ROLLBACK (rather than `Client::transaction()`, which
         // needs `&mut Client`) for the same `&self`-method reason as
         // `delete_row_cascade` below. This is the actual enforcement against
-        // a model-generated query attempting to mutate data: Postgres itself
-        // rejects INSERT/UPDATE/DELETE/DDL inside a READ ONLY transaction
-        // regardless of how the SQL is phrased, so nothing here needs to
-        // parse or guess at the statement's intent.
+        // a model-generated query attempting to mutate data. The conservative
+        // statement allowlist above rejects non-query commands first, while
+        // Postgres itself rejects any write that still reaches this READ ONLY
+        // transaction regardless of how the SQL is phrased.
         self.client
             .batch_execute("BEGIN READ ONLY")
             .await

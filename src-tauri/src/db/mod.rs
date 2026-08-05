@@ -9,9 +9,11 @@
 //! these two traits and registering it in [`driver_for`]; no UI code changes.
 
 mod error;
+mod read_only;
 pub mod postgres;
 
 pub use error::{DbError, DbErrorKind};
+pub(crate) use read_only::validate_read_only_statement;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -352,12 +354,12 @@ pub trait DbSession: Send + Sync {
     /// rewrites SQL.
     async fn run_query(&self, sql: &str) -> Result<QueryResult, DbError>;
 
-    /// Run a single statement read-only — used by the AI assistant to answer
-    /// data questions with model-generated SQL, which must never be trusted
-    /// to only ever contain a `SELECT`. Enforced by the driver at the
-    /// transaction level (e.g. Postgres's `BEGIN READ ONLY`, always rolled
-    /// back), not by inspecting the SQL text, which can't reliably tell a
-    /// read from a write (CTEs, `; DROP ...`, etc. all defeat a text check).
+    /// Run a single SELECT-family statement read-only — used by the AI
+    /// assistant for model-generated SQL. The driver must enforce both a
+    /// conservative command allowlist and a database-level read-only
+    /// transaction that is always rolled back. The two layers are
+    /// deliberately independent: the allowlist rejects obvious writes and
+    /// multi-statement input early; PostgreSQL remains the final authority.
     async fn run_read_only_query(&self, sql: &str) -> Result<QueryResult, DbError>;
 
     /// Build the `SELECT * FROM table [WHERE filter] [ORDER BY col] LIMIT n
