@@ -9,6 +9,7 @@ import type {
   TabKind,
 } from "../../state/store";
 import type { HistoryEntry, SavedQuery, TableKind } from "../../types";
+import { SETTINGS_SECTIONS } from "../common/settingsSearch";
 
 export type PaletteScope = "all" | "tables" | "columns" | "scripts" | "history";
 
@@ -145,37 +146,6 @@ const ACTIONS: Array<{
   },
 ];
 
-const SETTINGS: Array<{
-  section: SettingsSection;
-  label: string;
-  description: string;
-  keybindingId?: KeybindingId;
-  showWhenEmpty?: boolean;
-}> = [
-  {
-    section: "general",
-    label: "Open Settings",
-    description: "General application settings",
-    keybindingId: "workspace.openSettings",
-    showWhenEmpty: true,
-  },
-  {
-    section: "appearance",
-    label: "Appearance settings",
-    description: "Theme, table, sidebar, and editor appearance",
-  },
-  {
-    section: "aiAssistant",
-    label: "AI Assistant settings",
-    description: "Provider, model, and reasoning configuration",
-  },
-  {
-    section: "shortcuts",
-    label: "Keyboard Shortcut settings",
-    description: "Review and customize keyboard commands",
-  },
-];
-
 function scoreItem<T extends PaletteItem>(
   item: Omit<T, "match">,
   query: string,
@@ -235,16 +205,16 @@ function buildActionItems(query: string): PaletteItem[] {
     );
     if (result) scored.push(result);
   }
-  for (const definition of SETTINGS) {
-    if (!query && !definition.showWhenEmpty) continue;
+  for (const definition of SETTINGS_SECTIONS) {
+    if (!query && definition.id !== "general") continue;
     const result = scoreItem<Extract<PaletteItem, { kind: "setting" }>>(
       {
-        id: `setting:${definition.section}`,
+        id: `setting:${definition.id}`,
         kind: "setting",
-        section: definition.section,
-        label: definition.label,
+        section: definition.id,
+        label: definition.id === "general" ? "Open Settings" : `${definition.label} settings`,
         description: definition.description,
-        keybindingId: definition.keybindingId,
+        keybindingId: definition.id === "general" ? "workspace.openSettings" : undefined,
       },
       query,
       [definition.label, definition.description, "settings preferences"],

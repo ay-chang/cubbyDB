@@ -387,11 +387,18 @@ code comments or AGENTS.md's architecture section.
 ## Settings
 
 Four top-level tabs: **General** (behavior), **Appearance** (with
-**Interface** / **Table** / **Editor** sub-tabs), **AI Assistant**, and
+**Interface** / **Table** / **Sidebar** / **Editor** sub-tabs), **AI Assistant**, and
 **Keyboard Shortcuts**.
 Every setting applies live and is persisted (no restart needed for anything in
 here — it's all frontend-only). Open Settings from the top-bar gear or with
 the fixed, platform-standard Cmd/Ctrl+, shortcut.
+
+- The Settings rail includes search across every preference, appearance
+  control, AI option, application command, and built-in keyboard interaction.
+  Results show their section path; selecting one routes to the correct section
+  and Appearance sub-tab, scrolls to the exact control, and briefly highlights
+  it. Arrow keys and Enter work directly from the search field, while Escape
+  clears the current search
 
 - **General**: restore tabs on launch, starter SQL template, auto-refresh
   schema on connect, query-history display limit, CSV export delimiter,
