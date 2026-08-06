@@ -1,5 +1,5 @@
 import { getVersion } from "@tauri-apps/api/app";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { check as checkForUpdate, type Update } from "@tauri-apps/plugin-updater";
 
 import * as api from "../../api/backend";
@@ -14,6 +14,7 @@ import {
   isSafeBinding,
   KEYBINDING_DEFINITIONS,
   KEYBINDING_GROUPS,
+  matchesKeybinding,
   reservedBindingLabel,
   type KeybindingId,
   useKeybindingStore,
@@ -42,19 +43,17 @@ import {
   TABLE_ROW_HEIGHT_OPTIONS,
 } from "../../state/store";
 import type { NullDisplay } from "../../state/store";
-
-/** Top-level settings tabs. The rail is built to grow beyond these four. */
-type TopSection = SettingsSection;
-
-const TOP_SECTIONS: { id: TopSection; label: string }[] = [
-  { id: "general", label: "General" },
-  { id: "appearance", label: "Appearance" },
-  { id: "aiAssistant", label: "AI Assistant" },
-  { id: "shortcuts", label: "Keyboard Shortcuts" },
-];
+import { RedactedSensitiveText } from "./RedactedSensitiveText";
+import {
+  SETTINGS_SEARCH_ITEMS,
+  SETTINGS_SECTIONS,
+  searchSettings,
+  type AppearanceSettingsSub,
+  type SettingsSearchItem,
+} from "./settingsSearch";
 
 /** Sub-tabs within the Appearance section. */
-type AppearanceSub = "interface" | "table" | "sidebar" | "editor";
+type AppearanceSub = AppearanceSettingsSub;
 
 const APPEARANCE_SUBS: { id: AppearanceSub; label: string }[] = [
   { id: "interface", label: "Interface" },
@@ -64,16 +63,20 @@ const APPEARANCE_SUBS: { id: AppearanceSub; label: string }[] = [
 ];
 
 /**
- * The application settings modal, opened from the top bar. A left rail lists
- * top-level sections (General, Appearance); Appearance further splits into
- * sub-tabs (Interface, Table, Editor) shown as a strip at the top of its panel.
+ * The application settings modal, opened from the top bar. Its left rail
+ * switches top-level sections and searches the complete settings catalog;
+ * Appearance further splits into focused sub-tabs above its panel.
  */
 export function SettingsDialog() {
   const open = useStore((s) => s.settingsOpen);
   const close = useStore((s) => s.closeSettings);
   const requestedSection = useStore((s) => s.settingsSection);
-  const [section, setSection] = useState<TopSection>("appearance");
+  const [section, setSection] = useState<SettingsSection>("appearance");
   const [appearanceSub, setAppearanceSub] = useState<AppearanceSub>("table");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedResult, setSelectedResult] = useState(0);
+  const [searchTarget, setSearchTarget] = useState<{ id: string; nonce: number } | null>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
 
   // The dialog stays mounted (just hidden) between opens, so its own
   // `section` state doesn't reset on its own — `openSettings(section)`
@@ -84,11 +87,79 @@ export function SettingsDialog() {
     if (open && requestedSection) setSection(requestedSection);
   }, [open, requestedSection]);
 
+  useEffect(() => {
+    if (!open) {
+      setSearchQuery("");
+      setSearchTarget(null);
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnWindowShortcut = (event: KeyboardEvent) => {
+      if (event.repeat || !matchesKeybinding(event, "mod+w")) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      close();
+    };
+    window.addEventListener("keydown", closeOnWindowShortcut);
+    return () => window.removeEventListener("keydown", closeOnWindowShortcut);
+  }, [close, open]);
+
+  const searchableItems = useMemo(buildSettingsSearchCatalog, []);
+  const searchResults = useMemo(
+    () => searchSettings(searchableItems, searchQuery),
+    [searchQuery, searchableItems],
+  );
+
+  useEffect(() => {
+    setSelectedResult(0);
+  }, [searchQuery]);
+
+  useEffect(() => {
+    if (!searchQuery) return;
+    cardRef.current
+      ?.querySelector<HTMLElement>(`[data-settings-search-index="${selectedResult}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [searchQuery, selectedResult]);
+
+  useEffect(() => {
+    if (!searchTarget) return;
+    let targetElement: HTMLElement | null = null;
+    const frame = requestAnimationFrame(() => {
+      targetElement = cardRef.current?.querySelector<HTMLElement>(
+        `[data-setting-id="${CSS.escape(searchTarget.id)}"]`,
+      ) ?? null;
+      if (!targetElement) return;
+      targetElement.scrollIntoView({ block: "center" });
+      targetElement.classList.add("settings-search-target");
+      targetElement
+        .querySelector<HTMLElement>("button, input, select, textarea")
+        ?.focus({ preventScroll: true });
+    });
+    const timeout = window.setTimeout(() => {
+      targetElement?.classList.remove("settings-search-target");
+    }, 1400);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(timeout);
+      targetElement?.classList.remove("settings-search-target");
+    };
+  }, [appearanceSub, searchTarget, section]);
+
+  const openSearchResult = (item: SettingsSearchItem) => {
+    setSection(item.section);
+    if (item.appearanceSub) setAppearanceSub(item.appearanceSub);
+    setSearchQuery("");
+    setSearchTarget(item.targetId ? { id: item.targetId, nonce: Date.now() } : null);
+  };
+
   if (!open) return null;
 
   return (
     <div className="settings-overlay" onClick={close}>
       <div
+        ref={cardRef}
         className="settings-card"
         role="dialog"
         aria-modal="true"
@@ -97,24 +168,100 @@ export function SettingsDialog() {
       >
         <nav className="settings-rail">
           <div className="settings-rail__title caption">Settings</div>
-          {TOP_SECTIONS.map((s) => (
-            <button
-              key={s.id}
-              className={
-                "settings-rail__item" +
-                (section === s.id ? " settings-rail__item--active" : "")
-              }
-              onClick={() => setSection(s.id)}
+          <div className="settings-search">
+            <svg
+              width="13"
+              height="13"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              aria-hidden
             >
-              {s.label}
-            </button>
-          ))}
+              <circle cx="11" cy="11" r="7" />
+              <path d="m20 20-4-4" />
+            </svg>
+            <input
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search settings…"
+              aria-label="Search settings"
+              onKeyDown={(event) => {
+                if (event.key === "Escape" && searchQuery) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setSearchQuery("");
+                } else if (event.key === "ArrowDown" && searchResults.length > 0) {
+                  event.preventDefault();
+                  setSelectedResult((value) => (value + 1) % searchResults.length);
+                } else if (event.key === "ArrowUp" && searchResults.length > 0) {
+                  event.preventDefault();
+                  setSelectedResult(
+                    (value) => (value - 1 + searchResults.length) % searchResults.length,
+                  );
+                } else if (event.key === "Enter") {
+                  const result = searchResults[selectedResult];
+                  if (result) {
+                    event.preventDefault();
+                    openSearchResult(result);
+                  }
+                }
+              }}
+            />
+            {searchQuery && (
+              <button
+                className="settings-search__clear"
+                onClick={() => setSearchQuery("")}
+                title="Clear search"
+                aria-label="Clear settings search"
+              >
+                ×
+              </button>
+            )}
+          </div>
+
+          {searchQuery ? (
+            <div className="settings-search-results">
+              {searchResults.length === 0 ? (
+                <div className="settings-search-results__empty">No settings found.</div>
+              ) : (
+                searchResults.map((item, index) => (
+                  <button
+                    key={item.id}
+                    data-settings-search-index={index}
+                    className={
+                      "settings-search-result" +
+                      (index === selectedResult ? " settings-search-result--active" : "")
+                    }
+                    onMouseEnter={() => setSelectedResult(index)}
+                    onClick={() => openSearchResult(item)}
+                  >
+                    <span className="settings-search-result__label">{item.label}</span>
+                    <span className="settings-search-result__path">{item.path}</span>
+                  </button>
+                ))
+              )}
+            </div>
+          ) : (
+            SETTINGS_SECTIONS.map((s) => (
+              <button
+                key={s.id}
+                className={
+                  "settings-rail__item" +
+                  (section === s.id ? " settings-rail__item--active" : "")
+                }
+                onClick={() => setSection(s.id)}
+              >
+                {s.label}
+              </button>
+            ))
+          )}
         </nav>
 
         <div className="settings-panel">
           <div className="settings-panel__head">
             <span className="settings-panel__title">
-              {TOP_SECTIONS.find((s) => s.id === section)?.label}
+              {SETTINGS_SECTIONS.find((s) => s.id === section)?.label}
             </span>
             <button
               className="settings-panel__close"
@@ -180,7 +327,7 @@ function GeneralSection() {
 
   return (
     <div className="settings-section">
-      <div className="settings-field settings-toggle-row">
+      <div className="settings-field settings-toggle-row" data-setting-id="general.restore-tabs">
         <div>
           <div className="settings-field__label">Restore tabs on launch</div>
           <div className="settings-field__desc">
@@ -193,7 +340,7 @@ function GeneralSection() {
         />
       </div>
 
-      <div className="settings-field settings-field--spaced">
+      <div className="settings-field settings-field--spaced" data-setting-id="general.starter-sql">
         <div className="settings-field__label">Starter SQL</div>
         <div className="settings-field__desc">
           Placeholder text pre-filled in every new query tab.
@@ -207,7 +354,10 @@ function GeneralSection() {
         />
       </div>
 
-      <div className="settings-field settings-field--spaced settings-toggle-row">
+      <div
+        className="settings-field settings-field--spaced settings-toggle-row"
+        data-setting-id="general.auto-refresh"
+      >
         <div>
           <div className="settings-field__label">Auto-refresh schema</div>
           <div className="settings-field__desc">
@@ -220,7 +370,7 @@ function GeneralSection() {
         />
       </div>
 
-      <div className="settings-field settings-field--spaced">
+      <div className="settings-field settings-field--spaced" data-setting-id="general.history-limit">
         <div className="settings-field__label">Query history</div>
         <div className="settings-field__desc">
           How many recent entries the History panel fetches and shows.
@@ -238,7 +388,7 @@ function GeneralSection() {
         </select>
       </div>
 
-      <div className="settings-field settings-field--spaced">
+      <div className="settings-field settings-field--spaced" data-setting-id="general.csv-delimiter">
         <div className="settings-field__label">CSV export delimiter</div>
         <div className="settings-field__desc">
           Field separator used when exporting results to a .csv file.
@@ -257,7 +407,7 @@ function GeneralSection() {
         </select>
       </div>
 
-      <div className="settings-field settings-field--spaced">
+      <div className="settings-field settings-field--spaced" data-setting-id="general.copy-delimiter">
         <div className="settings-field__label">Row-copy delimiter</div>
         <div className="settings-field__desc">
           Field separator used when copying rows to paste elsewhere (e.g. a
@@ -277,7 +427,10 @@ function GeneralSection() {
         </select>
       </div>
 
-      <div className="settings-field settings-field--spaced settings-toggle-row">
+      <div
+        className="settings-field settings-field--spaced settings-toggle-row"
+        data-setting-id="general.version"
+      >
         <div>
           <div className="settings-field__label">Version</div>
           <div className="settings-field__desc">
@@ -318,6 +471,11 @@ function AiAssistantSection() {
     : provider === "openai"
       ? (aiConfig?.openaiKeySet ?? false)
       : (aiConfig?.anthropicKeySet ?? false);
+  const keyHint = provider === "openai"
+    ? aiConfig?.openaiKeyHint
+    : provider === "anthropic"
+      ? aiConfig?.anthropicKeyHint
+      : null;
   const currentModel = provider === "codex"
     ? aiConfig?.codexModel
     : provider === "openai"
@@ -395,7 +553,7 @@ function AiAssistantSection() {
 
   return (
     <div className="settings-section">
-      <div className="settings-field">
+      <div className="settings-field" data-setting-id="ai.provider">
         <div className="settings-field__label">Provider</div>
         <div className="settings-field__desc">
           Choose what powers Ask AI. API keys and model choices stay separate, while Codex uses
@@ -416,26 +574,58 @@ function AiAssistantSection() {
       </div>
 
       {provider === "codex" ? (
-        <div className="settings-field settings-field--spaced">
+        <div className="settings-field settings-field--spaced" data-setting-id="ai.credentials">
           <div className="settings-field__label">ChatGPT account</div>
-          <div className="settings-field__desc">
-            {aiConfig?.codexAuthenticated
-              ? `Signed in${aiConfig.codexEmail ? ` as ${aiConfig.codexEmail}` : ""}${aiConfig.codexPlanType ? ` (${aiConfig.codexPlanType} plan)` : ""}.`
-              : aiConfig?.codexError
-                ? aiConfig.codexError
-                : "Sign in in your browser to use the Codex allowance included with your ChatGPT plan."}
-            {aiConfig?.codexVersion ? ` Codex CLI ${aiConfig.codexVersion}.` : ""}
-          </div>
-          {!aiConfig?.codexAuthenticated && (
-            <div className="settings-select-row">
-              <button
-                className="btn btn--primary"
-                onClick={handleCodexLogin}
-                disabled={codexSigningIn || (aiConfig !== null && !aiConfig.codexInstalled)}
-              >
-                {codexSigningIn ? "Waiting for browser…" : "Sign in with ChatGPT"}
-              </button>
+          {aiConfig?.codexAuthenticated ? (
+            <div className="ai-credential-status ai-credential-status--set">
+              <span className="ai-credential-status__dot" aria-hidden />
+              <div className="ai-credential-status__body">
+                <div className="ai-credential-status__primary">
+                  <span>Signed in</span>
+                  {aiConfig.codexEmail && (
+                    <>
+                      <span className="ai-credential-status__separator">as</span>
+                      <RedactedSensitiveText value={aiConfig.codexEmail} />
+                    </>
+                  )}
+                </div>
+                <div className="ai-credential-status__meta">
+                  {[
+                    aiConfig.codexPlanType ? `${aiConfig.codexPlanType} plan` : null,
+                    aiConfig.codexVersion ? `Codex CLI ${aiConfig.codexVersion}` : null,
+                  ].filter(Boolean).join(" · ")}
+                </div>
+              </div>
             </div>
+          ) : (
+            <>
+              <div
+                className={
+                  "ai-credential-status" +
+                  (aiConfig?.codexError ? " ai-credential-status--error" : "")
+                }
+              >
+                <span className="ai-credential-status__dot" aria-hidden />
+                <div className="ai-credential-status__body">
+                  <div className="ai-credential-status__primary">
+                    {aiConfig?.codexError ? "Sign-in unavailable" : "Not signed in"}
+                  </div>
+                  <div className="ai-credential-status__meta">
+                    {aiConfig?.codexError ??
+                      "Sign in to use the Codex allowance included with your ChatGPT plan."}
+                  </div>
+                </div>
+              </div>
+              <div className="settings-select-row">
+                <button
+                  className="btn btn--primary"
+                  onClick={handleCodexLogin}
+                  disabled={codexSigningIn || (aiConfig !== null && !aiConfig.codexInstalled)}
+                >
+                  {codexSigningIn ? "Waiting for browser…" : "Sign in with ChatGPT"}
+                </button>
+              </div>
+            </>
           )}
           {codexLoginError && (
             <div className="settings-field__desc settings-field__desc--error">
@@ -448,14 +638,27 @@ function AiAssistantSection() {
           </div>
         </div>
       ) : (
-        <div className="settings-field settings-field--spaced">
+        <div className="settings-field settings-field--spaced" data-setting-id="ai.credentials">
           <div className="settings-field__label">{providerName} API key</div>
           <div className="settings-field__desc">
-            Powers the Ask AI panel. The key stays in CubbyDB's local app-data file and is never
-            returned to the UI after you save it.{" "}
-            {keySet
-              ? "A key is saved."
-              : "No key saved yet — the Ask AI panel won't work until you add one."}
+            Powers the Ask AI panel. The key stays in CubbyDB's local app-data file; only the
+            masked identifier below is returned to the UI.
+          </div>
+          <div
+            className={
+              "ai-credential-status" +
+              (keySet ? " ai-credential-status--set" : "")
+            }
+          >
+            <span className="ai-credential-status__dot" aria-hidden />
+            <div className="ai-credential-status__body">
+              <div className="ai-credential-status__primary">
+                {keySet ? "Configured" : "Not configured"}
+              </div>
+              <div className="ai-credential-status__meta mono">
+                {keySet ? (keyHint ?? "Saved key") : `Add an ${providerName} API key to continue.`}
+              </div>
+            </div>
           </div>
           <div className="settings-select-row">
             <input
@@ -463,7 +666,7 @@ function AiAssistantSection() {
               type="password"
               placeholder={
                 keySet
-                  ? "•••• saved — enter a new key to replace it"
+                  ? "Enter a new key to replace the configured key"
                   : provider === "openai"
                     ? "sk-…"
                     : "sk-ant-…"
@@ -477,7 +680,7 @@ function AiAssistantSection() {
               onClick={handleSave}
               disabled={!keyInput.trim() || saving}
             >
-              Save
+              {saving ? "Saving…" : keySet ? "Replace" : "Save"}
             </button>
             {keySet && (
               <button className="btn btn--outline" onClick={() => void clearAiConfig(provider)}>
@@ -488,7 +691,7 @@ function AiAssistantSection() {
         </div>
       )}
 
-      <div className="settings-field settings-field--spaced">
+      <div className="settings-field settings-field--spaced" data-setting-id="ai.model">
         <div className="settings-field__label">Model</div>
         <div className="settings-field__desc">
           {modelsError
@@ -542,7 +745,7 @@ function AiAssistantSection() {
       </div>
 
       {(provider === "openai" || provider === "codex") && (
-        <div className="settings-field settings-field--spaced">
+        <div className="settings-field settings-field--spaced" data-setting-id="ai.reasoning">
           <div className="settings-field__label">Reasoning level</div>
           <div className="settings-field__desc">
             Stored separately from the model. Higher levels can improve difficult answers but take
@@ -683,7 +886,7 @@ function InterfaceSection() {
 
   return (
     <div className="settings-section">
-      <div className="settings-field">
+      <div className="settings-field" data-setting-id="appearance.theme">
         <div className="settings-field__label">Theme</div>
         <div className="settings-field__desc">
           Choose how CubbyDB looks. Your choice is saved for next time.
@@ -713,7 +916,7 @@ function InterfaceSection() {
         </div>
       </div>
 
-      <div className="settings-field settings-field--spaced">
+      <div className="settings-field settings-field--spaced" data-setting-id="appearance.accent">
         <div className="settings-field__label">Accent color</div>
         <div className="settings-field__desc">
           Pick the color used for buttons, active states, and SQL keyword
@@ -743,7 +946,10 @@ function InterfaceSection() {
         </div>
       </div>
 
-      <div className="settings-field settings-field--spaced settings-toggle-row">
+      <div
+        className="settings-field settings-field--spaced settings-toggle-row"
+        data-setting-id="appearance.compact-top-bar"
+      >
         <div>
           <div className="settings-field__label">Compact top bar</div>
           <div className="settings-field__desc">
@@ -798,7 +1004,7 @@ function TableSection() {
 
   return (
     <div className="settings-section">
-      <div className="settings-field">
+      <div className="settings-field" data-setting-id="table.font">
         <div className="settings-field__label">Font</div>
         <div className="settings-field__desc">
           Choose the font used for data in the results grid. Your choice is
@@ -830,7 +1036,7 @@ function TableSection() {
         </div>
       </div>
 
-      <div className="settings-field settings-field--spaced">
+      <div className="settings-field settings-field--spaced" data-setting-id="table.font-size">
         <div className="settings-field__label">Font size</div>
         <div className="settings-field__desc">
           Pick the exact size, in pixels, used for data in the results grid.
@@ -856,7 +1062,7 @@ function TableSection() {
         </div>
       </div>
 
-      <div className="settings-field settings-field--spaced">
+      <div className="settings-field settings-field--spaced" data-setting-id="table.row-height">
         <div className="settings-field__label">Row height</div>
         <div className="settings-field__desc">
           Pick the exact row height, in pixels — shorter rows fit more on
@@ -884,7 +1090,10 @@ function TableSection() {
         </div>
       </div>
 
-      <div className="settings-field settings-field--spaced settings-toggle-row">
+      <div
+        className="settings-field settings-field--spaced settings-toggle-row"
+        data-setting-id="table.zebra"
+      >
         <div>
           <div className="settings-field__label">Zebra striping</div>
           <div className="settings-field__desc">
@@ -894,7 +1103,10 @@ function TableSection() {
         <Toggle on={tableZebra} onToggle={() => setTableZebra(!tableZebra)} />
       </div>
 
-      <div className="settings-field settings-field--spaced settings-toggle-row">
+      <div
+        className="settings-field settings-field--spaced settings-toggle-row"
+        data-setting-id="table.borders"
+      >
         <div>
           <div className="settings-field__label">Cell borders</div>
           <div className="settings-field__desc">
@@ -907,7 +1119,10 @@ function TableSection() {
         />
       </div>
 
-      <div className="settings-field settings-field--spaced settings-toggle-row">
+      <div
+        className="settings-field settings-field--spaced settings-toggle-row"
+        data-setting-id="table.header-shade"
+      >
         <div>
           <div className="settings-field__label">Shade header row</div>
           <div className="settings-field__desc">
@@ -921,7 +1136,10 @@ function TableSection() {
         />
       </div>
 
-      <div className="settings-field settings-field--spaced settings-toggle-row">
+      <div
+        className="settings-field settings-field--spaced settings-toggle-row"
+        data-setting-id="table.wrap"
+      >
         <div>
           <div className="settings-field__label">Wrap long text</div>
           <div className="settings-field__desc">
@@ -931,7 +1149,7 @@ function TableSection() {
         <Toggle on={tableWrapText} onToggle={() => setTableWrapText(!tableWrapText)} />
       </div>
 
-      <div className="settings-field settings-field--spaced">
+      <div className="settings-field settings-field--spaced" data-setting-id="table.null-display">
         <div className="settings-field__label">NULL display</div>
         <div className="settings-field__desc">
           How a SQL NULL value appears in the results grid.
@@ -965,7 +1183,7 @@ function SidebarSection() {
 
   return (
     <div className="settings-section">
-      <div className="settings-field">
+      <div className="settings-field" data-setting-id="sidebar.row-height">
         <div className="settings-field__label">Row height</div>
         <div className="settings-field__desc">
           Pick the exact row height, in pixels, for the schema tree — shorter
@@ -1006,7 +1224,7 @@ function EditorSection() {
 
   return (
     <div className="settings-section">
-      <div className="settings-field">
+      <div className="settings-field" data-setting-id="editor.font">
         <div className="settings-field__label">Font</div>
         <div className="settings-field__desc">
           Choose the font used in the SQL editor. Your choice is saved for
@@ -1038,7 +1256,7 @@ function EditorSection() {
         </div>
       </div>
 
-      <div className="settings-field settings-field--spaced">
+      <div className="settings-field settings-field--spaced" data-setting-id="editor.font-size">
         <div className="settings-field__label">Font size</div>
         <div className="settings-field__desc">
           Pick the exact size, in pixels, used in the SQL editor.
@@ -1064,7 +1282,10 @@ function EditorSection() {
         </div>
       </div>
 
-      <div className="settings-field settings-field--spaced settings-toggle-row">
+      <div
+        className="settings-field settings-field--spaced settings-toggle-row"
+        data-setting-id="editor.line-wrap"
+      >
         <div>
           <div className="settings-field__label">Wrap long lines</div>
           <div className="settings-field__desc">
@@ -1090,6 +1311,13 @@ const SHORTCUT_GROUPS: {
   title: string;
   shortcuts: { keys: string[]; desc: string }[];
 }[] = [
+  {
+    title: "Settings dialog",
+    shortcuts: [
+      { keys: ["⌘", "W"], desc: "Close Settings without closing the database tab behind it" },
+      { keys: ["⎋"], desc: "Clear the current Settings search" },
+    ],
+  },
   {
     title: "SQL editor",
     shortcuts: [
@@ -1125,10 +1353,10 @@ const SHORTCUT_GROUPS: {
   {
     title: "Command palette",
     shortcuts: [
-      { keys: ["⇥"], desc: "Cycle scope forward: All → Tables → Columns" },
+      { keys: ["⇥"], desc: "Cycle scope forward: All → Tables → Columns → Scripts → History" },
       { keys: ["⇧", "⇥"], desc: "Cycle scope backward" },
       { keys: ["↑", "↓"], desc: "Move the highlighted result" },
-      { keys: ["⏎"], desc: "Jump to the highlighted result" },
+      { keys: ["⏎"], desc: "Open or run the highlighted result" },
       { keys: ["⎋"], desc: "Close the palette" },
     ],
   },
@@ -1140,6 +1368,40 @@ const SHORTCUT_GROUPS: {
     ],
   },
 ];
+
+/** Add the shortcut registry and fixed focused-control interactions to the
+ *  static preference catalog. Each source remains authoritative for its own
+ *  labels, so Settings search cannot drift from the rendered shortcut list. */
+function buildSettingsSearchCatalog(): SettingsSearchItem[] {
+  const sections = SETTINGS_SECTIONS.map((item) => ({
+    id: `section.${item.id}`,
+    label: item.label,
+    description: `Open ${item.label} settings.`,
+    path: "Settings",
+    section: item.id,
+  }));
+  const commands = KEYBINDING_DEFINITIONS.map((item) => ({
+    id: `shortcut.${item.id}`,
+    label: item.description,
+    description: "Review or customize this application command.",
+    path: `Keyboard Shortcuts · ${item.group}`,
+    section: "shortcuts" as const,
+    targetId: `shortcut.${item.id}`,
+    keywords: ["keybinding", "hotkey", "command"],
+  }));
+  const builtIns = SHORTCUT_GROUPS.flatMap((group) =>
+    group.shortcuts.map((shortcut, index) => ({
+      id: `builtin.${group.title}.${index}`,
+      label: shortcut.desc,
+      description: `Built-in ${group.title.toLowerCase()} interaction.`,
+      path: `Keyboard Shortcuts · ${group.title}`,
+      section: "shortcuts" as const,
+      targetId: `builtin.${group.title}.${index}`,
+      keywords: [shortcut.keys.join(" "), "keybinding", "hotkey"],
+    })),
+  );
+  return [...sections, ...SETTINGS_SEARCH_ITEMS, ...commands, ...builtIns];
+}
 
 function ShortcutsSection() {
   const bindings = useKeybindingStore((s) => s.bindings);
@@ -1224,7 +1486,11 @@ function ShortcutsSection() {
             const isRecording = recordingId === item.id;
             const isCustom = binding !== DEFAULT_KEYBINDINGS[item.id];
             return (
-              <div key={item.id} className="shortcut-row shortcut-row--command">
+              <div
+                key={item.id}
+                className="shortcut-row shortcut-row--command"
+                data-setting-id={`shortcut.${item.id}`}
+              >
                 {editable ? (
                   <button
                     className={
@@ -1305,7 +1571,11 @@ function ShortcutsSection() {
         <div key={group.title} className="shortcut-group">
           <div className="shortcut-group__title">{group.title}</div>
           {group.shortcuts.map((s, i) => (
-            <div key={i} className="shortcut-row">
+            <div
+              key={i}
+              className="shortcut-row"
+              data-setting-id={`builtin.${group.title}.${i}`}
+            >
               <span className="shortcut-row__keys">
                 {s.keys.map((k, ki) => (
                   <kbd key={ki} className="shortcut-kbd">

@@ -105,7 +105,7 @@ export function SchemaTree() {
             className="tree__filter-shortcut mono"
             onMouseDown={(event) => event.preventDefault()}
             onClick={toggleCommandPalette}
-            title="Search tables and columns across connections"
+            title="Search CubbyDB"
             aria-label={`Open command palette (${formatBinding(commandPaletteBinding)})`}
           >
             {formatBinding(commandPaletteBinding)}

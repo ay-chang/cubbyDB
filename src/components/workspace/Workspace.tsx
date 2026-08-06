@@ -76,10 +76,7 @@ export function Workspace() {
 
   return (
     <div className="workspace">
-      <TopBar
-        schemaSidebarOpen={sidebarVisible}
-        onToggleSchemaSidebar={toggleSidebar}
-      />
+      <TopBar />
       <UpdateBanner />
       <div className="workspace__body">
         {sidebarVisible && (

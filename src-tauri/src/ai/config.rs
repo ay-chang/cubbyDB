@@ -119,16 +119,19 @@ impl AiConfig {
 }
 
 /// What's actually reported back to the frontend — the real key never
-/// round-trips to JS once saved, only whether one is set. `model` is always
-/// resolved (saved choice, or the default) so the Settings picker always has
-/// a concrete value to show.
+/// round-trips to JS once saved. A short masked hint identifies which key is
+/// configured without exposing enough of it to authenticate. `model` is
+/// always resolved (saved choice, or the default) so the Settings picker
+/// always has a concrete value to show.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiConfigStatus {
     pub provider: AiProvider,
     pub anthropic_key_set: bool,
+    pub anthropic_key_hint: Option<String>,
     pub anthropic_model: String,
     pub openai_key_set: bool,
+    pub openai_key_hint: Option<String>,
     pub openai_model: String,
     pub openai_reasoning_effort: ReasoningEffort,
     pub codex_model: String,
@@ -146,11 +149,13 @@ impl From<&AiConfig> for AiConfigStatus {
         Self {
             provider: config.provider,
             anthropic_key_set: config.anthropic_api_key.is_some(),
+            anthropic_key_hint: config.anthropic_api_key.as_deref().map(masked_api_key_hint),
             anthropic_model: config
                 .anthropic_model
                 .clone()
                 .unwrap_or_else(|| crate::ai::provider::DEFAULT_MODEL.to_string()),
             openai_key_set: config.openai_api_key.is_some(),
+            openai_key_hint: config.openai_api_key.as_deref().map(masked_api_key_hint),
             openai_model: config
                 .openai_model
                 .clone()
@@ -170,6 +175,29 @@ impl From<&AiConfig> for AiConfigStatus {
             codex_error: None,
         }
     }
+}
+
+/// Preserve only a recognizable provider prefix and the final four
+/// characters. Unknown key formats reveal no prefix at all; very short
+/// values reveal neither prefix nor suffix.
+fn masked_api_key_hint(key: &str) -> String {
+    let trimmed = key.trim();
+    let prefix = ["sk-svcacct-", "sk-proj-", "sk-ant-", "sk-"]
+        .into_iter()
+        .find(|candidate| trimmed.starts_with(candidate))
+        .unwrap_or("");
+    let suffix: String = trimmed
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    if trimmed.chars().count() <= prefix.chars().count() + 8 {
+        return format!("{prefix}••••");
+    }
+    format!("{prefix}••••{suffix}")
 }
 
 /// Reads/writes the single AI-config record — a singleton file, same shape
@@ -327,11 +355,27 @@ mod tests {
         let value = serde_json::to_value(AiConfigStatus::from(&config)).unwrap();
         assert_eq!(value["provider"], "openai");
         assert_eq!(value["anthropicKeySet"], true);
+        assert_eq!(value["anthropicKeyHint"], "••••cret");
         assert_eq!(value["openaiKeySet"], true);
+        assert_eq!(value["openaiKeyHint"], "••••cret");
         assert_eq!(value["codexAuthenticated"], false);
         assert_eq!(value["openaiReasoningEffort"], "medium");
         assert_eq!(value["codexReasoningEffort"], "medium");
         assert!(!value.to_string().contains("secret"));
+    }
+
+    #[test]
+    fn key_hints_keep_only_known_prefixes_and_four_character_suffixes() {
+        assert_eq!(
+            masked_api_key_hint("sk-ant-api03-abcdefghijklmnopqrstuvwxyz"),
+            "sk-ant-••••wxyz"
+        );
+        assert_eq!(
+            masked_api_key_hint("sk-proj-abcdefghijklmnopqrstuvwxyz"),
+            "sk-proj-••••wxyz"
+        );
+        assert_eq!(masked_api_key_hint("custom-secret-value"), "••••alue");
+        assert_eq!(masked_api_key_hint("tiny"), "••••");
     }
 
     #[test]

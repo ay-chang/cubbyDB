@@ -237,6 +237,91 @@
 .settings-rail__title {
   padding: 4px 8px 8px;
 }
+.settings-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 31px;
+  margin: 0 0 7px;
+  padding: 0 28px 0 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text-faint);
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+.settings-search:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+  color: var(--text-muted);
+}
+.settings-search input {
+  width: 100%;
+  min-width: 0;
+  height: 29px;
+  margin-left: 6px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 11.5px;
+}
+.settings-search input::placeholder {
+  color: var(--text-placeholder);
+}
+.settings-search__clear {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  color: var(--text-faint);
+  font-size: 16px;
+  line-height: 1;
+}
+.settings-search__clear:hover {
+  background: var(--border-faint);
+  color: var(--text);
+}
+.settings-search-results {
+  min-height: 0;
+  overflow-y: auto;
+}
+.settings-search-result {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 8px;
+  border-radius: var(--radius-sm);
+  text-align: left;
+}
+.settings-search-result:hover,
+.settings-search-result--active {
+  background: var(--accent-tint);
+}
+.settings-search-result__label {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.3;
+}
+.settings-search-result:hover .settings-search-result__label,
+.settings-search-result--active .settings-search-result__label {
+  color: var(--accent-tint-text);
+}
+.settings-search-result__path {
+  color: var(--text-ghost);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  line-height: 1.25;
+}
+.settings-search-results__empty {
+  padding: 12px 8px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
 .settings-rail__item {
   text-align: left;
   padding: 7px 10px;
@@ -342,6 +427,23 @@
 }
 .settings-field__desc--error {
   color: var(--error-text);
+}
+[data-setting-id] {
+  scroll-margin: 20px;
+}
+.settings-search-target {
+  animation: settings-search-target 1.4s ease-out;
+}
+@keyframes settings-search-target {
+  0%,
+  35% {
+    box-shadow: 0 0 0 7px var(--accent-tint);
+    border-radius: var(--radius-control);
+  }
+  100% {
+    box-shadow: 0 0 0 7px transparent;
+    border-radius: var(--radius-control);
+  }
 }
 /* A settings-field whose control is a toggle switch: label/desc on the left,
    switch on the right, on one row. */
@@ -885,6 +987,93 @@ button.shortcut-binding:focus-visible {
 .settings-input:focus {
   border: 1.5px solid var(--accent);
   box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+/* Credential state is explicit and separate from the replacement input, so
+   an empty password box never reads as "no key" after one has been saved. */
+.ai-credential-status {
+  margin-top: 12px;
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+}
+.ai-credential-status--set {
+  border-color: var(--success-border);
+  background: var(--success-bg);
+}
+.ai-credential-status--error {
+  border-color: var(--error-border);
+  background: var(--error-bg);
+}
+.ai-credential-status__dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--text-ghost);
+}
+.ai-credential-status--set .ai-credential-status__dot {
+  background: var(--success);
+}
+.ai-credential-status--error .ai-credential-status__dot {
+  background: var(--error);
+}
+.ai-credential-status__body {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+.ai-credential-status__primary {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.ai-credential-status--set .ai-credential-status__primary {
+  color: var(--success-text);
+}
+.ai-credential-status--error .ai-credential-status__primary {
+  color: var(--error-text);
+}
+.ai-credential-status__separator {
+  color: var(--text-faint);
+  font-weight: 400;
+}
+.ai-credential-status__meta {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+.redacted-sensitive {
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 3px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color var(--transition), filter var(--transition);
+}
+.redacted-sensitive:hover {
+  color: var(--text);
+}
+.redacted-sensitive--hidden {
+  filter: blur(2px);
+  user-select: none;
+}
+.redacted-sensitive--revealed {
+  filter: none;
 }
 
 /* A multi-line settings input (e.g. the starter-SQL template), styled to

@@ -68,13 +68,7 @@ function useIsFullscreen(): boolean {
 }
 
 /** The 42px application top bar: connection switcher and actions. */
-export function TopBar({
-  schemaSidebarOpen,
-  onToggleSchemaSidebar,
-}: {
-  schemaSidebarOpen: boolean;
-  onToggleSchemaSidebar: () => void;
-}) {
+export function TopBar() {
   const isFullscreen = useIsFullscreen();
   const theme = useStore((s) => s.theme);
   const connections = useStore((s) => s.connections);
@@ -96,9 +90,6 @@ export function TopBar({
   const settingsOpen = useStore((s) => s.settingsOpen);
   const refreshBinding = useKeybindingStore(
     (s) => s.bindings["workspace.refresh"],
-  );
-  const sidebarBinding = useKeybindingStore(
-    (s) => s.bindings["workspace.toggleSidebar"],
   );
   const newConnectionBinding = useKeybindingStore(
     (s) => s.bindings["workspace.newConnection"],
@@ -233,13 +224,6 @@ export function TopBar({
       </div>
 
       <div className="topbar__right">
-        <button
-          className={"topbar__btn" + (schemaSidebarOpen ? " topbar__btn--active" : "")}
-          onClick={onToggleSchemaSidebar}
-          title={formatShortcutTitle("Show or hide schema sidebar", sidebarBinding)}
-        >
-          Schema
-        </button>
         <button
           className={"topbar__btn" + (aiPanelOpen ? " topbar__btn--active" : "")}
           onClick={toggleAiPanel}

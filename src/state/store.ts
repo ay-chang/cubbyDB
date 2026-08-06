@@ -152,6 +152,15 @@ export interface ConnectionSlot {
   colorStyle: ConnectionColorStyle;
 }
 
+/** A relation the user opened or returned to during this app session. The
+ *  command palette uses this small MRU list for its useful empty state; the
+ *  schema remains the source of truth for the relation's current metadata. */
+export interface RecentDatabaseObject {
+  sessionId: string;
+  schema: string;
+  table: string;
+}
+
 type View = "connection" | "workspace";
 
 /** The active color theme. Persisted across launches. Each is a full
@@ -815,6 +824,9 @@ interface AppStore {
   history: HistoryEntry[];
   historyOpen: boolean;
 
+  /** Most-recently-used relations across all currently open connections. */
+  recentDatabaseObjects: RecentDatabaseObject[];
+
   /** Right-drawer AI chat panel, toggled the same way as History/Saved
    *  Queries. Messages live per-connection (see `ConnectionSlot.aiMessages`);
    *  this only tracks whether the panel itself is visible. */
@@ -827,8 +839,7 @@ interface AppStore {
    *  here rather than on `ConnectionSlot`. */
   aiHistoryView: boolean;
 
-  /** Cmd/Ctrl+K quick-jump: search tables and columns in the active
-   *  connection's schema. */
+  /** Cmd/Ctrl+K workspace switcher and cross-connection search. */
   commandPaletteOpen: boolean;
   /** A one-shot request for `TableStructurePane` to scroll to and flash a
    *  specific column, set by jumping to it from the command palette. Keyed
@@ -1837,6 +1848,24 @@ function loadPersistedTabs(): { tabs: QueryTab[]; activeTabId: string } | null {
 }
 
 export const useStore = create<AppStore>((set, get) => {
+  const rememberDatabaseObject = (
+    sessionId: string,
+    schema: string,
+    table: string,
+  ) => {
+    set((s) => ({
+      recentDatabaseObjects: [
+        { sessionId, schema, table },
+        ...s.recentDatabaseObjects.filter(
+          (item) =>
+            item.sessionId !== sessionId ||
+            item.schema !== schema ||
+            item.table !== table,
+        ),
+      ].slice(0, 12),
+    }));
+  };
+
   /**
    * Show a "leave without saving?" confirmation, resolving to whether the
    * user confirmed. Used by every action that would discard unsaved cell
@@ -2042,6 +2071,7 @@ export const useStore = create<AppStore>((set, get) => {
     activeConnectionId: null,
     history: [],
     historyOpen: false,
+    recentDatabaseObjects: [],
     aiPanelOpen: false,
     aiConfig: null,
     aiHistoryView: false,
@@ -2360,7 +2390,15 @@ export const useStore = create<AppStore>((set, get) => {
     setActiveTab(id) {
       const owner = findTabOwner(get().connections, id);
       if (!owner || id === owner.slot.activeTabId) return;
-      void switchActiveTab(owner.connectionId, id);
+      void switchActiveTab(owner.connectionId, id).then((switched) => {
+        if (switched && owner.tab.source) {
+          rememberDatabaseObject(
+            owner.connectionId,
+            owner.tab.source.schema,
+            owner.tab.source.table,
+          );
+        }
+      });
     },
 
     reorderTab(fromIndex, toIndex) {
@@ -2504,7 +2542,9 @@ export const useStore = create<AppStore>((set, get) => {
           t.source?.table === table,
       );
       if (existing) {
-        await switchActiveTab(connectionId, existing.id);
+        if (await switchActiveTab(connectionId, existing.id)) {
+          rememberDatabaseObject(connectionId, schema, table);
+        }
         return;
       }
 
@@ -2528,6 +2568,7 @@ export const useStore = create<AppStore>((set, get) => {
         }));
         return;
       }
+      rememberDatabaseObject(connectionId, schema, table);
       await get().runTab(tab.id);
     },
 
@@ -2544,7 +2585,9 @@ export const useStore = create<AppStore>((set, get) => {
           t.source?.table === table,
       );
       if (existing) {
-        await switchActiveTab(connectionId, existing.id);
+        if (await switchActiveTab(connectionId, existing.id)) {
+          rememberDatabaseObject(connectionId, schema, table);
+        }
         return;
       }
 
@@ -2561,7 +2604,9 @@ export const useStore = create<AppStore>((set, get) => {
             tabs.filter((t) => t.id !== tab.id),
           ),
         }));
+        return;
       }
+      rememberDatabaseObject(connectionId, schema, table);
     },
 
     async openFunctionDefinition(schema, oid, name) {

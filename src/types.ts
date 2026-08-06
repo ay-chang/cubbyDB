@@ -259,14 +259,17 @@ export type AiProvider = "anthropic" | "openai" | "codex";
 export type AiReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
 /** What Settings shows for the AI assistant — the real API key never comes
- *  back from the backend once saved, only whether one is set. `model` is
- *  always resolved (the user's saved choice, or the hardcoded fallback), so
- *  there's always a concrete value to show even before one is picked. */
+ *  back from the backend once saved. Key hints contain only a known provider
+ *  prefix and four trailing characters. `model` is always resolved (the
+ *  user's saved choice, or the hardcoded fallback), so there's always a
+ *  concrete value to show even before one is picked. */
 export interface AiConfigStatus {
   provider: AiProvider;
   anthropicKeySet: boolean;
+  anthropicKeyHint: string | null;
   anthropicModel: string;
   openaiKeySet: boolean;
+  openaiKeyHint: string | null;
   openaiModel: string;
   openaiReasoningEffort: AiReasoningEffort;
   codexModel: string;
