@@ -28,11 +28,12 @@ import {
  *  the webview's own UA string already says so. */
 const isMacOs = navigator.userAgent.includes("Mac");
 
-/** Tracks fullscreen state for the traffic-light inset above — `false`
- *  outside macOS (never checked) and falls back to `false` (no inset) if the
- *  Tauri window API isn't available, e.g. this component rendering outside
- *  a real Tauri window. */
-function useIsFullscreen(): boolean {
+/** Tracks fullscreen state — `false` outside macOS (never checked) and falls
+ *  back to `false` if the Tauri window API isn't available, e.g. this
+ *  component rendering outside a real Tauri window. Also used by
+ *  `useWorkspaceShortcuts` to stop Escape from falling through to the
+ *  webview's native "exit fullscreen" default. */
+export function useIsFullscreen(): boolean {
   const [isFullscreen, setIsFullscreen] = useState(false);
   useEffect(() => {
     if (!isMacOs) return;
