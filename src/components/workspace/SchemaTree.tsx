@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { formatCount } from "../../lib/format";
-import { formatBinding, useKeybindingStore } from "../../lib/keybindings";
+import { formatBinding, formatShortcutTitle, useKeybindingStore } from "../../lib/keybindings";
 import {
   useActiveSchema,
   useActiveSchemaError,
@@ -15,7 +15,7 @@ type Menu =
   | { kind: "function"; x: number; y: number; schema: string; oid: number; name: string }
   | { kind: "sequence"; x: number; y: number; schema: string; name: string };
 
-export function SchemaTree() {
+export function SchemaTree({ onClose }: { onClose: () => void }) {
   const schema = useActiveSchema();
   const loading = useActiveSchemaLoading();
   const error = useActiveSchemaError();
@@ -26,6 +26,9 @@ export function SchemaTree() {
   const toggleCommandPalette = useStore((s) => s.toggleCommandPalette);
   const commandPaletteBinding = useKeybindingStore(
     (s) => s.bindings["workspace.commandPalette"],
+  );
+  const sidebarBinding = useKeybindingStore(
+    (s) => s.bindings["workspace.toggleSidebar"],
   );
 
   const [filter, setFilter] = useState("");
@@ -90,27 +93,51 @@ export function SchemaTree() {
   return (
     <div className="tree">
       <div className="tree__filter">
-        <input
-          className={
-            "tree__filter-input" +
-            (commandPaletteBinding ? " tree__filter-input--shortcut" : "")
-          }
-          placeholder="Filter schema…"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          spellCheck={false}
-        />
-        {commandPaletteBinding && (
-          <button
-            className="tree__filter-shortcut mono"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={toggleCommandPalette}
-            title="Search CubbyDB"
-            aria-label={`Open command palette (${formatBinding(commandPaletteBinding)})`}
+        <div className="tree__filter-input-wrap">
+          <input
+            className={
+              "tree__filter-input" +
+              (commandPaletteBinding ? " tree__filter-input--shortcut" : "")
+            }
+            placeholder="Filter schema…"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            spellCheck={false}
+          />
+          {commandPaletteBinding && (
+            <button
+              className="tree__filter-shortcut mono"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={toggleCommandPalette}
+              title="Search CubbyDB"
+              aria-label={`Open command palette (${formatBinding(commandPaletteBinding)})`}
+            >
+              {formatBinding(commandPaletteBinding)}
+            </button>
+          )}
+        </div>
+        <button
+          className="tree__collapse"
+          onClick={onClose}
+          title={formatShortcutTitle("Hide schema sidebar", sidebarBinding)}
+          aria-label="Hide schema sidebar"
+        >
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden
           >
-            {formatBinding(commandPaletteBinding)}
-          </button>
-        )}
+            <rect x="3" y="4" width="18" height="16" rx="2" />
+            <line x1="10" y1="4" x2="10" y2="20" />
+            <path d="M7 10l-2 2 2 2" />
+          </svg>
+        </button>
       </div>
 
       <div className="tree__scroll">

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
+  formatShortcutTitle,
   matchesKeybinding,
   TAB_JUMP_KEYBINDING_IDS,
   useKeybindingStore,
@@ -18,7 +19,7 @@ import { SchemaTree } from "./SchemaTree";
 import { SequenceDetailsPane } from "./SequenceDetailsPane";
 import { SqlEditor } from "./SqlEditor";
 import { TableStructurePane } from "./TableStructurePane";
-import { TopBar } from "./TopBar";
+import { TopBar, useIsFullscreen } from "./TopBar";
 import { UpdateBanner } from "./UpdateBanner";
 import "./workspace.css";
 
@@ -47,6 +48,9 @@ export function Workspace() {
   const toggleSidebar = useCallback(
     () => setSidebarVisible((visible) => !visible),
     [],
+  );
+  const sidebarBinding = useKeybindingStore(
+    (s) => s.bindings["workspace.toggleSidebar"],
   );
   const { saveDialogOpen, openSaveDialog, closeSaveDialog } = useWorkspaceShortcuts(
     toggleSidebar,
@@ -79,16 +83,39 @@ export function Workspace() {
       <TopBar />
       <UpdateBanner />
       <div className="workspace__body">
-        {sidebarVisible && (
+        {sidebarVisible ? (
           <>
             <div className="workspace__sidebar" style={{ width: sidebarWidth }}>
-              <SchemaTree />
+              <SchemaTree onClose={toggleSidebar} />
             </div>
             <div
               className="workspace__resizer workspace__resizer--v"
               onMouseDown={startSidebarDrag}
             />
           </>
+        ) : (
+          <button
+            className="workspace__sidebar-rail"
+            onClick={toggleSidebar}
+            title={formatShortcutTitle("Show schema sidebar", sidebarBinding)}
+            aria-label="Show schema sidebar"
+          >
+            <svg
+              width="19"
+              height="19"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden
+            >
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <line x1="10" y1="4" x2="10" y2="20" />
+              <path d="M8 10l2 2-2 2" />
+            </svg>
+          </button>
         )}
 
         <div className="workspace__main" ref={mainRef}>
@@ -212,6 +239,7 @@ function useWorkspaceShortcuts(toggleSidebar: () => void) {
   const activeTabId = useActiveTabId();
   const tabs = useActiveTabs();
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const isFullscreen = useIsFullscreen();
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       // Focused controls (notably CodeMirror and shortcut recording buttons)
@@ -219,11 +247,15 @@ function useWorkspaceShortcuts(toggleSidebar: () => void) {
       // its modal while somebody is editing a binding.
       if (e.defaultPrevented) return;
       // Rebinding these commands must not expose the webview's underlying
-      // reload/close behavior at their former defaults.
+      // reload/close behavior at their former defaults. Escape gets the same
+      // treatment while in native fullscreen — otherwise the webview's
+      // built-in "exit fullscreen on Escape" default fires ahead of (or
+      // instead of) whatever the focused control wants Escape to do.
       if (
         matchesKeybinding(e, "mod+r") ||
         matchesKeybinding(e, "mod+w") ||
-        e.key.toLowerCase() === "f5"
+        e.key.toLowerCase() === "f5" ||
+        (isFullscreen && e.key === "Escape")
       ) {
         e.preventDefault();
       }
@@ -314,6 +346,7 @@ function useWorkspaceShortcuts(toggleSidebar: () => void) {
     activeTabId,
     tabs,
     toggleSidebar,
+    isFullscreen,
   ]);
 
   return {

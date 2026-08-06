@@ -257,6 +257,22 @@
   flex-direction: column;
   min-height: 0;
 }
+.workspace__sidebar-rail {
+  flex: none;
+  width: 48px;
+  border-right: 1px solid var(--border-strong);
+  background: var(--sidebar-bg);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12px;
+  color: var(--text-ghost);
+  transition: background var(--transition), color var(--transition);
+}
+.workspace__sidebar-rail:hover {
+  background: var(--tree-hover);
+  color: var(--text);
+}
 .workspace__main {
   flex: 1;
   min-width: 0;
@@ -306,9 +322,34 @@
   flex-direction: column;
 }
 .tree__filter {
-  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 11px 12px 9px;
   flex: none;
+}
+.tree__filter-input-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.tree__collapse {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  color: var(--text-faint);
+  transition: background var(--transition), color var(--transition),
+    border-color var(--transition);
+}
+.tree__collapse:hover {
+  background: var(--border-faint);
+  color: var(--text);
+  border-color: var(--border-strong);
 }
 .tree__filter-input {
   width: 100%;
@@ -333,8 +374,8 @@
 }
 .tree__filter-shortcut {
   position: absolute;
-  right: 17px;
-  top: 16px;
+  right: 5px;
+  top: 5px;
   height: 20px;
   max-width: 66px;
   padding: 0 5px;
