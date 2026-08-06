@@ -37,6 +37,8 @@ yarn-error.log*
 .cursor/
 .windsurf/
 .aider*
+.agents/
+skills-lock.json
 
 # Local-only release helper (wraps set-version.mjs + git tag/push). Never
 # committed — intentionally not shared, kept out of the repo.
