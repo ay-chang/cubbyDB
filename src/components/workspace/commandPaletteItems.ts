@@ -8,10 +8,10 @@ import type {
   SettingsSection,
   TabKind,
 } from "../../state/store";
-import type { HistoryEntry, SavedQuery, TableKind } from "../../types";
+import type { SavedQuery, TableKind } from "../../types";
 import { SETTINGS_SECTIONS } from "../common/settingsSearch";
 
-export type PaletteScope = "all" | "tables" | "columns" | "scripts" | "history";
+export type PaletteScope = "all" | "tables" | "columns" | "scripts";
 
 export const PALETTE_SCOPES: Array<{
   id: PaletteScope;
@@ -22,7 +22,6 @@ export const PALETTE_SCOPES: Array<{
   { id: "tables", label: "Tables", placeholder: "Search tables…" },
   { id: "columns", label: "Columns", placeholder: "Search columns…" },
   { id: "scripts", label: "Scripts", placeholder: "Search saved scripts…" },
-  { id: "history", label: "History", placeholder: "Search query history…" },
 ];
 
 type Match = FuzzyMatch & { candidate: number };
@@ -90,10 +89,6 @@ export type PaletteItem =
   | (BaseItem & {
       kind: "script";
       query: SavedQuery;
-    })
-  | (BaseItem & {
-      kind: "history";
-      entry: HistoryEntry;
     });
 
 export interface PaletteGroup {
@@ -105,7 +100,6 @@ export interface PaletteGroup {
 const NO_MATCH: Match = { score: 0, indices: [], candidate: -1 };
 const PER_GROUP_LIMIT = 16;
 const EMPTY_TAB_LIMIT = 8;
-const EMPTY_HISTORY_LIMIT = 6;
 
 const ACTIONS: Array<{
   action: PaletteActionId;
@@ -365,23 +359,6 @@ function buildScriptItems(savedQueries: SavedQuery[], query: string): PaletteIte
   return sortAndLimit(scored, query, query ? PER_GROUP_LIMIT : 40);
 }
 
-function buildHistoryItems(history: HistoryEntry[], query: string): PaletteItem[] {
-  const scored: Array<{ item: Extract<PaletteItem, { kind: "history" }>; score: number }> = [];
-  for (const [index, entry] of history.entries()) {
-    const result = scoreItem<Extract<PaletteItem, { kind: "history" }>>(
-      {
-        id: `history:${entry.executedAt}:${index}`,
-        kind: "history",
-        entry,
-      },
-      query,
-      [entry.sql, entry.connectionName ?? "", entry.success ? "successful" : "failed"],
-    );
-    if (result) scored.push(result);
-  }
-  return sortAndLimit(scored, query, query ? PER_GROUP_LIMIT : EMPTY_HISTORY_LIMIT);
-}
-
 function buildRecentObjectItems(
   recentObjects: RecentDatabaseObject[],
   slots: ConnectionSlot[],
@@ -416,7 +393,6 @@ export function buildPaletteGroups(input: {
   slots: ConnectionSlot[];
   activeConnectionId: string | null;
   savedQueries: SavedQuery[];
-  history: HistoryEntry[];
   recentObjects: RecentDatabaseObject[];
 }): PaletteGroup[] {
   const query = input.query.trim();
@@ -441,12 +417,20 @@ export function buildPaletteGroups(input: {
   if (scope === "scripts") {
     return group("scripts", "Saved queries", buildScriptItems(input.savedQueries, query));
   }
-  if (scope === "history") {
-    return group("history", "Recent query history", buildHistoryItems(input.history, query));
-  }
 
+  // The All tab leads with tables/columns (or recent objects, when there's no
+  // query yet to scope them to) so the palette's primary job — finding a
+  // table or column — surfaces before actions, tabs, and connections. Recent
+  // objects come first when there are any, but the full table list always
+  // follows so scrolling reliably reaches every table, not just recent ones.
   if (!query) {
+    const recentItems = buildRecentObjectItems(input.recentObjects, slots);
+    const recentIds = new Set(recentItems.map((item) => item.id.replace(/^recent:/, "table:")));
+    const allTables = buildTableAndColumnItems(slots, query, true, false).tables.filter(
+      (item) => !recentIds.has(item.id),
+    );
     return [
+      ...group("recent", "Recent database objects", recentItems),
       ...group("actions", "Actions", buildActionItems(query)),
       ...group("tabs", "Open tabs", buildTabItems(slots, input.activeConnectionId, query)),
       ...group(
@@ -454,13 +438,14 @@ export function buildPaletteGroups(input: {
         "Connections",
         buildConnectionItems(slots, input.activeConnectionId, query),
       ),
-      ...group("recent", "Recent database objects", buildRecentObjectItems(input.recentObjects, slots)),
-      ...group("history", "Recent query history", buildHistoryItems(input.history, query)),
+      ...group("tables", "Tables and views", allTables),
     ];
   }
 
   const objects = buildTableAndColumnItems(slots, query, true, true);
   return [
+    ...group("tables", "Tables and views", objects.tables),
+    ...group("columns", "Columns", objects.columns),
     ...group("actions", "Actions and settings", buildActionItems(query)),
     ...group("tabs", "Open tabs", buildTabItems(slots, input.activeConnectionId, query)),
     ...group(
@@ -468,10 +453,7 @@ export function buildPaletteGroups(input: {
       "Connections",
       buildConnectionItems(slots, input.activeConnectionId, query),
     ),
-    ...group("tables", "Tables and views", objects.tables),
-    ...group("columns", "Columns", objects.columns),
     ...group("scripts", "Saved queries", buildScriptItems(input.savedQueries, query)),
-    ...group("history", "Query history", buildHistoryItems(input.history, query)),
   ];
 }
 

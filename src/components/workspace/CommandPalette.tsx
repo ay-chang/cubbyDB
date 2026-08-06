@@ -17,15 +17,6 @@ function singleLine(text: string, limit: number): string {
   return line.length > limit ? line.slice(0, limit) + "…" : line;
 }
 
-function formatHistoryTime(ms: number): string {
-  return new Date(ms).toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
 /** Render `text` with the characters at `indices` wrapped in <mark>. */
 function highlight(text: string, match: FuzzyMatch | null): React.ReactNode {
   if (!match || match.indices.length === 0) return text;
@@ -74,8 +65,6 @@ function itemIcon(item: PaletteItem): string {
       return "·";
     case "script":
       return "▤";
-    case "history":
-      return item.entry.success ? "✓" : "×";
   }
 }
 
@@ -107,10 +96,6 @@ function itemLabel(item: PaletteItem): React.ReactNode {
       );
     case "script":
       return highlight(item.query.name, titleMatch);
-    case "history":
-      // Search uses the complete SQL, while the row normalizes whitespace and
-      // truncates it; raw fuzzy-match indices would point at the wrong glyphs.
-      return singleLine(item.entry.sql, 92);
   }
 }
 
@@ -137,8 +122,6 @@ function itemMeta(item: PaletteItem): string {
       return item.dataType;
     case "script":
       return singleLine(item.query.sql, 60);
-    case "history":
-      return `${item.entry.success ? "Completed" : "Failed"} · ${formatHistoryTime(item.entry.executedAt)}`;
   }
 }
 
@@ -149,8 +132,6 @@ function emptyMessage(scope: PaletteScope, hasQuery: boolean): string {
       return "Type to search columns.";
     case "scripts":
       return "No saved scripts yet.";
-    case "history":
-      return "No query history yet.";
     case "tables":
       return "No tables or views.";
     case "all":
@@ -159,11 +140,12 @@ function emptyMessage(scope: PaletteScope, hasQuery: boolean): string {
 }
 
 /**
- * Cmd/Ctrl+K is CubbyDB's workspace switcher. It keeps the database-specific
- * scopes that make very large schemas manageable, while All combines common
- * actions, open tabs, live connections, recent relations, saved queries, and
- * query history. Results retain the connection colors used elsewhere in the
- * workspace so staging and production remain visually distinct.
+ * Cmd/Ctrl+K is CubbyDB's workspace switcher. The default All scope leads
+ * with tables and columns (or recent database objects, before there's a
+ * query), so finding a relation stays the primary job, while still
+ * surfacing common actions, open tabs, live connections, and saved queries.
+ * Results retain the connection colors used elsewhere in the workspace so
+ * staging and production remain visually distinct.
  */
 export function CommandPalette() {
   const open = useStore((s) => s.commandPaletteOpen);
@@ -172,7 +154,6 @@ export function CommandPalette() {
   const activeConnectionId = useStore((s) => s.activeConnectionId);
   const recentObjects = useStore((s) => s.recentDatabaseObjects);
   const savedQueries = useStore((s) => s.savedQueries);
-  const history = useStore((s) => s.history);
   const theme = useStore((s) => s.theme);
   const switchConnection = useStore((s) => s.switchConnection);
   const setActiveTab = useStore((s) => s.setActiveTab);
@@ -181,8 +162,6 @@ export function CommandPalette() {
   const openSelectTop = useStore((s) => s.openSelectTop);
   const jumpToColumn = useStore((s) => s.jumpToColumn);
   const openSavedQuery = useStore((s) => s.openSavedQuery);
-  const rerunFromHistory = useStore((s) => s.rerunFromHistory);
-  const refreshHistory = useStore((s) => s.refreshHistory);
   const loadSavedQueries = useStore((s) => s.loadSavedQueries);
   const historyOpen = useStore((s) => s.historyOpen);
   const savedQueriesOpen = useStore((s) => s.savedQueriesOpen);
@@ -206,10 +185,9 @@ export function CommandPalette() {
     setScope("all");
     setSelected(0);
     mouseArmedRef.current = false;
-    void refreshHistory();
     void loadSavedQueries();
     requestAnimationFrame(() => inputRef.current?.focus());
-  }, [loadSavedQueries, open, refreshHistory]);
+  }, [loadSavedQueries, open]);
 
   const slots = useMemo(() => Object.values(connections), [connections]);
   const groups = useMemo(
@@ -220,10 +198,9 @@ export function CommandPalette() {
         slots,
         activeConnectionId,
         savedQueries,
-        history,
         recentObjects,
       }),
-    [activeConnectionId, history, query, recentObjects, savedQueries, scope, slots],
+    [activeConnectionId, query, recentObjects, savedQueries, scope, slots],
   );
   const results = useMemo(() => groups.flatMap((group) => group.items), [groups]);
   const showConnectionBadge = slots.length > 1;
@@ -275,9 +252,6 @@ export function CommandPalette() {
         return;
       case "script":
         void openSavedQuery(item.query);
-        return;
-      case "history":
-        rerunFromHistory(item.entry.sql);
         return;
       case "setting":
         openSettings(item.section);
@@ -418,9 +392,7 @@ export function CommandPalette() {
                   const connectionName =
                     item.kind === "table" || item.kind === "column" || item.kind === "tab"
                       ? item.connectionName
-                      : item.kind === "history"
-                        ? item.entry.connectionName
-                        : null;
+                      : null;
                   return (
                     <div
                       id={`palette-${item.id}`}
@@ -449,8 +421,7 @@ export function CommandPalette() {
                       <span
                         className={
                           "cmdk-item__meta mono" +
-                          (item.kind === "script" || item.kind === "history" ||
-                          item.kind === "action" || item.kind === "setting"
+                          (item.kind === "script" || item.kind === "action" || item.kind === "setting"
                             ? " cmdk-item__meta--wide"
                             : "")
                         }

@@ -1362,6 +1362,37 @@ function ResultsGrid({
         requestAnimationFrame(() => colJumpInputRef.current?.focus());
         return;
       }
+      // Fallback navigation for the column-jump popup: the input's own
+      // onKeyDown normally handles these, but this window-level listener
+      // catches them too in case focus didn't land on the input (e.g. it
+      // opened while the SQL editor still held focus), so arrow/enter
+      // navigation always works once the popup is open.
+      if (colJumpOpen) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setColJumpOpen(false);
+          setColJumpQuery("");
+          return;
+        }
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          const max = Math.min(colJumpMatches.length, 20) - 1;
+          setColJumpSelected((i) => Math.min(i + 1, max));
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setColJumpSelected((i) => Math.max(i - 1, 0));
+          return;
+        }
+        if (e.key === "Enter") {
+          e.preventDefault();
+          const top = colJumpMatches[colJumpSelected];
+          if (top) jumpToColumnIndex(top.index);
+          return;
+        }
+        return;
+      }
       if (!findOpen) return;
       if (e.key === "Escape") {
         e.preventDefault();
@@ -1376,7 +1407,17 @@ function ResultsGrid({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [findOpen, findMatches, findBinding, jumpColumnBinding, settingsOpen]);
+  }, [
+    findOpen,
+    findMatches,
+    findBinding,
+    jumpColumnBinding,
+    settingsOpen,
+    colJumpOpen,
+    colJumpMatches,
+    colJumpSelected,
+    jumpToColumnIndex,
+  ]);
 
   // Transform for each header cell during a drag (the sliding animation).
   const headerStyle = (pos: number): React.CSSProperties => {
