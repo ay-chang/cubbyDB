@@ -36,6 +36,12 @@ export function EditorTabs({ onSaveQuery }: { onSaveQuery: () => void }) {
 
       const startX = e.clientX;
       let dragging = false;
+      // Where the drag currently wants to land. Tracked here rather than read
+      // back out of `drag` on mouseup: the commit has to happen outside the
+      // `setDrag` updater, because an updater must be pure and StrictMode
+      // double-invokes it — which ran `reorderTab` twice and, for a swap of
+      // two neighbors, landed the tab right back where it started.
+      let targetIndex = index;
       const els = containerRef.current
         ? Array.from(containerRef.current.querySelectorAll<HTMLElement>(".tab"))
         : [];
@@ -53,6 +59,7 @@ export function EditorTabs({ onSaveQuery }: { onSaveQuery: () => void }) {
         let target = index;
         while (target < centers.length - 1 && center > centers[target + 1]) target += 1;
         while (target > 0 && center < centers[target - 1]) target -= 1;
+        targetIndex = target;
         setDrag({ fromIndex: index, dx, targetIndex: target, width });
       };
       const onUp = () => {
@@ -63,12 +70,8 @@ export function EditorTabs({ onSaveQuery }: { onSaveQuery: () => void }) {
           setActiveTab(tabId);
           return;
         }
-        setDrag((d) => {
-          if (d && d.fromIndex !== d.targetIndex) {
-            reorderTab(d.fromIndex, d.targetIndex);
-          }
-          return null;
-        });
+        setDrag(null);
+        if (targetIndex !== index) reorderTab(index, targetIndex);
       };
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseup", onUp);

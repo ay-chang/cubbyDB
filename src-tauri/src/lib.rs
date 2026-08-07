@@ -26,6 +26,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // The data directory holds connections.json and history.jsonl.
             let data_dir = app.path().app_data_dir()?;
@@ -58,6 +59,8 @@ pub fn run() {
             commands::get_function_definition,
             commands::get_sequence_details,
             commands::write_clipboard,
+            commands::write_text_file,
+            commands::run_readonly_query,
             commands::read_clipboard,
             commands::query_history,
             commands::clear_query_history,

@@ -178,7 +178,12 @@ export interface QueryResult {
   rowCount: number;
   elapsedMs: number;
   commandTag: string | null;
+  /** The result is capped and the rest isn't reachable by paging — the
+   *  statement carries its own LIMIT. Raises the "LIMIT APPLIED" badge. */
   limitApplied: boolean;
+  /** The driver appended LIMIT/OFFSET itself, so this is one page of a larger
+   *  result and the pager applies. */
+  paged: boolean;
 }
 
 export type DbErrorKind =

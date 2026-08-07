@@ -90,7 +90,11 @@ export interface QueryTab {
   sortDesc?: boolean;
 }
 
-/** How many rows one page of the table browser shows. */
+/** How many rows one page shows, in both the table browser and the SQL
+ *  editor's results. Must match `PAGE_SIZE` in `src-tauri/src/db/mod.rs`,
+ *  which is what actually bounds the query — the pager's "is there a next
+ *  page?" test is `rows === PAGE_SIZE`, so a mismatch would strand the last
+ *  page or offer an empty one. */
 export const PAGE_SIZE = 500;
 
 /** True if a tab has any uncommitted cell edits (but not new rows). */
@@ -131,6 +135,15 @@ export interface ConnectionSlot {
   aiMessages: AiMessage[];
   /** True while an `aiChat` call is in flight for this connection. */
   aiSending: boolean;
+  /** A failed turn, shown as a retryable strip under the thread. Deliberately
+   *  *not* an assistant message: an error written into `aiMessages` would be
+   *  saved to the chat and replayed to the model next turn as something it
+   *  supposedly said. Cleared when the turn is retried or a new one starts. */
+  aiError: string | null;
+  /** Identifies the in-flight turn. Stopping (or starting another) bumps it,
+   *  and a reply whose token no longer matches is discarded — see
+   *  `stopAiMessage` for why the request itself can't be aborted. */
+  aiTurnToken: number;
   /** Which saved chat (see `ai_chats.rs`) the current `aiMessages` is, once
    *  it has one — `null` until the first message of a fresh conversation is
    *  sent, and permanently `null` for ad-hoc connections (no stable id to
@@ -229,7 +242,9 @@ export type AccentColor =
   | "fuchsia"
   | "rose"
   | "yellow"
-  | "stone";
+  | "brown"
+  | "stone"
+  | "zinc";
 
 /** `AccentColor` options in display order. */
 export const ACCENT_COLOR_OPTIONS: AccentColor[] = [
@@ -250,7 +265,9 @@ export const ACCENT_COLOR_OPTIONS: AccentColor[] = [
   "fuchsia",
   "purple",
   "violet",
+  "brown",
   "stone",
+  "zinc",
 ];
 
 export const ACCENT_COLOR_LABELS: Record<AccentColor, string> = {
@@ -271,7 +288,9 @@ export const ACCENT_COLOR_LABELS: Record<AccentColor, string> = {
   fuchsia: "Fuchsia",
   rose: "Rose",
   yellow: "Yellow",
+  brown: "Brown",
   stone: "Stone",
+  zinc: "Zinc",
 };
 
 /** Existing users keep whatever they've already picked (or explicitly left
@@ -317,7 +336,9 @@ export const ACCENT_COLOR_SWATCH: Record<AccentColor, string> = {
   fuchsia: "#c026d3",
   rose: "#e11d48",
   yellow: "#ca8a04",
+  brown: "#8b5a2b",
   stone: "#57534e",
+  zinc: "#52525b",
 };
 
 /** Light/dark variants of every accent color, in the same token shape as the
@@ -650,6 +671,45 @@ const ACCENT_PALETTES: Record<AccentColor, { light: AccentPalette; dark: AccentP
       accentGlowSoft: "rgba(168, 162, 158, 0.12)",
     },
   },
+  // The one warm mid-tone the wheel above never covers — and, as a connection
+  // tag, readably distinct from amber and orange.
+  brown: {
+    light: {
+      accent: "#8b5a2b",
+      accentHover: "#74491f",
+      accentTint: "#f5eee6",
+      accentTintText: "#74491f",
+      accentGlow: "rgba(139, 90, 43, 0.12)",
+      accentGlowSoft: "rgba(139, 90, 43, 0.08)",
+    },
+    dark: {
+      accent: "#c69963",
+      accentHover: "#d8b183",
+      accentTint: "#2a1f14",
+      accentTintText: "#e0c39a",
+      accentGlow: "rgba(198, 153, 99, 0.22)",
+      accentGlowSoft: "rgba(198, 153, 99, 0.12)",
+    },
+  },
+  // Cool-gray counterpart to stone's warm gray.
+  zinc: {
+    light: {
+      accent: "#52525b",
+      accentHover: "#3f3f46",
+      accentTint: "#eeeef0",
+      accentTintText: "#3f3f46",
+      accentGlow: "rgba(82, 82, 91, 0.12)",
+      accentGlowSoft: "rgba(82, 82, 91, 0.08)",
+    },
+    dark: {
+      accent: "#a1a1aa",
+      accentHover: "#d4d4d8",
+      accentTint: "#1e1e21",
+      accentTintText: "#d4d4d8",
+      accentGlow: "rgba(161, 161, 170, 0.22)",
+      accentGlowSoft: "rgba(161, 161, 170, 0.12)",
+    },
+  },
 };
 
 /** Looks up one accent color's theme-appropriate values — used for the
@@ -847,6 +907,12 @@ interface AppStore {
    *  effect; cleared once consumed. */
   pendingColumnHighlight: { schema: string; table: string; column: string; nonce: number } | null;
 
+  /** A transient success/failure notice, shown bottom-right and dismissed on
+   *  a timer. For actions whose result is otherwise invisible — an export
+   *  that wrote a file somewhere the user can't see from here. */
+  toast: { message: string; kind: "success" | "error" } | null;
+  showToast: (message: string, kind?: "success" | "error") => void;
+
   /** When set, a "leave without saving?" confirmation is shown. */
   confirmDialog: ConfirmDialogState | null;
   /** When set, the delete-impact dialog is shown instead of the plain
@@ -992,7 +1058,13 @@ interface AppStore {
    *  `opts.silent` for a background refresh of already-loaded data (see
    *  `silentRefreshTabId`) rather than a user-initiated run — it skips the
    *  "Running…/Cancel" takeover in the results header. */
-  runTab: (id: string, sqlOverride?: string, opts?: { silent?: boolean }) => Promise<void>;
+  runTab: (
+    id: string,
+    sqlOverride?: string,
+    opts?: { silent?: boolean; page?: number },
+  ) => Promise<void>;
+  /** Re-runs a query tab's SQL at another page of its result. */
+  setQueryPage: (tabId: string, page: number) => Promise<void>;
   /** Refreshes the schema tree and, if the active tab has already run once,
    *  silently re-runs it too — the combined action behind the top bar's
    *  Refresh button and the Cmd/Ctrl+R shortcut, so both pick up e.g. a row
@@ -1094,6 +1166,15 @@ interface AppStore {
   /** Sends `text` as a user message in the *active* connection's thread,
    *  waits for the reply, and appends both. */
   sendAiMessage: (text: string) => Promise<void>;
+  /** Runs a turn against whatever is already in the thread. Shared by
+   *  `sendAiMessage` and `retryAiMessage`; not called directly from the UI. */
+  runAiTurn: (connectionId: string) => Promise<void>;
+  /** Re-runs the last turn after a failure. */
+  retryAiMessage: () => Promise<void>;
+  /** Drops the last reply and asks the same question again. */
+  regenerateAiMessage: () => Promise<void>;
+  /** Abandons the in-flight turn and re-enables the input. */
+  stopAiMessage: () => void;
   loadAiConfig: () => Promise<void>;
   saveAiProvider: (provider: AiProvider) => Promise<void>;
   saveAiConfig: (provider: AiProvider, apiKey: string) => Promise<void>;
@@ -1712,6 +1793,10 @@ applyEditorFontSize(loadEditorFontSize());
 // would open two connections and leave one orphaned.
 let didInitialize = false;
 
+/** Timer for the current toast, so a second one replaces the first rather
+ *  than being cut short by the earlier timeout. */
+let toastTimer: number | null = null;
+
 /** Build a table-browser query for a given page (backend owns the SQL). */
 function tableSql(
   sessionId: string,
@@ -2077,6 +2162,7 @@ export const useStore = create<AppStore>((set, get) => {
     aiHistoryView: false,
     commandPaletteOpen: false,
     pendingColumnHighlight: null,
+    toast: null,
     confirmDialog: null,
     deleteImpactDialog: null,
     theme: loadTheme(),
@@ -2217,6 +2303,8 @@ export const useStore = create<AppStore>((set, get) => {
         activeTabId: tab.id,
         aiMessages: [],
         aiSending: false,
+        aiError: null,
+        aiTurnToken: 0,
         aiChatId: null,
         aiChats: [],
         aiChatsLoading: false,
@@ -2443,6 +2531,9 @@ export const useStore = create<AppStore>((set, get) => {
       const { connectionId, tab } = owner;
       const sqlToRun = sqlOverride ?? tab.sql;
       const silent = opts?.silent ?? false;
+      // An explicit Run starts over at the first page; a background refresh
+      // stays on the page the user is looking at.
+      const page = opts?.page ?? (silent ? tab.page ?? 0 : 0);
 
       if (tabHasPendingEdits(tab)) {
         // A silent background refresh (Cmd/Ctrl+R, the Refresh button) never
@@ -2468,6 +2559,7 @@ export const useStore = create<AppStore>((set, get) => {
                   updateError: null,
                   pendingEdits: {},
                   newRows: [],
+                  ...(t.kind === "query" ? { page } : {}),
                 }
               : t,
           ),
@@ -2480,7 +2572,7 @@ export const useStore = create<AppStore>((set, get) => {
       if (!slot) return;
 
       try {
-        const result = await api.runQuery(slot.sessionId, sqlToRun);
+        const result = await api.runQuery(slot.sessionId, sqlToRun, page);
         set((s) => ({
           connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
             tabs.map((t) =>
@@ -2508,6 +2600,14 @@ export const useStore = create<AppStore>((set, get) => {
         // Reflect the just-logged query in the history panel if it's open.
         if (get().historyOpen) void get().refreshHistory();
       }
+    },
+
+    async setQueryPage(tabId, page) {
+      const owner = findTabOwner(get().connections, tabId);
+      if (!owner || owner.tab.running) return;
+      const next = Math.max(0, page);
+      if (next === (owner.tab.page ?? 0)) return;
+      await get().runTab(tabId, undefined, { page: next });
     },
 
     async refreshActive() {
@@ -3247,7 +3347,11 @@ export const useStore = create<AppStore>((set, get) => {
       const connectionId = get().activeConnectionId;
       if (!connectionId) return;
       set((s) => ({
-        connections: patchSlot(s.connections, connectionId, { aiMessages: [], aiChatId: null }),
+        connections: patchSlot(s.connections, connectionId, {
+          aiMessages: [],
+          aiChatId: null,
+          aiError: null,
+        }),
         aiHistoryView: false,
       }));
     },
@@ -3261,6 +3365,7 @@ export const useStore = create<AppStore>((set, get) => {
           connections: patchSlot(s.connections, connectionId, {
             aiMessages: thread.messages,
             aiChatId: thread.id,
+            aiError: null,
           }),
           aiHistoryView: false,
         }));
@@ -3298,7 +3403,7 @@ export const useStore = create<AppStore>((set, get) => {
             aiChats: slot.aiChats.filter((c) => c.id !== id),
             // The deleted chat was open — fall back to a blank new chat
             // rather than leaving a dangling `aiChatId`.
-            ...(slot.aiChatId === id ? { aiMessages: [], aiChatId: null } : {}),
+            ...(slot.aiChatId === id ? { aiMessages: [], aiChatId: null, aiError: null } : {}),
           })),
         }));
       } catch (err) {
@@ -3316,9 +3421,67 @@ export const useStore = create<AppStore>((set, get) => {
       set((s) => ({
         connections: patchSlot(s.connections, connectionId, (slot) => ({
           aiMessages: [...slot.aiMessages, userMessage],
-          aiSending: true,
         })),
       }));
+      await get().runAiTurn(connectionId);
+    },
+
+    /** Re-runs the last turn after a failure. The user's message is still the
+     *  final entry in `aiMessages` (a failed turn appends nothing), so this
+     *  just runs it again rather than re-sending anything. */
+    async retryAiMessage() {
+      const connectionId = get().activeConnectionId;
+      if (!connectionId) return;
+      await get().runAiTurn(connectionId);
+    },
+
+    /** Drops the last reply and asks again, leaving the user's question in
+     *  place. Only meaningful once a reply exists to replace. */
+    async regenerateAiMessage() {
+      const connectionId = get().activeConnectionId;
+      if (!connectionId) return;
+      const slot = get().connections[connectionId];
+      if (!slot || slot.aiSending) return;
+      const messages = slot.aiMessages;
+      if (messages[messages.length - 1]?.role !== "assistant") return;
+      set((s) => ({
+        connections: patchSlot(s.connections, connectionId, (current) => ({
+          aiMessages: current.aiMessages.slice(0, -1),
+        })),
+      }));
+      await get().runAiTurn(connectionId);
+    },
+
+    /** Abandons the in-flight turn. The provider request itself keeps running
+     *  — a Tauri command can't be aborted partway, and the agent loop has no
+     *  cancellation channel — so this bumps the turn token, which makes the
+     *  eventual reply get dropped, and hands the panel straight back to the
+     *  user. Tokens for that turn are still spent. */
+    stopAiMessage() {
+      const connectionId = get().activeConnectionId;
+      if (!connectionId) return;
+      set((s) => ({
+        connections: patchSlot(s.connections, connectionId, (slot) => ({
+          aiTurnToken: slot.aiTurnToken + 1,
+          aiSending: false,
+          aiError: null,
+        })),
+      }));
+    },
+
+    async runAiTurn(connectionId) {
+      const started = (get().connections[connectionId]?.aiTurnToken ?? 0) + 1;
+      set((s) => ({
+        connections: patchSlot(s.connections, connectionId, {
+          aiSending: true,
+          aiError: null,
+          aiTurnToken: started,
+        }),
+      }));
+
+      /** False once this turn has been stopped, or superseded by a newer one. */
+      const stillCurrent = () =>
+        get().connections[connectionId]?.aiTurnToken === started;
 
       const slot = get().connections[connectionId];
       if (!slot) return;
@@ -3351,6 +3514,9 @@ export const useStore = create<AppStore>((set, get) => {
 
       try {
         const result = await api.aiChat(slot.sessionId, slot.schema, activeTable, slot.aiMessages);
+        // Stopped or superseded while the request was in flight — drop the
+        // reply rather than have it appear after the user moved on.
+        if (!stillCurrent()) return;
         const assistantMessage: AiMessage = {
           role: "assistant",
           content: result.reply,
@@ -3364,17 +3530,16 @@ export const useStore = create<AppStore>((set, get) => {
         }));
         void persist([...slot.aiMessages, assistantMessage]);
       } catch (err) {
-        const assistantMessage: AiMessage = {
-          role: "assistant",
-          content: `Error: ${errorMessage(err)}`,
-        };
+        if (!stillCurrent()) return;
+        // Held beside the thread, not appended to it: `aiMessages` is both
+        // what gets saved and what gets replayed to the model, and neither
+        // should contain a failure the model never actually said.
         set((s) => ({
-          connections: patchSlot(s.connections, connectionId, (current) => ({
-            aiMessages: [...current.aiMessages, assistantMessage],
+          connections: patchSlot(s.connections, connectionId, {
             aiSending: false,
-          })),
+            aiError: errorMessage(err),
+          }),
         }));
-        void persist([...slot.aiMessages, assistantMessage]);
       }
     },
 
@@ -3666,6 +3831,15 @@ export const useStore = create<AppStore>((set, get) => {
       set({ rowCopyDelimiter: delimiter });
     },
 
+    showToast(message, kind = "success") {
+      set({ toast: { message, kind } });
+      if (toastTimer !== null) window.clearTimeout(toastTimer);
+      toastTimer = window.setTimeout(() => {
+        set({ toast: null });
+        toastTimer = null;
+      }, 4000);
+    },
+
     openSettings(section) {
       set({ settingsOpen: true, settingsSection: section ?? null });
     },
@@ -3726,6 +3900,12 @@ export function useActiveAiMessages(): AiMessage[] {
 export function useActiveAiSending(): boolean {
   return useStore((s) =>
     s.activeConnectionId ? s.connections[s.activeConnectionId]?.aiSending ?? false : false,
+  );
+}
+
+export function useActiveAiError(): string | null {
+  return useStore((s) =>
+    s.activeConnectionId ? s.connections[s.activeConnectionId]?.aiError ?? null : null,
   );
 }
 

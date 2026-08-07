@@ -9,8 +9,8 @@ import {
 } from "react";
 
 import type { CopyResult } from "../../api/backend";
-import { copyToClipboard, readClipboard } from "../../api/backend";
-import { parseCsv } from "../../lib/csv";
+import { copyToClipboard, errorMessage, readClipboard } from "../../api/backend";
+import { parseCsv, saveCsv } from "../../lib/csv";
 import { bestMatch } from "../../lib/fuzzyMatch";
 import { matchesKeybinding, useKeybindingStore } from "../../lib/keybindings";
 import type { Delimiter, QueryTab } from "../../state/store";
@@ -206,9 +206,9 @@ function ResultsHeader({
             {result && result.limitApplied && (
               <span
                 className="results__limit mono"
-                title="A default LIMIT 100 was applied to this unbounded SELECT."
+                title="This query has its own LIMIT, so the rest of the result can't be paged through. Remove it to page."
               >
-                LIMIT 100 applied
+                Limit applied
               </span>
             )}
           </>
@@ -360,12 +360,34 @@ const VIRTUALIZE_MIN_COLS = 16;
  * and repaints on its own (compositor) timeline, while React only catches up
  * a frame or more later via the `scroll` event — so anything the user flings
  * past within that gap must already be rendered. At the default 32px row
- * that's ~1920px of vertical runway in each direction — comfortably more
- * than a hard trackpad fling covers between two `requestAnimationFrame`
- * ticks, which is what a smaller buffer here used to visibly run out of.
+ * that's ~1920px of vertical runway in each direction.
+ *
+ * A fixed buffer can only ever cover a fixed distance, though, and a hard
+ * trackpad fling covers several thousand pixels between two frames — which
+ * is what still showed blank rows. `leadRowsFor` below extends it in the
+ * direction of travel instead, so the buffer grows with how fast the content
+ * is actually moving.
  */
 const VIRTUALIZE_OVERSCAN = 60;
 const COL_OVERSCAN = 4;
+/**
+ * Extra rows rendered *ahead* of a moving scroll, on top of the fixed
+ * overscan. Reactive windowing always lands a frame or more behind the
+ * compositor, so the only way to stay ahead of a fling is to render where it
+ * is going rather than where it has been.
+ *
+ * Scaled to how far the last frame actually travelled, and capped so a
+ * violent fling can't try to render the whole result at once — beyond the
+ * cap the grid degrades to showing blank briefly, which is far better than
+ * blocking the main thread on a 10,000-row render.
+ */
+const MAX_LEAD_ROWS = 220;
+
+/** Rows to render ahead, for a scroll moving `velocity` px per frame. */
+function leadRowsFor(velocity: number, rowH: number): number {
+  if (rowH <= 0) return 0;
+  return Math.min(Math.ceil(Math.abs(velocity) / rowH), MAX_LEAD_ROWS);
+}
 /** Blank space kept below the last row once scrolled to the bottom, so it
  *  doesn't sit flush against the window edge. Applied via `.grid__body`'s
  *  `padding-bottom` when rows render in normal flow; when virtualized, the
@@ -455,6 +477,7 @@ function ResultsGrid({
   const removeNewRow = useStore((s) => s.removeNewRow);
   const deleteExistingRows = useStore((s) => s.deleteExistingRows);
   const setTablePage = useStore((s) => s.setTablePage);
+  const setQueryPage = useStore((s) => s.setQueryPage);
   const csvDelimiter = useStore((s) => s.csvDelimiter);
   const setUpdateError = useStore((s) => s.setUpdateError);
   const isTable = tab.kind === "table";
@@ -956,6 +979,14 @@ function ResultsGrid({
     endCol: 0,
   });
 
+  /** Pixels the scroller moved in the last sampled frame, signed: positive
+   *  is downward. Drives the leading-edge overscan in `computeWin`. A ref,
+   *  not state — it changes every frame during a fling and must never itself
+   *  cause a render. */
+  const velocityRef = useRef(0);
+  const lastTopRef = useRef(0);
+  const settleRef = useRef<number | null>(null);
+
   /** The window implied by the scroller's *current* geometry, read straight
    *  off the DOM so it's never a state-update behind the real scroll offset. */
   const computeWin = useCallback((): Win => {
@@ -972,8 +1003,17 @@ function ResultsGrid({
     let startIdx = 0;
     let endIdx = totalRows;
     if (virtualizeRows) {
-      const first = Math.floor((st - hh) / rowH) - VIRTUALIZE_OVERSCAN;
-      const last = Math.ceil((st - hh + vh) / rowH) + VIRTUALIZE_OVERSCAN;
+      // Bias the buffer toward where the scroll is heading. Standing still,
+      // both sides are just VIRTUALIZE_OVERSCAN; mid-fling, the leading edge
+      // stretches to cover the ground about to be crossed while the trailing
+      // edge stays small, so the window moves rather than merely growing.
+      const lead = leadRowsFor(velocityRef.current, rowH);
+      const down = velocityRef.current > 0;
+      const aheadRows = VIRTUALIZE_OVERSCAN + lead;
+      const first =
+        Math.floor((st - hh) / rowH) - (down ? VIRTUALIZE_OVERSCAN : aheadRows);
+      const last =
+        Math.ceil((st - hh + vh) / rowH) + (down ? aheadRows : VIRTUALIZE_OVERSCAN);
       startIdx = clamp(snapDown(first, ROW_BLOCK), 0, totalRows);
       endIdx = clamp(snapUp(last, ROW_BLOCK), 0, totalRows);
     }
@@ -1035,12 +1075,32 @@ function ResultsGrid({
     if (rafRef.current != null) return;
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = null;
+      // Distance covered since the last sampled frame, which is what
+      // `computeWin` extends the leading edge by. Sampled here rather than in
+      // `computeWin` because that also runs from layout effects, where no
+      // time has passed and the reading would be meaningless.
+      const top = scrollRef.current?.scrollTop ?? 0;
+      velocityRef.current = top - lastTopRef.current;
+      lastTopRef.current = top;
       syncWin();
+      // Once the fling stops, no further scroll events arrive to reset this,
+      // so the window would stay stretched. Settle it on the next frame.
+      if (velocityRef.current !== 0) {
+        settleRef.current ??= requestAnimationFrame(() => {
+          settleRef.current = null;
+          const now = scrollRef.current?.scrollTop ?? 0;
+          if (now === lastTopRef.current) {
+            velocityRef.current = 0;
+            syncWin();
+          }
+        });
+      }
     });
   }, [syncWin]);
   useEffect(
     () => () => {
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+      if (settleRef.current != null) cancelAnimationFrame(settleRef.current);
     },
     [],
   );
@@ -1438,14 +1498,22 @@ function ResultsGrid({
     return {};
   };
 
-  // Pagination (table tabs): a full page implies there may be more rows.
+  // Pagination: a full page implies there may be more rows. Table tabs always
+  // page; a query tab pages whenever the driver was able to bound its
+  // statement (`paged`) — one carrying its own LIMIT is shown whole instead.
   const page = tab.page ?? 0;
   const rowCount = result.rows.length;
+  const showPager = isTable || result.paged;
   const canNext = rowCount === PAGE_SIZE;
   const pagerLabel =
     rowCount === 0
       ? `Page ${page + 1} · no rows`
       : `Rows ${page * PAGE_SIZE + 1}–${page * PAGE_SIZE + rowCount}`;
+
+  // A table tab re-queries its own generated SELECT; a query tab re-runs the
+  // user's statement at the new offset.
+  const goToPage = (next: number) =>
+    isTable ? setTablePage(tab.id, next) : setQueryPage(tab.id, next);
 
   const handleAddRow = () => {
     const index = tab.newRows?.length ?? 0;
@@ -1908,13 +1976,13 @@ function ResultsGrid({
       )}
     </div>
 
-    {isTable && (
+    {showPager && (
       <div className="table-toolbar">
         <div className="table-toolbar__group">
           <button
             className="table-toolbar__btn"
             disabled={page === 0 || tab.running}
-            onClick={() => void setTablePage(tab.id, page - 1)}
+            onClick={() => void goToPage(page - 1)}
             title="Previous page"
           >
             ‹ Prev
@@ -1923,7 +1991,7 @@ function ResultsGrid({
           <button
             className="table-toolbar__btn"
             disabled={!canNext || tab.running}
-            onClick={() => void setTablePage(tab.id, page + 1)}
+            onClick={() => void goToPage(page + 1)}
             title="Next page"
           >
             Next ›
@@ -2623,31 +2691,12 @@ function inferBooleanColumns(result: QueryResult): boolean[] {
   });
 }
 
-function toCsv(result: QueryResult, delimiter: Delimiter): string {
-  // Quote a field if it contains the active delimiter, a quote, or a newline —
-  // the delimiter itself must be included since it isn't always a comma.
-  const needsQuote = new RegExp(`["\\n\\r${delimiter === "\t" ? "\\t" : delimiter}]`);
-  const escape = (v: string | null): string => {
-    if (v === null) return "";
-    if (needsQuote.test(v)) return `"${v.replace(/"/g, '""')}"`;
-    return v;
-  };
-  const header = result.columns.map((c) => escape(c.name)).join(delimiter);
-  const body = result.rows
-    .map((row) => row.map(escape).join(delimiter))
-    .join("\n");
-  return body ? `${header}\n${body}\n` : `${header}\n`;
-}
-
 function exportCsv(result: QueryResult, tabTitle: string, delimiter: Delimiter) {
-  const csv = toCsv(result, delimiter);
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `${tabTitle.replace(/\.sql$/, "") || "results"}.csv`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  const showToast = useStore.getState().showToast;
+  void saveCsv([result.columns.map((c) => c.name), ...result.rows], tabTitle, delimiter)
+    // `null` means the save dialog was dismissed — not worth a notice.
+    .then((path) => {
+      if (path) showToast(`Saved ${path.split("/").pop()}`);
+    })
+    .catch((e) => showToast(errorMessage(e), "error"));
 }

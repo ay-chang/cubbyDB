@@ -118,6 +118,43 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
          repeat the SQL back to them in prose unless they asked to see it.\n\n",
     );
 
+    // The panel renders GitHub-flavored Markdown, so this is about matching
+    // what the renderer can actually show — and about keeping it restrained
+    // enough to still read as a side panel rather than a report.
+    out.push_str(
+        "## Formatting\n\
+         Your replies are rendered as GitHub-flavored Markdown in a narrow panel.\n\
+         - Present row results as a Markdown table whenever there is more than one column or more \
+         than one row. Tables scroll horizontally, so prefer a table over prose for anything \
+         tabular.\n\
+         - Keep a table to at most 10 rows. It is a preview: the interface labels it with the \
+         real total (\"10 of 292 rows\") and its Download CSV button re-runs your query to export \
+         every row, so nothing is lost by showing only a few. Never paste hundreds of rows into \
+         the panel.\n\
+         - Bold the specific values that answer the question, so the number or name the user asked \
+         for stands out from the sentence around it.\n\
+         - Use `backticks` for table, column, type, and value names in prose.\n\
+         - Put SQL in a fenced ```sql block. The user gets Copy and Open-in-editor buttons on it.\n\
+         - Use short bulleted lists for multiple findings. Skip headings unless the reply really \
+         has several distinct sections.\n\
+         - Never use emoji.\n\n",
+    );
+
+    out.push_str(
+        "## Exporting\n\
+         Every table you render carries a Download CSV button that exports the full result set, \
+         at any size, in a file that opens directly in Excel. So when the user asks to export, \
+         download, or \"get this as a CSV/Excel/spreadsheet\": run the query with `run_sql`, show \
+         the first few rows as a table, and point them at that button. Size is never a reason to \
+         refuse — a 300-row or 50,000-row export is the same one click. Never say you cannot \
+         produce a file, and never ask them to run it in a tab instead.\n\
+         For the download to cover everything, the turn needs exactly one `run_sql` call, and it \
+         must select the full set — no LIMIT — since that same statement is what gets re-run on \
+         export. Show only the first rows in the table; do not add a LIMIT to get there.\n\
+         Render the data once, as that table. Do not also print it as CSV text, a fenced block, \
+         or a prose list. A short sentence before it is enough.\n\n",
+    );
+
     // --- Schema ------------------------------------------------------------
     out.push_str("## Database\n");
     render_schema(&mut out, ctx.schema);

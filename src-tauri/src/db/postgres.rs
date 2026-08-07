@@ -234,8 +234,12 @@ impl DbSession for PostgresSession {
         Ok(schemas)
     }
 
-    async fn run_query(&self, sql: &str) -> Result<QueryResult, DbError> {
-        let (final_sql, limit_applied) = apply_default_limit(sql, super::DEFAULT_ROW_LIMIT);
+    async fn run_query(&self, sql: &str, page: u32) -> Result<QueryResult, DbError> {
+        let (final_sql, bounding) = apply_paging(
+            sql,
+            Some(super::PAGE_SIZE),
+            page * super::PAGE_SIZE,
+        );
 
         let start = Instant::now();
         let messages = self
@@ -245,12 +249,17 @@ impl DbSession for PostgresSession {
             .map_err(map_query_err)?;
         let elapsed_ms = start.elapsed().as_millis() as u64;
 
-        Ok(simple_query_messages_to_result(sql, messages, elapsed_ms, limit_applied))
+        Ok(simple_query_messages_to_result(sql, messages, elapsed_ms, bounding))
     }
 
-    async fn run_read_only_query(&self, sql: &str) -> Result<QueryResult, DbError> {
+    async fn run_read_only_query(
+        &self,
+        sql: &str,
+        limit: Option<u32>,
+    ) -> Result<QueryResult, DbError> {
         super::validate_read_only_statement(sql)?;
-        let (final_sql, limit_applied) = apply_default_limit(sql, super::DEFAULT_ROW_LIMIT);
+        // Offset 0: this path reads a whole result, it never pages.
+        let (final_sql, bounding) = apply_paging(sql, limit, 0);
 
         // Manual BEGIN/ROLLBACK (rather than `Client::transaction()`, which
         // needs `&mut Client`) for the same `&self`-method reason as
@@ -274,7 +283,7 @@ impl DbSession for PostgresSession {
         let _ = self.client.batch_execute("ROLLBACK").await;
 
         let messages = result.map_err(map_query_err)?;
-        Ok(simple_query_messages_to_result(sql, messages, elapsed_ms, limit_applied))
+        Ok(simple_query_messages_to_result(sql, messages, elapsed_ms, bounding))
     }
 
     fn select_top_sql(
@@ -717,27 +726,55 @@ fn build_config(params: &ConnectionParams) -> Result<Config, DbError> {
     Ok(config)
 }
 
-/// Append a default `LIMIT` to an unbounded single-statement SELECT.
+/// What happened to a statement on its way to the server.
+#[derive(Debug, PartialEq, Eq)]
+enum Bounding {
+    /// `LIMIT`/`OFFSET` appended: these rows are one page of a larger set.
+    Paged,
+    /// Left alone because the statement caps itself — the rest of the result
+    /// is not reachable by paging.
+    CappedByQuery,
+    /// Not a statement we bound at all (not a lone SELECT, or nothing to cap).
+    Untouched,
+}
+
+/// Bound an unbounded single-statement SELECT to one page of `limit` rows.
+///
+/// Appended directly rather than wrapped in a subquery: since this only ever
+/// touches a statement with no `LIMIT` of its own, `... ORDER BY x LIMIT n
+/// OFFSET m` keeps the query's own ordering exactly, where wrapping it would
+/// leave the inner `ORDER BY` on shakier ground.
 ///
 /// Conservative on purpose: only a single `select`/`with` statement with no
 /// existing `limit` is touched. Anything else is passed through untouched, so we
 /// never change the meaning of a query we don't fully understand.
-fn apply_default_limit(sql: &str, limit: u32) -> (String, bool) {
+fn apply_paging(sql: &str, limit: Option<u32>, offset: u32) -> (String, Bounding) {
     let trimmed = sql.trim().trim_end_matches(';');
     let trimmed = trimmed.trim();
 
     // Bail on multiple statements — running them verbatim is safer than guessing.
     if trimmed.contains(';') {
-        return (sql.to_string(), false);
+        return (sql.to_string(), Bounding::Untouched);
     }
 
     let lower = trimmed.to_lowercase();
     let is_select = lower.starts_with("select") || lower.starts_with("with");
-    if !is_select || contains_word(&lower, "limit") {
-        return (sql.to_string(), false);
+    if !is_select {
+        return (sql.to_string(), Bounding::Untouched);
     }
+    // The query caps itself; honor it verbatim and report it as capped.
+    if contains_word(&lower, "limit") {
+        return (sql.to_string(), Bounding::CappedByQuery);
+    }
+    let Some(limit) = limit else {
+        return (sql.to_string(), Bounding::Untouched);
+    };
 
-    (format!("{trimmed}\nLIMIT {limit}"), true)
+    let mut out = format!("{trimmed}\nLIMIT {limit}");
+    if offset > 0 {
+        out.push_str(&format!(" OFFSET {offset}"));
+    }
+    (out, Bounding::Paged)
 }
 
 /// Whole-word, case-insensitive search (operates on already-lowercased input).
@@ -777,7 +814,7 @@ fn simple_query_messages_to_result(
     sql: &str,
     messages: Vec<SimpleQueryMessage>,
     elapsed_ms: u64,
-    limit_applied: bool,
+    bounding: Bounding,
 ) -> QueryResult {
     let mut columns: Vec<ResultColumn> = Vec::new();
     let mut rows: Vec<Vec<Option<String>>> = Vec::new();
@@ -825,7 +862,8 @@ fn simple_query_messages_to_result(
         rows,
         elapsed_ms,
         command_tag,
-        limit_applied,
+        limit_applied: bounding == Bounding::CappedByQuery,
+        paged: bounding == Bounding::Paged,
     }
 }
 
@@ -1570,28 +1608,58 @@ mod tests {
     use super::*;
 
     #[test]
-    fn adds_limit_to_bare_select() {
-        let (sql, applied) = apply_default_limit("SELECT * FROM orders", 100);
-        assert!(applied);
-        assert!(sql.ends_with("LIMIT 100"));
+    fn pages_a_bare_select() {
+        let (sql, bounding) = apply_paging("SELECT * FROM orders", Some(500), 0);
+        assert_eq!(bounding, Bounding::Paged);
+        assert!(sql.ends_with("LIMIT 500"));
+        // No OFFSET clause on the first page — nothing to skip.
+        assert!(!sql.contains("OFFSET"));
     }
 
     #[test]
+    fn later_pages_carry_an_offset() {
+        let (sql, bounding) = apply_paging("SELECT * FROM orders", Some(500), 1000);
+        assert_eq!(bounding, Bounding::Paged);
+        assert!(sql.ends_with("LIMIT 500 OFFSET 1000"));
+    }
+
+    /// Appended, not wrapped in a subquery, so the query's own ORDER BY still
+    /// decides which rows a page contains.
+    #[test]
+    fn paging_keeps_the_querys_own_order_by() {
+        let (sql, _) = apply_paging("SELECT * FROM orders ORDER BY id", Some(500), 500);
+        assert!(sql.starts_with("SELECT * FROM orders ORDER BY id"));
+        assert!(sql.ends_with("LIMIT 500 OFFSET 500"));
+    }
+
+    /// A query that caps itself is run verbatim and reported as capped, which
+    /// is what raises the badge — paging past its LIMIT would change what the
+    /// user asked for.
+    #[test]
     fn respects_existing_limit() {
-        let (_sql, applied) = apply_default_limit("select * from orders limit 5", 100);
-        assert!(!applied);
+        let (sql, bounding) = apply_paging("select * from orders limit 5", Some(500), 0);
+        assert_eq!(bounding, Bounding::CappedByQuery);
+        assert_eq!(sql, "select * from orders limit 5");
+    }
+
+    /// `None` is the export path: the whole result, uncapped.
+    #[test]
+    fn no_limit_leaves_the_statement_alone() {
+        let (sql, bounding) = apply_paging("SELECT * FROM orders", None, 0);
+        assert_eq!(bounding, Bounding::Untouched);
+        assert_eq!(sql, "SELECT * FROM orders");
     }
 
     #[test]
     fn ignores_non_select() {
-        let (_sql, applied) = apply_default_limit("UPDATE orders SET total = 0", 100);
-        assert!(!applied);
+        let (_sql, bounding) = apply_paging("UPDATE orders SET total = 0", Some(500), 0);
+        assert_eq!(bounding, Bounding::Untouched);
     }
 
     #[test]
     fn ignores_multiple_statements() {
-        let (_sql, applied) = apply_default_limit("SELECT 1; SELECT 2", 100);
-        assert!(!applied);
+        let (_sql, bounding) = apply_paging("SELECT 1; SELECT 2", Some(500), 0);
+        assert_eq!(bounding, Bounding::Untouched);
     }
 
     #[test]
@@ -1698,14 +1766,14 @@ mod tests {
             schema.iter().map(|s| &s.name).collect::<Vec<_>>()
         );
 
-        // Unbounded SELECT gets a default LIMIT applied.
-        let result = session.run_query("SELECT 1 AS n").await.expect("run_query");
+        // Unbounded SELECT gets bounded to one page.
+        let result = session.run_query("SELECT 1 AS n", 0).await.expect("run_query");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][0].as_deref(), Some("1"));
 
         // A bad query surfaces a structured error with a SQLSTATE.
         let err = session
-            .run_query("SELECT nope FROM does_not_exist")
+            .run_query("SELECT nope FROM does_not_exist", 0)
             .await
             .expect_err("expected query error");
         assert!(err.code.is_some(), "expected a SQLSTATE code");
@@ -1715,7 +1783,7 @@ mod tests {
         // sends the column list before any row data, so this must not regress
         // to looking like a non-row-returning statement (a real prior bug).
         let empty = session
-            .run_query("SELECT 1 AS n WHERE false")
+            .run_query("SELECT 1 AS n WHERE false", 0)
             .await
             .expect("run_query on zero-row select");
         assert_eq!(empty.rows.len(), 0);
@@ -1735,15 +1803,15 @@ mod tests {
         // int4), a value containing a single quote (the classic
         // injection/escaping footgun), and the zero-match error path.
         session
-            .run_query("DROP TABLE IF EXISTS cubbydb_edit_test")
+            .run_query("DROP TABLE IF EXISTS cubbydb_edit_test", 0)
             .await
             .expect("drop any leftover scratch table");
         session
-            .run_query("CREATE TABLE cubbydb_edit_test (id int PRIMARY KEY, note text)")
+            .run_query("CREATE TABLE cubbydb_edit_test (id int PRIMARY KEY, note text)", 0)
             .await
             .expect("create scratch table");
         session
-            .run_query("INSERT INTO cubbydb_edit_test (id, note) VALUES (1, 'original')")
+            .run_query("INSERT INTO cubbydb_edit_test (id, note) VALUES (1, 'original')", 0)
             .await
             .expect("seed row");
 
@@ -1766,7 +1834,7 @@ mod tests {
             .expect("update_row with a numeric PK and a quote in the value");
 
         let check = session
-            .run_query("SELECT note FROM cubbydb_edit_test WHERE id = 1")
+            .run_query("SELECT note FROM cubbydb_edit_test WHERE id = 1", 0)
             .await
             .expect("read back");
         assert_eq!(check.rows[0][0].as_deref(), Some("O'Brien's edit"));
@@ -1787,7 +1855,7 @@ mod tests {
             .await
             .expect("update_row setting a column to NULL");
         let nulled = session
-            .run_query("SELECT note, note IS NULL AS is_null FROM cubbydb_edit_test WHERE id = 1")
+            .run_query("SELECT note, note IS NULL AS is_null FROM cubbydb_edit_test WHERE id = 1", 0)
             .await
             .expect("read back nulled column");
         assert_eq!(nulled.rows[0][0], None, "expected an actual SQL NULL");
@@ -1832,12 +1900,12 @@ mod tests {
 
         // If the seeded `widgets` table (1200 rows) is present, page through it.
         if let Ok(page0) = session
-            .run_query(&session.select_top_sql("public", "widgets", None, 500, 0, None))
+            .run_query(&session.select_top_sql("public", "widgets", None, 500, 0, None), 0)
             .await
         {
             assert_eq!(page0.rows.len(), 500, "first page should be full");
             let page2 = session
-                .run_query(&session.select_top_sql("public", "widgets", None, 500, 1000, None))
+                .run_query(&session.select_top_sql("public", "widgets", None, 500, 1000, None), 0)
                 .await
                 .expect("third page");
             assert_eq!(page2.rows.len(), 200, "last page should hold the remainder");
@@ -1850,12 +1918,13 @@ mod tests {
 
         // --- insert_row / delete_row ---
         session
-            .run_query("DROP TABLE IF EXISTS cubbydb_rowops_test")
+            .run_query("DROP TABLE IF EXISTS cubbydb_rowops_test", 0)
             .await
             .expect("drop leftover rowops table");
         session
             .run_query(
                 "CREATE TABLE cubbydb_rowops_test (id serial PRIMARY KEY, note text, qty int DEFAULT 7)",
+                0,
             )
             .await
             .expect("create rowops table");
@@ -1878,7 +1947,7 @@ mod tests {
             .await
             .expect("insert explicit row");
         let after_insert = session
-            .run_query("SELECT id, note, qty FROM cubbydb_rowops_test ORDER BY id")
+            .run_query("SELECT id, note, qty FROM cubbydb_rowops_test ORDER BY id", 0)
             .await
             .expect("read inserted rows");
         assert_eq!(after_insert.rows.len(), 2);
@@ -1901,7 +1970,7 @@ mod tests {
             .await
             .expect("delete_row");
         let after_delete = session
-            .run_query("SELECT count(*) FROM cubbydb_rowops_test")
+            .run_query("SELECT count(*) FROM cubbydb_rowops_test", 0)
             .await
             .expect("count after delete");
         assert_eq!(after_delete.rows[0][0].as_deref(), Some("1"));
@@ -1918,12 +1987,12 @@ mod tests {
         eprintln!("delete_row ok; missing-row error path: {}", del_err.message);
 
         session
-            .run_query("DROP TABLE cubbydb_rowops_test")
+            .run_query("DROP TABLE cubbydb_rowops_test", 0)
             .await
             .expect("clean up rowops table");
 
         session
-            .run_query("DROP TABLE cubbydb_edit_test")
+            .run_query("DROP TABLE cubbydb_edit_test", 0)
             .await
             .expect("clean up scratch table");
     }
@@ -1964,7 +2033,7 @@ mod tests {
         let query_session = session.clone();
         let query_task = tokio::spawn(async move {
             let start = Instant::now();
-            let result = query_session.run_query("SELECT pg_sleep(15)").await;
+            let result = query_session.run_query("SELECT pg_sleep(15)", 0).await;
             (result, start.elapsed())
         });
 
@@ -1998,7 +2067,7 @@ mod tests {
         // The session must still be usable afterward — cancelling one query
         // shouldn't poison the connection for the next one.
         let after = session
-            .run_query("SELECT 1 AS n")
+            .run_query("SELECT 1 AS n", 0)
             .await
             .expect("session should still work after a cancelled query");
         assert_eq!(after.rows[0][0].as_deref(), Some("1"));
@@ -2029,7 +2098,7 @@ mod tests {
         let session = driver.connect(&params).await.expect("connect");
 
         session
-            .run_query("DROP TABLE IF EXISTS cubbydb_structure_test")
+            .run_query("DROP TABLE IF EXISTS cubbydb_structure_test", 0)
             .await
             .expect("drop leftover structure table");
         session
@@ -2040,11 +2109,12 @@ mod tests {
                     qty int DEFAULT 0 CHECK (qty >= 0),
                     note text
                 )",
+                0,
             )
             .await
             .expect("create structure table");
         session
-            .run_query("CREATE INDEX cubbydb_structure_test_name_idx ON cubbydb_structure_test (name)")
+            .run_query("CREATE INDEX cubbydb_structure_test_name_idx ON cubbydb_structure_test (name)", 0)
             .await
             .expect("create secondary index");
 
@@ -2101,7 +2171,7 @@ mod tests {
         assert!(structure.check_constraints[0].definition.contains(">="));
 
         session
-            .run_query("DROP TABLE cubbydb_structure_test")
+            .run_query("DROP TABLE cubbydb_structure_test", 0)
             .await
             .expect("clean up structure table");
     }
@@ -2132,10 +2202,10 @@ mod tests {
             "DROP TABLE IF EXISTS cubbydb_cascade_orders",
             "DROP TABLE IF EXISTS cubbydb_cascade_customers",
         ] {
-            session.run_query(stmt).await.expect("drop leftover cascade tables");
+            session.run_query(stmt, 0).await.expect("drop leftover cascade tables");
         }
         session
-            .run_query("CREATE TABLE cubbydb_cascade_customers (id serial PRIMARY KEY, name text)")
+            .run_query("CREATE TABLE cubbydb_cascade_customers (id serial PRIMARY KEY, name text)", 0)
             .await
             .expect("create customers");
         session
@@ -2144,6 +2214,7 @@ mod tests {
                     id serial PRIMARY KEY,
                     customer_id int NOT NULL REFERENCES cubbydb_cascade_customers(id)
                 )",
+                0,
             )
             .await
             .expect("create orders");
@@ -2153,21 +2224,23 @@ mod tests {
                     id serial PRIMARY KEY,
                     order_id int NOT NULL REFERENCES cubbydb_cascade_orders(id)
                 )",
+                0,
             )
             .await
             .expect("create order_items");
 
         session
-            .run_query("INSERT INTO cubbydb_cascade_customers (id, name) VALUES (1, 'Alice')")
+            .run_query("INSERT INTO cubbydb_cascade_customers (id, name) VALUES (1, 'Alice')", 0)
             .await
             .expect("insert customer");
         session
-            .run_query("INSERT INTO cubbydb_cascade_orders (id, customer_id) VALUES (10, 1), (11, 1)")
+            .run_query("INSERT INTO cubbydb_cascade_orders (id, customer_id) VALUES (10, 1), (11, 1)", 0)
             .await
             .expect("insert orders");
         session
             .run_query(
                 "INSERT INTO cubbydb_cascade_items (id, order_id) VALUES (100, 10), (101, 10), (102, 11)",
+                0,
             )
             .await
             .expect("insert items");
@@ -2208,7 +2281,7 @@ mod tests {
         assert_eq!(deleted, 1 + 2 + 3, "1 customer + 2 orders + 3 items");
 
         let remaining = session
-            .run_query("SELECT count(*) FROM cubbydb_cascade_items")
+            .run_query("SELECT count(*) FROM cubbydb_cascade_items", 0)
             .await
             .expect("count remaining items");
         assert_eq!(remaining.rows[0][0].as_deref(), Some("0"));
@@ -2218,7 +2291,7 @@ mod tests {
             "DROP TABLE cubbydb_cascade_orders",
             "DROP TABLE cubbydb_cascade_customers",
         ] {
-            session.run_query(stmt).await.expect("clean up cascade tables");
+            session.run_query(stmt, 0).await.expect("clean up cascade tables");
         }
     }
 }

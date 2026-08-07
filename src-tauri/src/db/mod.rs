@@ -320,8 +320,13 @@ pub struct QueryResult {
     pub elapsed_ms: u64,
     /// For non-row-returning statements, the command tag, e.g. `UPDATE 3`.
     pub command_tag: Option<String>,
-    /// True when the driver appended a default LIMIT to an unbounded SELECT.
+    /// True when the result is capped and the rest is *not* reachable by
+    /// paging — the statement carries its own LIMIT. Drives the "LIMIT
+    /// APPLIED" badge.
     pub limit_applied: bool,
+    /// True when the driver appended `LIMIT`/`OFFSET` itself, so the results
+    /// are one page of a larger set and the pager applies.
+    pub paged: bool,
 }
 
 /// A driver knows how to test connectivity and open a live session for one
@@ -349,10 +354,13 @@ pub trait DbSession: Send + Sync {
     /// engine's catalog / information_schema.
     async fn fetch_schema(&self) -> Result<Vec<SchemaNode>, DbError>;
 
-    /// Run a single statement from the SQL editor. The driver is responsible for
-    /// applying the default row cap to unbounded SELECTs — the frontend never
-    /// rewrites SQL.
-    async fn run_query(&self, sql: &str) -> Result<QueryResult, DbError>;
+    /// Run a single statement from the SQL editor, returning zero-based
+    /// `page` of it. The driver appends `LIMIT`/`OFFSET` to an unbounded
+    /// single SELECT so the editor can page through a large result the same
+    /// way the table browser does — the frontend never rewrites SQL. A
+    /// statement carrying its own LIMIT is run untouched and reported as
+    /// capped rather than paged.
+    async fn run_query(&self, sql: &str, page: u32) -> Result<QueryResult, DbError>;
 
     /// Run a single SELECT-family statement read-only — used by the AI
     /// assistant for model-generated SQL. The driver must enforce both a
@@ -360,7 +368,16 @@ pub trait DbSession: Send + Sync {
     /// transaction that is always rolled back. The two layers are
     /// deliberately independent: the allowlist rejects obvious writes and
     /// multi-statement input early; PostgreSQL remains the final authority.
-    async fn run_read_only_query(&self, sql: &str) -> Result<QueryResult, DbError>;
+    ///
+    /// `limit` caps an unbounded SELECT. The assistant's own tools pass a cap
+    /// so a huge result can't flood the model's context; exporting the same
+    /// query to CSV passes `None`, since a truncated export would be silently
+    /// wrong.
+    async fn run_read_only_query(
+        &self,
+        sql: &str,
+        limit: Option<u32>,
+    ) -> Result<QueryResult, DbError>;
 
     /// Build the `SELECT * FROM table [WHERE filter] [ORDER BY col] LIMIT n
     /// [OFFSET m]` used by the table browser. `filter` is a user-authored
@@ -469,8 +486,14 @@ pub trait QueryCanceller: Send + Sync {
     async fn cancel(&self) -> Result<(), DbError>;
 }
 
-/// The default row cap applied to unbounded SELECT statements.
-pub const DEFAULT_ROW_LIMIT: u32 = 100;
+/// Rows per page for the SQL editor's results. Matches the table browser's
+/// own page size (`PAGE_SIZE` in `state/store.ts`), so both panes page
+/// identically — keep the two in step.
+pub const PAGE_SIZE: u32 = 500;
+
+/// The row cap the AI assistant's own queries run under, so a large result
+/// can't flood the model's context. Exports deliberately pass `None` instead.
+pub const AI_ROW_LIMIT: u32 = 500;
 
 /// Resolve the driver for an engine. The single place engines are dispatched.
 pub fn driver_for(engine: Engine) -> Box<dyn DatabaseDriver> {

@@ -7,6 +7,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 
 import type {
   ActiveConnectionInfo,
@@ -106,8 +107,21 @@ export function fetchSchema(sessionId: string): Promise<SchemaNode[]> {
   return invoke("fetch_schema", { sessionId });
 }
 
-export function runQuery(sessionId: string, sql: string): Promise<QueryResult> {
-  return invoke("run_query", { sessionId, sql });
+/** `page` is zero-based; the driver appends LIMIT/OFFSET for a pageable
+ *  statement. Omitted means the first page. */
+export function runQuery(
+  sessionId: string,
+  sql: string,
+  page = 0,
+): Promise<QueryResult> {
+  return invoke("run_query", { sessionId, sql, page });
+}
+
+/** Re-run a statement the assistant already ran, to export its full result.
+ *  Goes through the same read-only, always-rolled-back path the AI's own
+ *  tools use — the SQL came from the model, so it keeps those guarantees. */
+export function runReadonlyQuery(sessionId: string, sql: string): Promise<QueryResult> {
+  return invoke("run_readonly_query", { sessionId, sql });
 }
 
 /** Ask the server to interrupt whatever's currently running on this session.
@@ -449,4 +463,23 @@ export function errorMessage(value: unknown): string {
   if (value instanceof Error) return value.message;
   if (typeof value === "string") return value;
   return "Unknown error";
+}
+
+/**
+ * Ask for a save location, then write `contents` there. Keeps the whole
+ * native round trip in one place: a webview download can only ever land in
+ * the browser's download directory, so exports go through the OS save dialog
+ * instead — that's what lets the user pick the folder and the filename.
+ *
+ * Resolves to the path written, or `null` if the dialog was dismissed.
+ */
+export async function saveTextFile(
+  suggestedName: string,
+  contents: string,
+  filters?: { name: string; extensions: string[] }[],
+): Promise<string | null> {
+  const path = await save({ defaultPath: suggestedName, filters });
+  if (!path) return null;
+  await invoke("write_text_file", { path, contents });
+  return path;
 }

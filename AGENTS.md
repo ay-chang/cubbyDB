@@ -54,7 +54,7 @@ that's built — read it instead of trusting this section to be current.**
 
 2. **The frontend never constructs SQL** except the user's own editor text (and
    the WHERE-filter text, which is likewise user-authored). Generated SQL — the
-   default LIMIT on unbounded SELECTs, "select top 100", the filtered
+   LIMIT/OFFSET paging on unbounded SELECTs, "select top 100", the filtered
    table query — is built in Rust (`db/postgres.rs`, exposed via
    `commands.rs`).
 

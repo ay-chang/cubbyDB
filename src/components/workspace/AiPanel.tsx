@@ -5,11 +5,15 @@ import {
   useActiveAiChats,
   useActiveAiChatsLoading,
   useActiveAiMessages,
+  useActiveAiError,
   useActiveAiSending,
   useActiveConnectionCanSaveChats,
   useStore,
 } from "../../state/store";
-import type { AiChatSummary } from "../../types";
+import { copyToClipboard } from "../../api/backend";
+import type { AiChatSummary, AiMessage } from "../../types";
+import { Markdown } from "./Markdown";
+import { highlightSql, SnippetActions } from "./sqlSnippet";
 
 /** Cap on how tall the chat input grows before it starts scrolling instead —
  *  about 8-9 lines at the input's font size, VSCode-editor style. */
@@ -32,6 +36,7 @@ function formatTime(ms: number): string {
 export function AiPanel() {
   const messages = useActiveAiMessages();
   const sending = useActiveAiSending();
+  const aiError = useActiveAiError();
   const chatId = useActiveAiChatId();
   const chats = useActiveAiChats();
   const chatsLoading = useActiveAiChatsLoading();
@@ -39,6 +44,9 @@ export function AiPanel() {
   const historyView = useStore((s) => s.aiHistoryView);
   const aiConfig = useStore((s) => s.aiConfig);
   const sendAiMessage = useStore((s) => s.sendAiMessage);
+  const retryAiMessage = useStore((s) => s.retryAiMessage);
+  const regenerateAiMessage = useStore((s) => s.regenerateAiMessage);
+  const stopAiMessage = useStore((s) => s.stopAiMessage);
   const toggleAiPanel = useStore((s) => s.toggleAiPanel);
   const toggleAiHistoryView = useStore((s) => s.toggleAiHistoryView);
   const newAiChat = useStore((s) => s.newAiChat);
@@ -47,9 +55,13 @@ export function AiPanel() {
   const deleteAiChat = useStore((s) => s.deleteAiChat);
   const openSettings = useStore((s) => s.openSettings);
   const activeConnectionId = useStore((s) => s.activeConnectionId);
+  const sessionId = useStore((s) =>
+    s.activeConnectionId ? s.connections[s.activeConnectionId]?.sessionId ?? null : null,
+  );
   const openEditConnection = useStore((s) => s.openEditConnection);
 
   const [draft, setDraft] = useState("");
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -98,6 +110,16 @@ export function AiPanel() {
     if (!text || sending || !hasKey) return;
     setDraft("");
     void sendAiMessage(text);
+  };
+
+  const copyMessage = (content: string, index: number) => {
+    void copyToClipboard(content).then(() => {
+      setCopiedIndex(index);
+      window.setTimeout(
+        () => setCopiedIndex((current) => (current === index ? null : current)),
+        1200,
+      );
+    });
   };
 
   return (
@@ -180,32 +202,77 @@ export function AiPanel() {
                 key={i}
                 className={"ai-msg" + (m.role === "user" ? " ai-msg--user" : " ai-msg--assistant")}
               >
-                <div className="ai-msg__content">{m.content}</div>
+                {m.role === "user" ? (
+                  <div className="ai-msg__content">{m.content}</div>
+                ) : (
+                  <>
+                    <Markdown content={m.content} source={exportSourceFor(m, sessionId)} />
+                    <div className="ai-msg__actions">
+                      <button
+                        className="snippet-actions__btn"
+                        onClick={() => copyMessage(m.content, i)}
+                        title="Copy this answer"
+                      >
+                        {copiedIndex === i ? "Copied" : "Copy"}
+                      </button>
+                      {/* Only the newest reply — regenerating an earlier one
+                          would silently discard everything said after it. */}
+                      {i === messages.length - 1 && !sending && (
+                        <button
+                          className="snippet-actions__btn"
+                          onClick={() => void regenerateAiMessage()}
+                          title="Discard this answer and ask again"
+                        >
+                          Regenerate
+                        </button>
+                      )}
+                    </div>
+                  </>
+                )}
                 {m.trace && m.trace.length > 0 && (
                   <details className="ai-trace">
                     <summary>
                       {m.trace.length} {m.trace.length === 1 ? "step" : "steps"}
                     </summary>
-                    {m.trace.map((t, j) => (
-                      <div key={j} className="ai-trace__item">
-                        <span className="ai-trace__tool mono">{t.tool}</span>
-                        {t.detail && <code className="ai-trace__sql">{t.detail}</code>}
-                        <span className="ai-trace__meta">
-                          {t.error
-                            ? t.error
-                            : t.rowCount !== null
-                              ? `${t.rowCount} rows`
-                              : "ok"}
-                        </span>
-                      </div>
-                    ))}
+                    {m.trace.map((t, j) => {
+                      // Only these two record an actual statement in `detail`;
+                      // the rest carry a table name or a search term, which
+                      // would open a query tab that doesn't parse.
+                      const isSql = t.tool === "run_sql" || t.tool === "explain_query";
+                      return (
+                        <div key={j} className="ai-trace__item">
+                          <div className="ai-trace__item-head">
+                            <span className="ai-trace__tool mono">{t.tool}</span>
+                            {isSql && t.detail && (
+                              <SnippetActions text={t.detail} openAsSql tabTitle="ai-step.sql" />
+                            )}
+                          </div>
+                          {t.detail && (
+                            <code className="ai-trace__sql">
+                              {isSql ? highlightSql(t.detail) : t.detail}
+                            </code>
+                          )}
+                          <span className="ai-trace__meta">
+                            {t.error
+                              ? t.error
+                              : t.rowCount !== null
+                                ? `${t.rowCount} rows`
+                                : "ok"}
+                          </span>
+                        </div>
+                      );
+                    })}
                   </details>
                 )}
               </div>
             ))}
-            {sending && (
-              <div className="ai-msg ai-msg--assistant ai-msg--pending">
-                Thinking…
+            {sending && <ThinkingIndicator />}
+            {aiError && (
+              <div className="ai-error" role="alert">
+                <span className="ai-error__msg">{aiError}</span>
+                <button className="ai-error__retry" onClick={() => void retryAiMessage()}>
+                  Retry
+                </button>
               </div>
             )}
           </div>
@@ -225,18 +292,54 @@ export function AiPanel() {
                 }
               }}
             />
-            <button
-              className="btn btn--primary ai-input-row__send"
-              onClick={send}
-              disabled={!hasKey || sending || !draft.trim()}
-            >
-              Send
-            </button>
+            {sending ? (
+              <button
+                className="btn ai-input-row__send"
+                onClick={stopAiMessage}
+                title="Stop waiting for this reply"
+              >
+                Stop
+              </button>
+            ) : (
+              <button
+                className="btn btn--primary ai-input-row__send"
+                onClick={send}
+                disabled={!hasKey || !draft.trim()}
+              >
+                Send
+              </button>
+            )}
           </div>
         </>
       )}
     </div>
   );
+}
+
+/**
+ * The statement to re-run when this reply's table is exported, so the
+ * download carries every row rather than just the previewed ones.
+ *
+ * Only when the turn ran exactly one query: with several, there's no reliable
+ * way to tell which one produced the table, and exporting the wrong result
+ * silently would be worse than exporting the rows on screen.
+ */
+function exportSourceFor(
+  message: AiMessage,
+  sessionId: string | null,
+): { sessionId: string; sql: string; rowCount: number | null } | undefined {
+  if (!sessionId) return undefined;
+  const queries = (message.trace ?? []).filter((t) => t.tool === "run_sql" && !t.error);
+  if (queries.length !== 1) return undefined;
+  return { sessionId, sql: queries[0].detail, rowCount: queries[0].rowCount };
+}
+
+/** Shown while a turn is in flight, in place of the old "Thinking…" bubble.
+ *  Deliberately unbubbled — nothing has been said yet, so it reads as status
+ *  rather than as a message. The motion is a shimmer sweeping across the
+ *  word (see `.ai-thinking`). */
+function ThinkingIndicator() {
+  return <div className="ai-thinking">Thinking…</div>;
 }
 
 /** The History view's chat list — click to open, inline rename, delete.

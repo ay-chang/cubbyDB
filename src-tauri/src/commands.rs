@@ -14,7 +14,7 @@ use crate::connections::{LastConnection, SavedConnection};
 use crate::db::{
     driver_for, ColumnValue, ConnectionInfo, ConnectionParams, DbError, DbErrorKind, DeleteImpact,
     Engine, FunctionDefinition, QueryResult, SchemaNode, SequenceDetails, TableStructure,
-    DEFAULT_ROW_LIMIT,
+    PAGE_SIZE,
 };
 use crate::history::{now_millis, HistoryEntry};
 use crate::saved_queries::SavedQuery;
@@ -317,7 +317,10 @@ pub async fn run_query(
     state: State<'_, AppState>,
     session_id: String,
     sql: String,
+    // Zero-based page of the result; omitted means the first page.
+    page: Option<u32>,
 ) -> Result<QueryResult, DbError> {
+    let page = page.unwrap_or(0);
     let mut active = state.active.lock().await;
     let connection_name = active
         .get(&session_id)
@@ -329,14 +332,14 @@ pub async fn run_query(
         .get(&session_id)
         .ok_or_else(DbError::not_connected)?
         .session
-        .run_query(&sql)
+        .run_query(&sql, page)
         .await;
 
     // If the connection had silently dropped, reconnect once and retry.
     if matches!(&result, Err(e) if e.kind == DbErrorKind::Connection) {
         if let Ok(()) = reconnect_in_place(&mut active, &session_id, &state).await {
             if let Some(session) = active.get(&session_id) {
-                result = session.session.run_query(&sql).await;
+                result = session.session.run_query(&sql, page).await;
             }
         }
     }
@@ -389,7 +392,7 @@ pub async fn select_top_sql(
         &schema,
         &table,
         filter.as_deref(),
-        limit.unwrap_or(DEFAULT_ROW_LIMIT),
+        limit.unwrap_or(PAGE_SIZE),
         offset.unwrap_or(0),
         sort_column
             .as_deref()
@@ -631,6 +634,16 @@ pub async fn get_sequence_details(
 // webview's `navigator.clipboard`, which isn't reliably granted inside the
 // Tauri window.
 
+/// Write an exported file to a path the user just picked in the native save
+/// dialog. The path is only ever one the OS dialog handed back, so this does
+/// no scoping of its own — it exists so the export doesn't have to pull in
+/// the filesystem plugin for a single write.
+#[tauri::command]
+pub async fn write_text_file(path: String, contents: String) -> Result<(), DbError> {
+    std::fs::write(&path, contents)
+        .map_err(|e| DbError::new(DbErrorKind::Internal, format!("Could not save {path}: {e}")))
+}
+
 #[tauri::command]
 pub async fn write_clipboard(text: String) -> Result<(), DbError> {
     let mut clipboard = arboard::Clipboard::new()
@@ -768,6 +781,40 @@ pub async fn list_ai_models(state: State<'_, AppState>) -> Result<Vec<ModelInfo>
         }
         AiProvider::Codex => crate::ai::codex::list_models(state.data_dir()).await,
     }
+}
+
+/// Re-run a statement the assistant already ran, to export its full result.
+///
+/// The panel only renders a short preview of a large result, so the Download
+/// CSV button has to fetch the whole thing rather than scrape the rows on
+/// screen. This deliberately goes through `run_read_only_query` — the same
+/// allowlisted, always-rolled-back path the AI's own tools use — and not
+/// `run_query`: the SQL originates from the model, so it must keep the same
+/// guarantees on the way back out as it had going in.
+#[tauri::command]
+pub async fn run_readonly_query(
+    state: State<'_, AppState>,
+    session_id: String,
+    sql: String,
+) -> Result<QueryResult, DbError> {
+    let mut active = state.active.lock().await;
+
+    let result = active
+        .get(&session_id)
+        .ok_or_else(DbError::not_connected)?
+        .session
+        .run_read_only_query(&sql, None)
+        .await;
+
+    // Same reconnect-once-on-drop behavior as every other session command.
+    if matches!(&result, Err(e) if e.kind == DbErrorKind::Connection) {
+        if let Ok(()) = reconnect_in_place(&mut active, &session_id, &state).await {
+            if let Some(session) = active.get(&session_id) {
+                return session.session.run_read_only_query(&sql, None).await;
+            }
+        }
+    }
+    result
 }
 
 /// One AI turn: builds the schema-aware system prompt from the schema tree

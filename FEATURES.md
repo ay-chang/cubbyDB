@@ -130,6 +130,16 @@ code comments or AGENTS.md's architecture section.
   includes obscure system-catalog and XML-function terms that would
   otherwise fuzzy-match so much of what you type that they bury the schema
   suggestions that are actually useful
+- Query results are **paginated**, 500 rows a page, with the same Prev/Next
+  pager the table browser uses — results are no longer capped at a fixed
+  number of rows. The backend appends `LIMIT`/`OFFSET` to an unbounded single
+  SELECT; it is appended rather than wrapped in a subquery, so the query's own
+  `ORDER BY` still decides what lands on each page. Re-running a query returns
+  to the first page; a background refresh stays where you are
+- A query that carries **its own `LIMIT`** is run exactly as written and shown
+  whole rather than paged — the "Limit applied" badge marks that case, since
+  the rest of the result isn't reachable by paging. Remove the LIMIT to page
+  through everything
 - Multiple tabs; drag to reorder; "+" to add, click to close.
   Cmd/Ctrl+T opens a new tab and Cmd/Ctrl+W closes the active one from
   anywhere in the workspace (both route through the same unsaved-edits
@@ -347,6 +357,48 @@ code comments or AGENTS.md's architecture section.
   stored as plaintext, matching saved database passwords
 - Chats are scoped to the saved connection and persist across restarts. An
   ad-hoc unsaved connection keeps chat history only for its current session
+- A failed turn shows as a retryable strip beside the thread rather than as a
+  reply. The failure is never written into the chat or sent back to the model
+  as something it said, so retrying asks the original question cleanly
+- **Stop** replaces Send while a turn is in flight, handing the panel back
+  without waiting. The provider request itself can't be aborted, so its
+  tokens are still spent — the abandoned reply is discarded when it arrives
+- Each answer has **Copy**, and the most recent one also has **Regenerate**,
+  which discards it and asks the same question again. Only the newest reply
+  can be regenerated, since replacing an earlier one would discard everything
+  said after it
+- The Ask AI panel toggles with Cmd/Ctrl+J (rebindable in Settings)
+- Any table in an answer has a **Download CSV** button, so asking the
+  assistant to export something produces a real file rather than CSV text to
+  copy by hand. When a table is offered for download the answer shows the
+  data once, in that table, instead of repeating it as text
+- Tables are previews, labelled with the real total ("10 of 292 rows"), so a
+  large result never floods the panel. **Download CSV** re-runs the query
+  behind the answer and exports every row, not just the previewed ones — so
+  size is never a reason the assistant can't export something. Re-running
+  goes through the same read-only, always-rolled-back path the assistant's
+  own queries use. A turn that ran more than one query falls back to
+  exporting the rows on screen, since which query produced the table would
+  be a guess
+- CSV export — from an answer's table or the results grid — opens the native
+  save dialog, so the folder and filename are chosen and confirmed before
+  anything is written, and a toast confirms the saved file afterwards.
+  Dismissing the dialog writes nothing. Files carry a UTF-8 BOM so they open
+  correctly in Excel (accented text included) and use the delimiter from
+  Settings > General
+- Answers render as formatted Markdown: row results come back as real tables
+  (scrollable, with the values in mono), the specific figure that answers the
+  question is bolded, and identifiers are set as inline code. Headings, lists,
+  quotes, and links are styled to match the rest of the app. What the user
+  typed is always shown verbatim
+- SQL in an answer gets a syntax-highlighted code block with **Copy** and
+  **Open in editor**. The same two buttons appear on each SQL step under a
+  message's expanded tool trace, so any statement the assistant actually ran
+  can be pulled out and worked on. **Open in editor** loads the statement
+  into a new query tab and focuses it — it never runs anything; executing it
+  is still an explicit action. Steps that record a table name or search term
+  rather than a statement (`describe_table`, `sample_rows`, `search_schema`)
+  show no buttons
 
 ## Tabs & session persistence
 
@@ -406,9 +458,11 @@ Cmd/Ctrl+W closes the dialog rather than the database tab behind it.
   row-copy delimiter
 - **Appearance → Interface**: theme (8 presets — 2 light: Light, Paper; 6
   dark: Dark, Midnight, Charcoal, Slate, and two lifted from popular editor
-  themes, One Dark and Dracula), accent color (10 presets — Indigo, Blue,
-  Cyan, Teal, Green, Amber, Orange, Red, Pink, Purple; drives buttons, active
-  states, and SQL keyword highlighting), compact top bar
+  themes, One Dark and Dracula), accent color (20 presets — Green, Indigo,
+  Blue, Sky, Cyan, Teal, Emerald, Lime, Yellow, Amber, Orange, Red, Rose,
+  Pink, Fuchsia, Purple, Violet, Brown, Stone, Zinc; drives buttons, active
+  states, and SQL keyword highlighting, and doubles as the connection-tag
+  palette), compact top bar
 - **Appearance → Table**: font, font size, row height, zebra striping, cell
   borders, header-row shading (a subtle darkening so the column-header row
   stands out from the data below), wrap-vs-truncate long text, NULL display

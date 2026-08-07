@@ -19,6 +19,7 @@ import { SchemaTree } from "./SchemaTree";
 import { SequenceDetailsPane } from "./SequenceDetailsPane";
 import { SqlEditor } from "./SqlEditor";
 import { TableStructurePane } from "./TableStructurePane";
+import { Toast } from "./Toast";
 import { TopBar, useIsFullscreen } from "./TopBar";
 import { UpdateBanner } from "./UpdateBanner";
 import "./workspace.css";
@@ -179,6 +180,7 @@ export function Workspace() {
       {historyOpen && <HistoryPanel />}
       {savedQueriesOpen && <SavedQueriesPanel />}
       {saveDialogOpen && <SaveQueryDialog onClose={closeSaveDialog} />}
+      <Toast />
       <CommandPalette />
     </div>
   );
@@ -233,6 +235,7 @@ function useWorkspaceShortcuts(toggleSidebar: () => void) {
   const closeTab = useStore((s) => s.closeTab);
   const setActiveTab = useStore((s) => s.setActiveTab);
   const toggleCommandPalette = useStore((s) => s.toggleCommandPalette);
+  const toggleAiPanel = useStore((s) => s.toggleAiPanel);
   const refreshActive = useStore((s) => s.refreshActive);
   const settingsOpen = useStore((s) => s.settingsOpen);
   const bindings = useKeybindingStore((s) => s.bindings);
@@ -307,6 +310,11 @@ function useWorkspaceShortcuts(toggleSidebar: () => void) {
         toggleSidebar();
         return;
       }
+      if (matchesKeybinding(e, bindings["workspace.toggleAiPanel"])) {
+        e.preventDefault();
+        toggleAiPanel();
+        return;
+      }
       if (
         matchesKeybinding(e, bindings["workspace.previousTab"]) ||
         matchesKeybinding(e, bindings["workspace.nextTab"])
@@ -340,6 +348,7 @@ function useWorkspaceShortcuts(toggleSidebar: () => void) {
     closeTab,
     setActiveTab,
     toggleCommandPalette,
+    toggleAiPanel,
     refreshActive,
     settingsOpen,
     bindings,

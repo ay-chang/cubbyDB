@@ -17,7 +17,9 @@ impl<'a> ReadOnlyDb<'a> {
     }
 
     pub(crate) async fn run_query(&self, sql: &str) -> Result<QueryResult, DbError> {
-        self.session.run_read_only_query(sql).await
+        self.session
+            .run_read_only_query(sql, Some(crate::db::AI_ROW_LIMIT))
+            .await
     }
 
     pub(crate) async fn table_structure(

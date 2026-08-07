@@ -81,6 +81,14 @@ export const KEYBINDING_DEFINITIONS = [
     context: "workspace",
   },
   {
+    id: "workspace.toggleAiPanel",
+    group: "General",
+    description: "Show or hide the Ask AI panel",
+    // Not mod+shift+a — that's already EXPLAIN ANALYZE in the SQL editor.
+    defaultBinding: "mod+j",
+    context: "workspace",
+  },
+  {
     id: "workspace.closeTab",
     group: "General",
     description: "Close the active tab",

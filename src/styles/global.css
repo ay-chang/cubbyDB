@@ -49,24 +49,17 @@ textarea {
   color: inherit;
 }
 
-/* Thin, unobtrusive scrollbars to match the restrained aesthetic. */
-::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-::-webkit-scrollbar-thumb {
-  background: var(--scrollbar-thumb);
-  border-radius: 6px;
-  border: 2px solid transparent;
-  background-clip: content-box;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: var(--scrollbar-thumb-hover);
-  background-clip: content-box;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
+/* Scrollbars are deliberately left unstyled. Defining any ::-webkit-scrollbar
+   rule opts the element out of the platform's overlay scrollbars and into
+   legacy ones, which permanently reserve a gutter on anything scrollable —
+   that put a standing bar under the results grid the moment the AI panel
+   narrowed it, and down the side of a nearly-empty AI chat. Native overlay
+   scrollbars float above the content and fade in only while scrolling, which
+   is both what we want and the more restrained look.
+
+   `.cm-tooltip-autocomplete` in editorTheme.ts is the one exception: it's a
+   small fixed dropdown, not a pane, so a visible thin scrollbar there is
+   deliberate and does not cost layout. */
 
 .mono {
   font-family: var(--font-mono);
