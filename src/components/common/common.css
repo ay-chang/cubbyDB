@@ -78,7 +78,13 @@
 .confirm-overlay {
   position: fixed;
   inset: 0;
-  z-index: 200;
+  /* Above every other overlay (Settings at 210, the command palette and
+     column-jump at 220) — a confirm dialog is a blocking decision the user
+     must resolve, so it can't render underneath whatever modal triggered it.
+     Found via the AI-terms consent gate: `clearAiConfig`'s "Remove key?"
+     confirm has the same call-from-within-Settings shape and was equally
+     unreachable before this fix. */
+  z-index: 221;
   background: rgba(22, 24, 29, 0.32);
   display: flex;
   align-items: center;
@@ -427,6 +433,14 @@
 }
 .settings-field__desc--error {
   color: var(--error-text);
+}
+/* A closing note rather than a warning — same muted tone as every other
+   description, just set off with extra top space so it reads as a footnote
+   for the section instead of a line under whichever field precedes it. */
+.settings-field__desc--footnote {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
 }
 [data-setting-id] {
   scroll-margin: 20px;
@@ -1047,33 +1061,30 @@ button.shortcut-binding:focus-visible {
   color: var(--text-faint);
   font-weight: 400;
 }
+/* Sits inline in the compact status card, so it's smaller than a standard
+   `.btn` rather than inheriting the 36px height built for a full-width row. */
+.ai-credential-status__logout {
+  flex: none;
+  align-self: center;
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+}
 .ai-credential-status__meta {
   margin-top: 2px;
   color: var(--text-muted);
   font-size: 10.5px;
   line-height: 1.35;
 }
-.redacted-sensitive {
+.ai-credential-status__email {
   min-width: 0;
   overflow: hidden;
-  border-radius: 3px;
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 400;
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
-  transition: color var(--transition), filter var(--transition);
-}
-.redacted-sensitive:hover {
-  color: var(--text);
-}
-.redacted-sensitive--hidden {
-  filter: blur(2px);
-  user-select: none;
-}
-.redacted-sensitive--revealed {
-  filter: none;
 }
 
 /* A multi-line settings input (e.g. the starter-SQL template), styled to

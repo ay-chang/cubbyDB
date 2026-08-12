@@ -96,13 +96,17 @@ export function AiPanel() {
     ? "OpenAI"
     : aiConfig?.provider === "codex"
       ? "Codex"
-      : "Anthropic";
+      : aiConfig?.provider === "claudeCode"
+        ? "Claude Code"
+        : "Anthropic";
   const hasKey = aiConfig
     ? aiConfig.provider === "codex"
       ? aiConfig.codexAuthenticated
-      : aiConfig.provider === "openai"
-        ? aiConfig.openaiKeySet
-        : aiConfig.anthropicKeySet
+      : aiConfig.provider === "claudeCode"
+        ? aiConfig.claudeCodeAuthenticated
+        : aiConfig.provider === "openai"
+          ? aiConfig.openaiKeySet
+          : aiConfig.anthropicKeySet
     : true;
 
   const send = () => {
@@ -205,29 +209,7 @@ export function AiPanel() {
                 {m.role === "user" ? (
                   <div className="ai-msg__content">{m.content}</div>
                 ) : (
-                  <>
-                    <Markdown content={m.content} source={exportSourceFor(m, sessionId)} />
-                    <div className="ai-msg__actions">
-                      <button
-                        className="snippet-actions__btn"
-                        onClick={() => copyMessage(m.content, i)}
-                        title="Copy this answer"
-                      >
-                        {copiedIndex === i ? "Copied" : "Copy"}
-                      </button>
-                      {/* Only the newest reply — regenerating an earlier one
-                          would silently discard everything said after it. */}
-                      {i === messages.length - 1 && !sending && (
-                        <button
-                          className="snippet-actions__btn"
-                          onClick={() => void regenerateAiMessage()}
-                          title="Discard this answer and ask again"
-                        >
-                          Regenerate
-                        </button>
-                      )}
-                    </div>
-                  </>
+                  <Markdown content={m.content} source={exportSourceFor(m, sessionId)} />
                 )}
                 {m.trace && m.trace.length > 0 && (
                   <details className="ai-trace">
@@ -252,17 +234,35 @@ export function AiPanel() {
                               {isSql ? highlightSql(t.detail) : t.detail}
                             </code>
                           )}
-                          <span className="ai-trace__meta">
-                            {t.error
-                              ? t.error
-                              : t.rowCount !== null
-                                ? `${t.rowCount} rows`
-                                : "ok"}
-                          </span>
+                          {t.error && <span className="ai-trace__error">{t.error}</span>}
                         </div>
                       );
                     })}
                   </details>
+                )}
+                {m.role === "assistant" && (
+                  <div className="ai-msg__actions">
+                    <button
+                      className="ai-msg-action"
+                      onClick={() => copyMessage(m.content, i)}
+                      title={copiedIndex === i ? "Copied" : "Copy this answer"}
+                      aria-label="Copy this answer"
+                    >
+                      {copiedIndex === i ? <CheckIcon /> : <CopyIcon />}
+                    </button>
+                    {/* Only the newest reply — regenerating an earlier one
+                        would silently discard everything said after it. */}
+                    {i === messages.length - 1 && !sending && (
+                      <button
+                        className="ai-msg-action"
+                        onClick={() => void regenerateAiMessage()}
+                        title="Discard this answer and ask again"
+                        aria-label="Regenerate this answer"
+                      >
+                        <RegenerateIcon />
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
             ))}
@@ -277,38 +277,43 @@ export function AiPanel() {
             )}
           </div>
           <div className="ai-input-row">
-            <textarea
-              ref={inputRef}
-              className="ai-input"
-              rows={1}
-              placeholder={hasKey ? "Ask a question…" : "Configure AI in Settings to start"}
-              value={draft}
-              disabled={!hasKey}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  send();
-                }
-              }}
-            />
-            {sending ? (
-              <button
-                className="btn ai-input-row__send"
-                onClick={stopAiMessage}
-                title="Stop waiting for this reply"
-              >
-                Stop
-              </button>
-            ) : (
-              <button
-                className="btn btn--primary ai-input-row__send"
-                onClick={send}
-                disabled={!hasKey || !draft.trim()}
-              >
-                Send
-              </button>
-            )}
+            <div className="ai-input-box">
+              <textarea
+                ref={inputRef}
+                className="ai-input"
+                rows={1}
+                placeholder={hasKey ? "Ask a question…" : "Configure AI in Settings to start"}
+                value={draft}
+                disabled={!hasKey}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    send();
+                  }
+                }}
+              />
+              {sending ? (
+                <button
+                  className="ai-input-box__action ai-input-box__action--stop"
+                  onClick={stopAiMessage}
+                  title="Stop waiting for this reply"
+                  aria-label="Stop"
+                >
+                  <span className="ai-input-row__stop-icon" aria-hidden />
+                </button>
+              ) : (
+                <button
+                  className="ai-input-box__action ai-input-box__action--send"
+                  onClick={send}
+                  disabled={!hasKey || !draft.trim()}
+                  title="Send (Enter)"
+                  aria-label="Send"
+                >
+                  <EnterIcon />
+                </button>
+              )}
+            </div>
           </div>
         </>
       )}
@@ -334,12 +339,104 @@ function exportSourceFor(
   return { sessionId, sql: queries[0].detail, rowCount: queries[0].rowCount };
 }
 
+/** Return-key glyph for the composer's send action — an inline icon rather
+ *  than a labeled button, since Enter already sends. */
+function EnterIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M20 5v6a2 2 0 0 1-2 2H6" />
+      <path d="M9 10l-3 3 3 3" />
+    </svg>
+  );
+}
+
+function CopyIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <rect x="9" y="9" width="12" height="12" rx="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M20 6 9 17l-5-5" />
+    </svg>
+  );
+}
+
+function RegenerateIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
+      <path d="M21 3v5h-5" />
+      <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
+      <path d="M3 21v-5h5" />
+    </svg>
+  );
+}
+
 /** Shown while a turn is in flight, in place of the old "Thinking…" bubble.
  *  Deliberately unbubbled — nothing has been said yet, so it reads as status
- *  rather than as a message. The motion is a shimmer sweeping across the
- *  word (see `.ai-thinking`). */
+ *  rather than as a message. The label is two stacked copies of the same
+ *  text: a plain, always-visible base underneath, and a second copy on top
+ *  clipped to a moving gradient (see `.ai-thinking__shine`) — that shine can
+ *  sweep off past the text entirely between passes without the word itself
+ *  blinking out, which a single clipped layer can't do while resting. */
 function ThinkingIndicator() {
-  return <div className="ai-thinking">Thinking…</div>;
+  return (
+    <div className="ai-thinking">
+      <span className="ai-thinking__dot" aria-hidden />
+      <span className="ai-thinking__label">
+        Thinking…
+        <span className="ai-thinking__shine" aria-hidden>
+          Thinking…
+        </span>
+      </span>
+    </div>
+  );
 }
 
 /** The History view's chat list — click to open, inline rename, delete.

@@ -38,11 +38,13 @@ Settings system (theme, table/editor appearance, general behavior).
 that's built — read it instead of trusting this section to be current.**
 
 **Explicitly OUT of scope — do not build:**
-- Autocomplete / IntelliSense in the editor
 - Any database engine other than Postgres
-- Multiple simultaneous open connections
 - User accounts, sync, or cloud features
-- CI/CD, code signing, release automation
+
+Autocomplete, multiple simultaneous connections, and CI/CD with code signing
+were on this list once but are now built — see FEATURES.md and
+`.github/workflows/release.yml`. Left here as a reminder that this list drifts
+and needs checking against reality, not assumed current.
 
 ## Architecture — the rules that matter
 
@@ -118,6 +120,14 @@ npm install
 npm run app         # launch the desktop app (Tauri dev). First launch compiles
                     # Rust (~30s); frontend hot-reloads after.
 npm run build       # type-check + build the frontend
+npm test            # frontend unit tests (Vitest) — pure logic in src/lib/
+                    # only for now; see the file header on vitest.config.ts
+                    # before adding a component/DOM test
+npm run lint        # ESLint — see eslint.config.js's header before adding a
+                    # rule; it's deliberately narrow (typescript-eslint's
+                    # recommended set + exactly two react-hooks rules, not
+                    # that plugin's own `recommended`, which assumes the
+                    # React Compiler and floods unrelated, correct code)
 cd src-tauri && cargo build     # compile the backend
 cd src-tauri && cargo test      # Rust unit tests
 ```
@@ -165,8 +175,16 @@ in `src-tauri/` are Rust-side.
   short, usually one line, and prefer documenting how a function or abstraction
   is used over narrating line-by-line behavior. Keep comments with the code they
   describe when code moves.
-- Verify changes with `npm run build` + `cargo build`; the user prefers NOT
-  opening the browser preview pane.
+- Verify changes with `npm run build` + `cargo build`, plus `npm test` and
+  `cargo test` when touching anything under `src/lib/` or `src-tauri/src/`,
+  and `npm run lint` when touching any React component (it's the one thing
+  here that reads inside a hook's body); the user prefers NOT opening the
+  browser preview pane.
+- When adding a pure function to `src/lib/` (or `sqlSnippet.tsx`'s
+  `highlightSql`/`SQL_TOKEN`), add a Vitest test alongside it in the same
+  change — that directory is the one part of the frontend with real test
+  coverage; don't let new logic land there untested while the rest of the app
+  stays UI-only and effectively unverifiable by an agent.
 
 If a convention here conflicts with the task at hand, call out the conflict
 clearly and get sign-off before breaking it.
@@ -187,8 +205,15 @@ clearly and get sign-off before breaking it.
 - **TLS**: native-tls with sslmode=prefer — TLS when the server offers it,
   plaintext otherwise. No extra system deps.
 - **Passwords are stored in plaintext** in `connections.json` /
-  `last_connection.json` (0600). Known limitation; OS keychain is the planned fix.
-  Don't regress to logging them.
+  `last_connection.json` (0600), by deliberate, permanent design — not a gap
+  to fix. An earlier version stored them in the OS keychain instead; every OS
+  keychain treats each lookup *and* store as its own access request with its
+  own auth prompt, so a saved connection or even a plain restart could mean
+  two or three password prompts in a row. That trade wasn't worth it (see
+  `connections.rs`'s module docs). `keychain.rs` exists only as a one-time
+  migration pulling old keychain entries back into this file — do not
+  reintroduce keychain storage for anything new. Don't regress to logging
+  passwords either way.
 - Tab layout, and per-table column order/width, are persisted in the webview's
   `localStorage` (keys prefixed `cubbydb:`).
 

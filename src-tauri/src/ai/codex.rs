@@ -249,6 +249,14 @@ pub async fn start_login(data_dir: &Path) -> Result<(), DbError> {
     Ok(())
 }
 
+/// Signs out of the Codex CLI's current ChatGPT account. Codex owns removing
+/// the stored credential; CubbyDB never held one to begin with.
+pub async fn logout(data_dir: &Path) -> Result<(), DbError> {
+    let mut client = CodexClient::connect(data_dir).await?;
+    client.request("account/logout", json!({})).await?;
+    Ok(())
+}
+
 pub async fn list_models(data_dir: &Path) -> Result<Vec<ModelInfo>, DbError> {
     let mut client = CodexClient::connect(data_dir).await?;
     require_account(&mut client).await?;

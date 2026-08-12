@@ -43,7 +43,6 @@ import {
   TABLE_ROW_HEIGHT_OPTIONS,
 } from "../../state/store";
 import type { NullDisplay } from "../../state/store";
-import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import {
   SETTINGS_SEARCH_ITEMS,
   SETTINGS_SECTIONS,
@@ -453,6 +452,9 @@ function AiAssistantSection() {
   const saveAiModel = useStore((s) => s.saveAiModel);
   const saveAiReasoningEffort = useStore((s) => s.saveAiReasoningEffort);
   const startCodexLogin = useStore((s) => s.startCodexLogin);
+  const startClaudeCodeLogin = useStore((s) => s.startClaudeCodeLogin);
+  const logoutCodex = useStore((s) => s.logoutCodex);
+  const logoutClaudeCode = useStore((s) => s.logoutClaudeCode);
 
   useEffect(() => {
     if (!aiConfig) void loadAiConfig();
@@ -463,27 +465,45 @@ function AiAssistantSection() {
   const [saving, setSaving] = useState(false);
   const [codexSigningIn, setCodexSigningIn] = useState(false);
   const [codexLoginError, setCodexLoginError] = useState<string | null>(null);
+  const [claudeCodeSigningIn, setClaudeCodeSigningIn] = useState(false);
+  const [claudeCodeLoginError, setClaudeCodeLoginError] = useState<string | null>(null);
 
   const provider = aiConfig?.provider ?? "anthropic";
-  const providerName = provider === "openai" ? "OpenAI" : provider === "codex" ? "Codex" : "Anthropic";
-  const keySet = provider === "codex"
-    ? (aiConfig?.codexAuthenticated ?? false)
-    : provider === "openai"
-      ? (aiConfig?.openaiKeySet ?? false)
-      : (aiConfig?.anthropicKeySet ?? false);
+  const providerName =
+    provider === "openai"
+      ? "OpenAI"
+      : provider === "codex"
+        ? "Codex"
+        : provider === "claudeCode"
+          ? "Claude Code"
+          : "Anthropic";
+  const keySet =
+    provider === "codex"
+      ? (aiConfig?.codexAuthenticated ?? false)
+      : provider === "claudeCode"
+        ? (aiConfig?.claudeCodeAuthenticated ?? false)
+        : provider === "openai"
+          ? (aiConfig?.openaiKeySet ?? false)
+          : (aiConfig?.anthropicKeySet ?? false);
   const keyHint = provider === "openai"
     ? aiConfig?.openaiKeyHint
     : provider === "anthropic"
       ? aiConfig?.anthropicKeyHint
       : null;
-  const currentModel = provider === "codex"
-    ? aiConfig?.codexModel
-    : provider === "openai"
-      ? aiConfig?.openaiModel
-      : aiConfig?.anthropicModel;
-  const currentReasoningEffort = provider === "codex"
-    ? (aiConfig?.codexReasoningEffort ?? "medium")
-    : (aiConfig?.openaiReasoningEffort ?? "medium");
+  const currentModel =
+    provider === "codex"
+      ? aiConfig?.codexModel
+      : provider === "claudeCode"
+        ? aiConfig?.claudeCodeModel
+        : provider === "openai"
+          ? aiConfig?.openaiModel
+          : aiConfig?.anthropicModel;
+  const currentReasoningEffort =
+    provider === "codex"
+      ? (aiConfig?.codexReasoningEffort ?? "medium")
+      : provider === "claudeCode"
+        ? (aiConfig?.claudeCodeReasoningEffort ?? "medium")
+        : (aiConfig?.openaiReasoningEffort ?? "medium");
 
   // Live-fetched, not persisted anywhere — just what populates the dropdown.
   // Re-runs once a key becomes available (e.g. right after `handleSave`
@@ -492,11 +512,14 @@ function AiAssistantSection() {
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const selectedModelInfo = modelOptions.find((model) => model.id === currentModel);
-  const fallbackReasoningEfforts: AiReasoningEffort[] = currentModel?.startsWith("gpt-5.6")
-    ? provider === "codex"
+  const fallbackReasoningEfforts: AiReasoningEffort[] =
+    provider === "claudeCode"
       ? ["low", "medium", "high", "xhigh", "max"]
-      : ["none", "low", "medium", "high", "xhigh", "max"]
-    : ["low", "medium", "high"];
+      : currentModel?.startsWith("gpt-5.6")
+        ? provider === "codex"
+          ? ["low", "medium", "high", "xhigh", "max"]
+          : ["none", "low", "medium", "high", "xhigh", "max"]
+        : ["low", "medium", "high"];
   const reasoningOptions = selectedModelInfo?.supportedReasoningEfforts.length
     ? selectedModelInfo.supportedReasoningEfforts
     : fallbackReasoningEfforts;
@@ -551,13 +574,25 @@ function AiAssistantSection() {
     );
   };
 
+  const handleClaudeCodeLogin = () => {
+    setClaudeCodeSigningIn(true);
+    setClaudeCodeLoginError(null);
+    void startClaudeCodeLogin().then(
+      () => setClaudeCodeSigningIn(false),
+      (error) => {
+        setClaudeCodeLoginError(errorMessage(error));
+        setClaudeCodeSigningIn(false);
+      },
+    );
+  };
+
   return (
     <div className="settings-section">
       <div className="settings-field" data-setting-id="ai.provider">
         <div className="settings-field__label">Provider</div>
         <div className="settings-field__desc">
-          Choose what powers Ask AI. API keys and model choices stay separate, while Codex uses
-          your ChatGPT subscription through the official Codex CLI.
+          Choose what powers Ask AI. API keys and model choices stay separate, while Codex and
+          Claude Code use your ChatGPT or Claude subscription through their own official CLIs.
         </div>
         <select
           className="settings-select"
@@ -570,10 +605,84 @@ function AiAssistantSection() {
           <option value="anthropic">Anthropic</option>
           <option value="openai">OpenAI</option>
           <option value="codex">Codex subscription</option>
+          <option value="claudeCode">Claude Code subscription</option>
         </select>
       </div>
 
-      {provider === "codex" ? (
+      {provider === "claudeCode" ? (
+        <div className="settings-field settings-field--spaced" data-setting-id="ai.credentials">
+          <div className="settings-field__label">Claude account</div>
+          {aiConfig?.claudeCodeAuthenticated ? (
+            <div className="ai-credential-status ai-credential-status--set">
+              <span className="ai-credential-status__dot" aria-hidden />
+              <div className="ai-credential-status__body">
+                <div className="ai-credential-status__primary">
+                  <span>Signed in</span>
+                  {aiConfig.claudeCodeEmail && (
+                    <>
+                      <span className="ai-credential-status__separator">as</span>
+                      <span className="ai-credential-status__email mono">
+                        {aiConfig.claudeCodeEmail}
+                      </span>
+                    </>
+                  )}
+                </div>
+                <div className="ai-credential-status__meta">
+                  {[
+                    aiConfig.claudeCodePlanType ? `${aiConfig.claudeCodePlanType} plan` : null,
+                    aiConfig.claudeCodeVersion ? `Claude Code CLI ${aiConfig.claudeCodeVersion}` : null,
+                  ].filter(Boolean).join(" · ")}
+                </div>
+              </div>
+              <button
+                className="btn btn--outline ai-credential-status__logout"
+                onClick={() => void logoutClaudeCode()}
+              >
+                Sign out
+              </button>
+            </div>
+          ) : (
+            <>
+              <div
+                className={
+                  "ai-credential-status" +
+                  (aiConfig?.claudeCodeError ? " ai-credential-status--error" : "")
+                }
+              >
+                <span className="ai-credential-status__dot" aria-hidden />
+                <div className="ai-credential-status__body">
+                  <div className="ai-credential-status__primary">
+                    {aiConfig?.claudeCodeError ? "Sign-in unavailable" : "Not signed in"}
+                  </div>
+                  <div className="ai-credential-status__meta">
+                    {aiConfig?.claudeCodeError ??
+                      "Sign in to use the allowance included with your Claude subscription."}
+                  </div>
+                </div>
+              </div>
+              <div className="settings-select-row">
+                <button
+                  className="btn btn--primary"
+                  onClick={handleClaudeCodeLogin}
+                  disabled={claudeCodeSigningIn || (aiConfig !== null && !aiConfig.claudeCodeInstalled)}
+                >
+                  {claudeCodeSigningIn ? "Waiting for browser…" : "Sign in with Claude"}
+                </button>
+              </div>
+            </>
+          )}
+          {claudeCodeLoginError && (
+            <div className="settings-field__desc settings-field__desc--error">
+              {claudeCodeLoginError}
+            </div>
+          )}
+          <div className="settings-field__desc">
+            Uses the current Claude Code CLI profile, just like running `claude` in a terminal.
+            Claude Code stores and refreshes the credential; CubbyDB never reads or copies the
+            token.
+          </div>
+        </div>
+      ) : provider === "codex" ? (
         <div className="settings-field settings-field--spaced" data-setting-id="ai.credentials">
           <div className="settings-field__label">ChatGPT account</div>
           {aiConfig?.codexAuthenticated ? (
@@ -585,7 +694,9 @@ function AiAssistantSection() {
                   {aiConfig.codexEmail && (
                     <>
                       <span className="ai-credential-status__separator">as</span>
-                      <RedactedSensitiveText value={aiConfig.codexEmail} />
+                      <span className="ai-credential-status__email mono">
+                        {aiConfig.codexEmail}
+                      </span>
                     </>
                   )}
                 </div>
@@ -596,6 +707,12 @@ function AiAssistantSection() {
                   ].filter(Boolean).join(" · ")}
                 </div>
               </div>
+              <button
+                className="btn btn--outline ai-credential-status__logout"
+                onClick={() => void logoutCodex()}
+              >
+                Sign out
+              </button>
             </div>
           ) : (
             <>
@@ -699,7 +816,9 @@ function AiAssistantSection() {
             : !keySet
               ? provider === "codex"
                 ? "Sign in with ChatGPT above to choose a model."
-                : "Add an API key above to choose a model."
+                : provider === "claudeCode"
+                  ? "Sign in with Claude above to choose a model."
+                  : "Add an API key above to choose a model."
               : modelsLoading
                 ? "Loading available models…"
                 : `Fetched live from ${providerName} — new models show up here automatically.`}
@@ -718,7 +837,7 @@ function AiAssistantSection() {
             void (async () => {
               await saveAiModel(provider, id, picked?.supportsEffort ?? false);
               if (
-                (provider === "openai" || provider === "codex") &&
+                (provider === "openai" || provider === "codex" || provider === "claudeCode") &&
                 picked?.supportedReasoningEfforts.length &&
                 !picked.supportedReasoningEfforts.includes(currentReasoningEffort)
               ) {
@@ -744,12 +863,12 @@ function AiAssistantSection() {
         </select>
       </div>
 
-      {(provider === "openai" || provider === "codex") && (
+      {(provider === "openai" || provider === "codex" || provider === "claudeCode") && (
         <div className="settings-field settings-field--spaced" data-setting-id="ai.reasoning">
           <div className="settings-field__label">Reasoning level</div>
           <div className="settings-field__desc">
             Stored separately from the model. Higher levels can improve difficult answers but take
-            longer and use more of your API or Codex allowance.
+            longer and use more of your API or subscription allowance.
           </div>
           <select
             className="settings-select"
@@ -771,6 +890,15 @@ function AiAssistantSection() {
               </option>
             ))}
           </select>
+        </div>
+      )}
+
+      {(provider === "codex" || provider === "claudeCode") && (
+        <div className="settings-field__desc settings-field__desc--footnote">
+          Connects your own {provider === "codex" ? "ChatGPT" : "Claude"} subscription account,
+          not CubbyDB's. Using a subscription this way is governed by{" "}
+          {provider === "codex" ? "OpenAI's" : "Anthropic's"} own terms, which may restrict
+          third-party use — see cubbydb.com/terms.
         </div>
       )}
     </div>

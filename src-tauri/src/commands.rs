@@ -696,6 +696,15 @@ async fn ai_config_status(
         status.codex_version = codex.version;
         status.codex_error = codex.error;
     }
+    if config.provider() == AiProvider::ClaudeCode {
+        let claude_code = crate::ai::claude_code::status().await;
+        status.claude_code_installed = claude_code.installed;
+        status.claude_code_authenticated = claude_code.authenticated;
+        status.claude_code_email = claude_code.email;
+        status.claude_code_plan_type = claude_code.plan_type;
+        status.claude_code_version = claude_code.version;
+        status.claude_code_error = claude_code.error;
+    }
     status
 }
 
@@ -754,11 +763,40 @@ pub async fn save_ai_reasoning_effort(
     Ok(ai_config_status(state.inner(), &config).await)
 }
 
+/// Records acceptance of the AI-provider terms at cubbydb.com/terms — the
+/// frontend calls this immediately before starting a Codex or Claude Code
+/// sign-in the user hasn't already accepted, so connecting a subscription
+/// provider always has an explicit, persisted "I accept" behind it.
+#[tauri::command]
+pub async fn accept_ai_terms(state: State<'_, AppState>) -> Result<AiConfigStatus, DbError> {
+    let config = state.ai_config_store().accept_terms()?;
+    Ok(ai_config_status(state.inner(), &config).await)
+}
+
 /// Starts the Codex CLI's official ChatGPT OAuth flow. Codex owns the browser
 /// callback and credential storage; CubbyDB receives no token.
 #[tauri::command]
 pub async fn start_codex_login(state: State<'_, AppState>) -> Result<(), DbError> {
     crate::ai::codex::start_login(state.data_dir()).await
+}
+
+/// Starts Claude Code CLI's own OAuth login flow. Claude Code owns the
+/// browser callback and credential storage; CubbyDB receives no token.
+#[tauri::command]
+pub async fn start_claude_code_login() -> Result<(), DbError> {
+    crate::ai::claude_code::start_login().await
+}
+
+/// Signs out of the Codex CLI's current ChatGPT account.
+#[tauri::command]
+pub async fn logout_codex(state: State<'_, AppState>) -> Result<(), DbError> {
+    crate::ai::codex::logout(state.data_dir()).await
+}
+
+/// Signs out of the Claude Code CLI's current Claude account.
+#[tauri::command]
+pub async fn logout_claude_code() -> Result<(), DbError> {
+    crate::ai::claude_code::logout().await
 }
 
 /// Live-fetches the models the saved API key currently has access to, for
@@ -780,6 +818,7 @@ pub async fn list_ai_models(state: State<'_, AppState>) -> Result<Vec<ModelInfo>
             crate::ai::openai::list_models(api_key).await
         }
         AiProvider::Codex => crate::ai::codex::list_models(state.data_dir()).await,
+        AiProvider::ClaudeCode => Ok(crate::ai::claude_code::list_models()),
     }
 }
 
@@ -833,14 +872,14 @@ pub async fn ai_chat(
 ) -> Result<AiChatResult, DbError> {
     let config = state.ai_config_store().get()?;
     let provider = config.provider();
-    let api_key = if provider == AiProvider::Codex {
+    let api_key = if matches!(provider, AiProvider::Codex | AiProvider::ClaudeCode) {
         None
     } else {
         Some(config.api_key().ok_or_else(|| {
             let provider_name = match provider {
                 AiProvider::Anthropic => "Anthropic",
                 AiProvider::Openai => "OpenAI",
-                AiProvider::Codex => unreachable!(),
+                AiProvider::Codex | AiProvider::ClaudeCode => unreachable!(),
             };
             DbError::new(
                 DbErrorKind::Internal,
@@ -935,6 +974,17 @@ pub async fn ai_chat(
         }
         AiProvider::Codex => {
             crate::ai::codex::run_loop(
+                state.data_dir(),
+                model,
+                reasoning_effort.unwrap_or_default(),
+                system_prompt,
+                messages,
+                run_tool,
+            )
+            .await
+        }
+        AiProvider::ClaudeCode => {
+            crate::ai::claude_code::run_loop(
                 state.data_dir(),
                 model,
                 reasoning_effort.unwrap_or_default(),

@@ -1446,7 +1446,6 @@
     var(--surface-header);
   font-family: var(--font-mono);
   font-size: 10.5px;
-  text-transform: uppercase;
   letter-spacing: 0.05em;
   /* One tier brighter than the longstanding `--text-faint` — column names are
      the grid's own labels, not incidental chrome, and read too close to the
@@ -2191,12 +2190,26 @@
 .ai-msg {
   max-width: 92%;
   padding: 8px 11px;
-  border-radius: 10px;
+  border-radius: var(--radius-card);
   font-size: 12.5px;
   line-height: 1.5;
+  animation: ai-msg-in 180ms ease;
+}
+/* New replies rise gently into place instead of just popping in — matches
+   the shimmer/pulse motion already on the thinking indicator above them. */
+@keyframes ai-msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 .ai-msg--user {
   align-self: flex-end;
+  border-bottom-right-radius: 4px;
   background: var(--accent-tint);
   color: var(--accent-tint-text);
 }
@@ -2205,52 +2218,108 @@
 .ai-msg--assistant {
   align-self: flex-start;
   max-width: 100%;
+  border-bottom-left-radius: 4px;
   background: var(--surface-raised);
   border: 1px solid var(--border);
+  box-shadow: var(--shadow-button);
   color: var(--text);
 }
 /* Status, not a message — so no bubble, border, or background. Just the word
-   where the reply will appear, with a highlight sweeping across it. The
-   gradient is painted through the glyphs via `background-clip: text`, which
-   is why the text itself has to be transparent. */
+   where the reply will appear, with a highlight sweeping across it. */
 .ai-thinking {
   align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 2px 2px 2px 3px;
+}
+/* A small live-status dot ahead of the word, pulsing on its own beat rather
+   than in lockstep with the shimmer — two independent motions read as more
+   "alive" than one. */
+.ai-thinking__dot {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: ai-thinking-pulse 1s ease-in-out infinite;
+}
+/* The plain, always-visible copy of the word — solid color, no animation.
+   The shine (below) is a second copy stacked directly on top of this one. */
+.ai-thinking__label {
+  position: relative;
+  display: inline-block;
   font-size: 12.5px;
   line-height: 1.5;
   color: var(--text-faint);
+}
+/* The moving highlight, painted through a duplicate copy of the same text
+   via `background-clip: text` (so it has to be transparent everywhere the
+   gradient isn't). Layering it over a solid base — rather than clipping the
+   only copy of the text, as a single-layer version would — means the shine
+   can travel past the glyphs entirely and disappear between passes without
+   taking the word down with it. A single-layer version can't rest anywhere
+   without either a bright edge showing or the text blinking out, because its
+   background-position range only has room for one full pass, with no slack
+   left over for a truly "off" position. */
+.ai-thinking__shine {
+  position: absolute;
+  inset: 0;
   background-image: linear-gradient(
     90deg,
-    var(--text-faint) 0%,
-    var(--text-faint) 40%,
+    transparent 0%,
+    transparent 40%,
     var(--text) 50%,
-    var(--text-faint) 60%,
-    var(--text-faint) 100%
+    transparent 60%,
+    transparent 100%
   );
   background-size: 200% 100%;
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
+  color: transparent;
   animation: ai-shimmer 2.4s linear infinite;
 }
-/* Stays within 100%..0%, the range where the doubled-width gradient still
-   covers the text. Going past either end slides it off entirely, and with
-   nothing painted the clipped glyphs have no color left — the word blinks
-   out. (The default `repeat` is a second safeguard against that.) */
+/* Holds at 140% (well clear of the gradient's bright band, so nothing shows)
+   for the first 40% of the cycle, then sweeps across and past the text down
+   to -40% — equally clear on the far side — over the rest. A *decreasing*
+   background-position moves the bright band left-to-right on screen (i.e.
+   leading with the "T", trailing off past the "…"); increasing would run it
+   backwards. Wrapping back to 140% at the loop point is a jump between two
+   already-invisible states, so it reads as nothing happening rather than a
+   visible cut. */
 @keyframes ai-shimmer {
-  from {
-    background-position: 100% 0;
+  0%,
+  40% {
+    background-position: 140% 0;
   }
-  to {
-    background-position: 0% 0;
+  100% {
+    background-position: -40% 0;
   }
 }
-/* Leaves the word legible in its plain faint color for anyone who has asked
-   the OS to cut animation. */
+@keyframes ai-thinking-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+/* Leaves the word in its plain faint color, dot static and shine off, for
+   anyone who has asked the OS to cut animation. */
 @media (prefers-reduced-motion: reduce) {
-  .ai-thinking {
-    background-image: none;
-    -webkit-text-fill-color: currentColor;
+  .ai-thinking__shine {
+    animation: none;
+    opacity: 0;
+  }
+  .ai-thinking__dot {
+    animation: none;
+    opacity: 1;
+  }
+  .ai-msg {
     animation: none;
   }
 }
@@ -2475,8 +2544,30 @@
   font-size: 11px;
 }
 .ai-trace summary {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   color: var(--text-faint);
   cursor: pointer;
+  list-style: none;
+}
+.ai-trace summary::-webkit-details-marker {
+  display: none;
+}
+/* A small chevron rather than the browser's default marker, rotating open —
+   consistent with disclosure affordances elsewhere in the app. */
+.ai-trace summary::before {
+  content: "";
+  flex: none;
+  width: 0;
+  height: 0;
+  border-left: 4px solid currentColor;
+  border-top: 3px solid transparent;
+  border-bottom: 3px solid transparent;
+  transition: transform var(--transition);
+}
+.ai-trace[open] summary::before {
+  transform: rotate(90deg);
 }
 .ai-trace summary:hover {
   color: var(--text-muted);
@@ -2513,48 +2604,90 @@
   white-space: pre-wrap;
   word-break: break-word;
 }
-.ai-trace__meta {
+/* Only shown when the step actually failed — a quiet success is just the
+   statement above it, no separate "ok" badge needed. */
+.ai-trace__error {
   font-size: 10.5px;
-  color: var(--text-faint);
+  color: var(--error-text);
 }
 .ai-input-row {
   flex: none;
-  display: flex;
-  /* Bottom-aligned, not centered — as the textarea grows upward with
-     content, its top edge rises while the send button stays put on the
-     row's own baseline. */
-  align-items: flex-end;
-  gap: 8px;
   padding: 10px;
   border-top: 1px solid var(--border);
   background: var(--surface-raised);
 }
+/* The composer reads as one field — textarea plus the send/stop action
+   inside its own bottom-right corner — rather than a text box beside a
+   separate button. The lighter, theme-agnostic-feeling fill (still swapped
+   per theme via the token, just a step off the plain page/panel surface)
+   is the same trick a terminal-style chat composer uses to read as "the
+   input" against a darker surrounding chrome. */
+.ai-input-box {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--pill-bg);
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+.ai-input-box:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
 .ai-input {
-  flex: 1;
-  min-width: 0;
+  display: block;
+  width: 100%;
   min-height: var(--h-input);
   /* Kept in sync with AI_INPUT_MAX_HEIGHT in AiPanel.tsx, which does the
      actual per-keystroke resizing — this is just the hard ceiling so a
      paste can't flash the box past it before JS catches up. */
   max-height: 160px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-control);
-  background: var(--surface);
+  border: none;
+  border-radius: inherit;
+  background: transparent;
   color: var(--text);
-  padding: 8px 10px;
+  /* Right padding clears the action button pinned in the corner. */
+  padding: 8px 38px 8px 10px;
   font-size: 12.5px;
   line-height: 1.4;
   resize: none;
   overflow-y: auto;
   outline: none;
-  transition: border-color var(--transition), box-shadow var(--transition);
 }
-.ai-input:focus {
-  border: 1.5px solid var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-glow);
+/* Pinned inside the box rather than beside it, like a terminal composer's
+   return-key affordance — Enter already sends, so this is a hint and a
+   mouse target, not the primary way to act. */
+.ai-input-box__action {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  color: var(--text-ghost);
+  transition: background var(--transition), color var(--transition);
 }
-.ai-input-row__send {
-  flex: none;
+.ai-input-box__action--send:not(:disabled) {
+  color: var(--accent);
+}
+.ai-input-box__action--send:not(:disabled):hover {
+  background: var(--accent-tint);
+  color: var(--accent-hover);
+}
+.ai-input-box__action--stop {
+  color: var(--text-muted);
+}
+.ai-input-box__action--stop:hover {
+  background: var(--border-strong);
+  color: var(--text);
+}
+.ai-input-row__stop-icon {
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  background: currentColor;
 }
 
 /* Saved-chats history list — same recipe as `.saved-queries__item`. */
@@ -3129,15 +3262,25 @@
   background: var(--error-border);
 }
 
-/* Per-answer actions, revealed on hover so a quiet thread stays quiet. */
+/* Per-answer actions — a small icon toolbar closing out the whole turn
+   (after any trace steps), always visible rather than hover-revealed, so
+   they're discoverable without having to know to hover a bubble. */
 .ai-msg__actions {
   display: flex;
   gap: 2px;
-  margin-top: 4px;
-  opacity: 0;
-  transition: opacity var(--transition);
+  margin-top: 6px;
 }
-.ai-msg:hover .ai-msg__actions,
-.ai-msg__actions:focus-within {
-  opacity: 1;
+.ai-msg-action {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  color: var(--text-faint);
+  transition: background var(--transition), color var(--transition);
+}
+.ai-msg-action:hover {
+  background: var(--border-faint);
+  color: var(--text);
 }

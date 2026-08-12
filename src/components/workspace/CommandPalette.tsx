@@ -53,6 +53,12 @@ function itemIcon(item: PaletteItem): string {
         case "query-history":
           return "◷";
       }
+      // Every `PaletteActionId` is handled above, so this never runs today —
+      // but nothing enforces that at compile time (this file doesn't turn on
+      // `noImplicitReturns`), and without an explicit return here a future
+      // action id the inner switch forgot to cover would silently fall
+      // through into `case "setting":` below and render as a gear icon.
+      return "?";
     case "setting":
       return "⚙";
     case "connection":

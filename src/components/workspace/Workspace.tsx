@@ -25,10 +25,10 @@ import { UpdateBanner } from "./UpdateBanner";
 import "./workspace.css";
 
 const SIDEBAR_MIN = 200;
-const SIDEBAR_MAX = 360;
+const SIDEBAR_MAX = 800;
 const EDITOR_MIN = 120;
 const AI_PANEL_MIN = 300;
-const AI_PANEL_MAX = 640;
+const AI_PANEL_MAX = 900;
 
 export function Workspace() {
   const tabs = useActiveTabs();
@@ -57,7 +57,7 @@ export function Workspace() {
     toggleSidebar,
   );
 
-  // Sidebar drag (resizable 200–360px, per spec).
+  // Sidebar drag (resizable 200–800px).
   const startSidebarDrag = useDrag((dx, startWidth) => {
     setSidebarWidth(clamp(startWidth + dx, SIDEBAR_MIN, SIDEBAR_MAX));
   }, sidebarWidth);

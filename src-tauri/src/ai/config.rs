@@ -17,6 +17,11 @@ use crate::db::{DbError, DbErrorKind};
 
 const FILE_NAME: &str = "ai_config.json";
 
+/// Bump this whenever the AI-provider terms at cubbydb.com/terms change in a
+/// way that should re-prompt anyone who already accepted an older version —
+/// see `AiConfig::terms_accepted_version` and `AiConfigStore::accept_terms`.
+pub const CURRENT_AI_TERMS_VERSION: &str = "2026-08-11";
+
 /// AI API selected for new assistant turns.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -25,6 +30,10 @@ pub enum AiProvider {
     Anthropic,
     Openai,
     Codex,
+    /// Claude subscription access via the `claude` CLI's own OAuth login —
+    /// same relationship to Anthropic that `Codex` has to OpenAI's API.
+    #[serde(rename = "claudeCode")]
+    ClaudeCode,
 }
 
 /// The AI assistant's full config. Never sent to the frontend as-is — see
@@ -64,6 +73,19 @@ pub struct AiConfig {
     pub codex_model: Option<String>,
     #[serde(default)]
     pub codex_reasoning_effort: Option<ReasoningEffort>,
+    /// Claude Code subscription access is authenticated by the `claude` CLI,
+    /// same reasoning as `codex_model` above — no credential stored here.
+    #[serde(default)]
+    pub claude_code_model: Option<String>,
+    #[serde(default)]
+    pub claude_code_reasoning_effort: Option<ReasoningEffort>,
+    /// The AI-provider terms version (see `CURRENT_AI_TERMS_VERSION`) the
+    /// user last explicitly accepted, via `AiConfigStore::accept_terms`.
+    /// `None` until they accept for the first time. Compared against the
+    /// current constant rather than treated as a bare bool so a future terms
+    /// change can re-prompt instead of silently grandfathering old consent.
+    #[serde(default)]
+    pub terms_accepted_version: Option<String>,
 }
 
 impl AiConfig {
@@ -75,7 +97,7 @@ impl AiConfig {
         match self.provider {
             AiProvider::Anthropic => self.anthropic_api_key.as_deref(),
             AiProvider::Openai => self.openai_api_key.as_deref(),
-            AiProvider::Codex => None,
+            AiProvider::Codex | AiProvider::ClaudeCode => None,
         }
     }
 
@@ -96,6 +118,10 @@ impl AiConfig {
                 .codex_model
                 .as_deref()
                 .unwrap_or(crate::ai::codex::DEFAULT_MODEL),
+            AiProvider::ClaudeCode => self
+                .claude_code_model
+                .as_deref()
+                .unwrap_or(crate::ai::claude_code::DEFAULT_MODEL),
         }
     }
 
@@ -104,16 +130,19 @@ impl AiConfig {
             AiProvider::Anthropic => None,
             AiProvider::Openai => Some(self.openai_reasoning_effort.unwrap_or_default()),
             AiProvider::Codex => Some(self.codex_reasoning_effort.unwrap_or_default()),
+            AiProvider::ClaudeCode => Some(self.claude_code_reasoning_effort.unwrap_or_default()),
         }
     }
 
     /// Whether it's safe to send `output_config.effort` for the active
-    /// model. Defaults to `false` when unknown — see the field docs.
+    /// model. Defaults to `false` when unknown — see the field docs. Codex
+    /// and Claude Code have their own reasoning-effort flag on every model
+    /// (see their `run_loop`s), so this bool is meaningless for them.
     pub fn model_supports_effort(&self) -> bool {
         match self.provider {
             AiProvider::Anthropic => self.anthropic_model_supports_effort.unwrap_or(false),
             AiProvider::Openai => self.openai_model_supports_effort.unwrap_or(true),
-            AiProvider::Codex => false,
+            AiProvider::Codex | AiProvider::ClaudeCode => false,
         }
     }
 }
@@ -142,6 +171,17 @@ pub struct AiConfigStatus {
     pub codex_plan_type: Option<String>,
     pub codex_version: Option<String>,
     pub codex_error: Option<String>,
+    pub claude_code_model: String,
+    pub claude_code_reasoning_effort: ReasoningEffort,
+    pub claude_code_installed: bool,
+    pub claude_code_authenticated: bool,
+    pub claude_code_email: Option<String>,
+    pub claude_code_plan_type: Option<String>,
+    pub claude_code_version: Option<String>,
+    pub claude_code_error: Option<String>,
+    /// Whether `terms_accepted_version` matches `CURRENT_AI_TERMS_VERSION` —
+    /// the frontend only needs to know "current or not", not the raw string.
+    pub terms_accepted: bool,
 }
 
 impl From<&AiConfig> for AiConfigStatus {
@@ -173,6 +213,19 @@ impl From<&AiConfig> for AiConfigStatus {
             codex_plan_type: None,
             codex_version: None,
             codex_error: None,
+            claude_code_model: config
+                .claude_code_model
+                .clone()
+                .unwrap_or_else(|| crate::ai::claude_code::DEFAULT_MODEL.to_string()),
+            claude_code_reasoning_effort: config.claude_code_reasoning_effort.unwrap_or_default(),
+            claude_code_installed: false,
+            claude_code_authenticated: false,
+            claude_code_email: None,
+            claude_code_plan_type: None,
+            claude_code_version: None,
+            claude_code_error: None,
+            terms_accepted: config.terms_accepted_version.as_deref()
+                == Some(CURRENT_AI_TERMS_VERSION),
         }
     }
 }
@@ -252,6 +305,12 @@ impl AiConfigStore {
                     "Codex uses ChatGPT sign-in, not an API key.",
                 ));
             }
+            AiProvider::ClaudeCode => {
+                return Err(DbError::new(
+                    DbErrorKind::Internal,
+                    "Claude Code uses Claude sign-in, not an API key.",
+                ));
+            }
         }
         self.write(&config)?;
         Ok(config)
@@ -262,7 +321,7 @@ impl AiConfigStore {
         match provider {
             AiProvider::Anthropic => config.anthropic_api_key = None,
             AiProvider::Openai => config.openai_api_key = None,
-            AiProvider::Codex => {}
+            AiProvider::Codex | AiProvider::ClaudeCode => {}
         }
         self.write(&config)?;
         Ok(config)
@@ -286,6 +345,7 @@ impl AiConfigStore {
                 config.openai_model_supports_effort = Some(supports_effort);
             }
             AiProvider::Codex => config.codex_model = Some(model),
+            AiProvider::ClaudeCode => config.claude_code_model = Some(model),
         }
         self.write(&config)?;
         Ok(config)
@@ -307,7 +367,19 @@ impl AiConfigStore {
             }
             AiProvider::Openai => config.openai_reasoning_effort = Some(effort),
             AiProvider::Codex => config.codex_reasoning_effort = Some(effort),
+            AiProvider::ClaudeCode => config.claude_code_reasoning_effort = Some(effort),
         }
+        self.write(&config)?;
+        Ok(config)
+    }
+
+    /// Records that the user explicitly accepted the current AI-provider
+    /// terms (see `CURRENT_AI_TERMS_VERSION`) — gates the Codex/Claude Code
+    /// sign-in buttons on the frontend so connecting a subscription provider
+    /// requires an affirmative click, not just a passive warning.
+    pub fn accept_terms(&self) -> Result<AiConfig, DbError> {
+        let mut config = self.get()?;
+        config.terms_accepted_version = Some(CURRENT_AI_TERMS_VERSION.to_string());
         self.write(&config)?;
         Ok(config)
     }

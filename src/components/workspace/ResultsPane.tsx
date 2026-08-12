@@ -550,14 +550,23 @@ function ResultsGrid({
   const [localSort, setLocalSort] = useState<{ col: number; dir: "asc" | "desc" } | null>(
     null,
   );
-  const sort = isTable
-    ? tab.sortColumn != null
-      ? {
-          col: result.columns.findIndex((c) => c.name === tab.sortColumn),
-          dir: (tab.sortDesc ? "desc" : "asc") as "asc" | "desc",
-        }
-      : null
-    : localSort;
+  // Memoized so `sort` is a stable reference across renders that don't
+  // actually change any of its inputs — `sortedRowIndices` below depends on
+  // it, and without this it was a fresh object literal every render (any
+  // render, for any reason — a keystroke, a scroll), which defeated that
+  // memo and re-sorted every row of the result on every single one.
+  const sort = useMemo(
+    () =>
+      isTable
+        ? tab.sortColumn != null
+          ? {
+              col: result.columns.findIndex((c) => c.name === tab.sortColumn),
+              dir: (tab.sortDesc ? "desc" : "asc") as "asc" | "desc",
+            }
+          : null
+        : localSort,
+    [isTable, tab.sortColumn, tab.sortDesc, result.columns, localSort],
+  );
   // The cell currently swapped for an inline edit input, if any. `isNew` marks
   // a draft (not-yet-inserted) row, whose edits go to `setNewCellEdit`.
   const [editing, setEditing] = useState<{
@@ -755,7 +764,6 @@ function ResultsGrid({
     setEditing(null);
     setFindOpen(false);
     setFindQuery("");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [result]);
 
   // Dismiss the FK menu on any outside interaction. Cell/menu clicks stop
@@ -1397,10 +1405,19 @@ function ResultsGrid({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [findIndex, findMatches]);
 
-  const gotoFindMatch = (delta: number) => {
-    if (findMatches.length === 0) return;
-    setFindIndex((i) => ((i + delta) % findMatches.length + findMatches.length) % findMatches.length);
-  };
+  // Memoized so its identity only changes when `findMatches` actually does —
+  // the big keydown-listener effect below calls this rather than reading
+  // `findMatches` itself, and needs a stable reference to depend on instead
+  // of re-subscribing its global `window` listener on every render.
+  const gotoFindMatch = useCallback(
+    (delta: number) => {
+      if (findMatches.length === 0) return;
+      setFindIndex(
+        (i) => ((i + delta) % findMatches.length + findMatches.length) % findMatches.length,
+      );
+    },
+    [findMatches],
+  );
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1469,7 +1486,7 @@ function ResultsGrid({
     return () => window.removeEventListener("keydown", onKey);
   }, [
     findOpen,
-    findMatches,
+    gotoFindMatch,
     findBinding,
     jumpColumnBinding,
     settingsOpen,

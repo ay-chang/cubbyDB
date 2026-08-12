@@ -99,7 +99,7 @@ export function FilterBar({ tab }: { tab: QueryTab }) {
       tab.source
         ? buildTableNamespace(schema, tab.source.schema, tab.source.table)
         : {},
-    [schema, tab.source?.schema, tab.source?.table],
+    [schema, tab.source],
   );
   const extensions = useMemo(
     () => [
@@ -157,7 +157,9 @@ export function FilterBar({ tab }: { tab: QueryTab }) {
         },
       }),
     ],
-    [sqlNamespace, tab.source?.schema, tab.source?.table],
+    // `tab.source?.schema` isn't read directly here — only `sqlNamespace`
+    // (itself already keyed on it) and `tab.source?.table` are.
+    [sqlNamespace, tab.source?.table],
   );
 
   return (

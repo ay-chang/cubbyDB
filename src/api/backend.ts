@@ -374,6 +374,29 @@ export function startCodexLogin(): Promise<void> {
   return invoke("start_codex_login");
 }
 
+/** Opens Claude Code CLI's browser-based Claude subscription login. CubbyDB
+ * never receives the resulting OAuth token. */
+export function startClaudeCodeLogin(): Promise<void> {
+  return invoke("start_claude_code_login");
+}
+
+/** Records acceptance of the AI-provider terms at cubbydb.com/terms — called
+ * once, right before a Codex/Claude Code sign-in the user hasn't already
+ * accepted. */
+export function acceptAiTerms(): Promise<AiConfigStatus> {
+  return invoke("accept_ai_terms");
+}
+
+/** Signs out of the Codex CLI's current ChatGPT account. */
+export function logoutCodex(): Promise<void> {
+  return invoke("logout_codex");
+}
+
+/** Signs out of the Claude Code CLI's current Claude account. */
+export function logoutClaudeCode(): Promise<void> {
+  return invoke("logout_claude_code");
+}
+
 export function saveAiModel(
   provider: AiProvider,
   model: string,

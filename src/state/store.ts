@@ -1180,6 +1180,9 @@ interface AppStore {
   saveAiConfig: (provider: AiProvider, apiKey: string) => Promise<void>;
   clearAiConfig: (provider: AiProvider) => Promise<void>;
   startCodexLogin: () => Promise<void>;
+  startClaudeCodeLogin: () => Promise<void>;
+  logoutCodex: () => Promise<void>;
+  logoutClaudeCode: () => Promise<void>;
   saveAiModel: (
     provider: AiProvider,
     model: string,
@@ -1973,6 +1976,30 @@ export const useStore = create<AppStore>((set, get) => {
         },
       });
     });
+  }
+
+  /** Gates `startCodexLogin`/`startClaudeCodeLogin`: connecting a
+   *  subscription-based AI provider routes requests through the user's own
+   *  Anthropic/OpenAI account, which is subject to that provider's own terms
+   *  (see cubbydb.com/terms) rather than anything CubbyDB controls. Resolves
+   *  `true` once accepted — either already, or via this turn's confirmation
+   *  — and `false` if the user backs out, in which case the caller should
+   *  not start the CLI login. Acceptance is persisted (`acceptAiTerms`), so
+   *  this only prompts once per terms version, not on every sign-in. */
+  async function ensureAiTermsAccepted(): Promise<boolean> {
+    if (get().aiConfig?.termsAccepted) return true;
+    const ok = await requestConfirm(
+      "Signing in connects your own Claude or ChatGPT subscription account through its official " +
+        "CLI. CubbyDB never sees your login credentials, but using a subscription this way is " +
+        "subject to that provider's own terms of service, which may restrict third-party use " +
+        "and could result in the provider limiting your account. See cubbydb.com/terms for " +
+        "details. Continue at your own risk?",
+      "I understand, continue",
+    );
+    if (!ok) return false;
+    const aiConfig = await api.acceptAiTerms();
+    set({ aiConfig });
+    return true;
   }
 
   /** Same shape as `requestConfirm`, but for a delete that would cascade
@@ -3563,7 +3590,14 @@ export const useStore = create<AppStore>((set, get) => {
     },
 
     async clearAiConfig(provider) {
-      const name = provider === "openai" ? "OpenAI" : provider === "codex" ? "Codex" : "Anthropic";
+      const name =
+        provider === "openai"
+          ? "OpenAI"
+          : provider === "codex"
+            ? "Codex"
+            : provider === "claudeCode"
+              ? "Claude Code"
+              : "Anthropic";
       const ok = await requestConfirm(`Remove the saved ${name} API key?`, "Remove key");
       if (!ok) return;
       const aiConfig = await api.clearAiConfig(provider);
@@ -3571,6 +3605,7 @@ export const useStore = create<AppStore>((set, get) => {
     },
 
     async startCodexLogin() {
+      if (!(await ensureAiTermsAccepted())) return;
       await api.startCodexLogin();
       // The browser callback completes inside the Codex CLI process. Poll its
       // public account status so Settings updates without ever handling a token.
@@ -3581,6 +3616,35 @@ export const useStore = create<AppStore>((set, get) => {
         if (aiConfig.codexAuthenticated) return;
       }
       throw new Error("ChatGPT sign-in did not finish in time. You can try again.");
+    },
+
+    async startClaudeCodeLogin() {
+      if (!(await ensureAiTermsAccepted())) return;
+      await api.startClaudeCodeLogin();
+      // Same shape as `startCodexLogin`: the browser callback completes
+      // inside the Claude Code CLI process, so Settings polls its public
+      // auth status instead of ever handling a token.
+      for (let attempt = 0; attempt < 120; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1_500));
+        const aiConfig = await api.getAiConfig();
+        set({ aiConfig });
+        if (aiConfig.claudeCodeAuthenticated) return;
+      }
+      throw new Error("Claude sign-in did not finish in time. You can try again.");
+    },
+
+    async logoutCodex() {
+      const ok = await requestConfirm("Sign out of your Codex ChatGPT account?", "Sign out");
+      if (!ok) return;
+      await api.logoutCodex();
+      set({ aiConfig: await api.getAiConfig() });
+    },
+
+    async logoutClaudeCode() {
+      const ok = await requestConfirm("Sign out of your Claude Code account?", "Sign out");
+      if (!ok) return;
+      await api.logoutClaudeCode();
+      set({ aiConfig: await api.getAiConfig() });
     },
 
     async saveAiModel(provider, model, supportsEffort) {

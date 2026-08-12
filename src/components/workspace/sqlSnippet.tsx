@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { format as formatSql } from "sql-formatter";
 
 import { copyToClipboard } from "../../api/backend";
 import { SQL_KEYWORDS } from "../../lib/sqlSchema";
@@ -8,6 +9,19 @@ import { useStore } from "../../state/store";
  *  reply, and the statements listed under a message's tool trace. */
 
 const SQL_KEYWORD_SET = new Set(SQL_KEYWORDS);
+
+/** The assistant's SQL often arrives as one unbroken line. Pretty-printed
+ *  here — rather than at display time, which would fight the model's own
+ *  wording — only when it's actually handed off: copied or opened in a query
+ *  tab. Falls back to the original text for anything the formatter can't
+ *  parse (e.g. a `\d table` meta-command) rather than losing the snippet. */
+function prettySql(text: string): string {
+  try {
+    return formatSql(text, { language: "postgresql", keywordCase: "upper" });
+  } catch {
+    return text;
+  }
+}
 
 /** One pass in precedence order: comments and quoted runs are matched before
  *  words, so a keyword inside a string or an identifier never gets colored as
@@ -64,7 +78,7 @@ export function SnippetActions({
   const [copied, setCopied] = useState(false);
 
   const copy = () => {
-    void copyToClipboard(text).then(() => {
+    void copyToClipboard(openAsSql ? prettySql(text) : text).then(() => {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1200);
     });
@@ -75,7 +89,7 @@ export function SnippetActions({
       {openAsSql && (
         <button
           className="snippet-actions__btn"
-          onClick={() => void newTab({ title: tabTitle, sql: text })}
+          onClick={() => void newTab({ title: tabTitle, sql: prettySql(text) })}
           title="Open this SQL in a new query tab"
         >
           Open in editor

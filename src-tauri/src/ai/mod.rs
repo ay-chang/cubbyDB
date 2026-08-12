@@ -9,6 +9,7 @@
 //! frontend speaks, the row-truncation rule, and the iteration cap.
 
 pub mod chats;
+pub mod claude_code;
 pub mod codex;
 pub mod config;
 pub mod openai;

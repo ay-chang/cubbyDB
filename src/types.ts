@@ -260,7 +260,7 @@ export interface SavedQuery {
 
 // --- AI assistant ------------------------------------------------------------
 
-export type AiProvider = "anthropic" | "openai" | "codex";
+export type AiProvider = "anthropic" | "openai" | "codex" | "claudeCode";
 export type AiReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
 /** What Settings shows for the AI assistant — the real API key never comes
@@ -285,6 +285,17 @@ export interface AiConfigStatus {
   codexPlanType: string | null;
   codexVersion: string | null;
   codexError: string | null;
+  claudeCodeModel: string;
+  claudeCodeReasoningEffort: AiReasoningEffort;
+  claudeCodeInstalled: boolean;
+  claudeCodeAuthenticated: boolean;
+  claudeCodeEmail: string | null;
+  claudeCodePlanType: string | null;
+  claudeCodeVersion: string | null;
+  claudeCodeError: string | null;
+  /** Whether the user has accepted the current AI-provider terms at
+   *  cubbydb.com/terms — gates the Codex/Claude Code sign-in buttons. */
+  termsAccepted: boolean;
 }
 
 /** One model the active provider currently offers, for the Settings model picker —

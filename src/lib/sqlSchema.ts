@@ -104,8 +104,11 @@ const TABLE_REF_RE =
 
 const unquote = (s: string) => s.replace(/^"|"$/g, "");
 
-/** Table references in one statement's text, in source order. */
-function parseTableRefs(sql: string): TableRef[] {
+/** Table references in one statement's text, in source order. Exported only
+ *  for testing — this regex is the fiddliest part of the file (alias vs.
+ *  keyword, schema-qualification, quoting) and worth pinning directly rather
+ *  than only indirectly through `columnOptions`. */
+export function parseTableRefs(sql: string): TableRef[] {
   const refs: TableRef[] = [];
   TABLE_REF_RE.lastIndex = 0;
   let m: RegExpExecArray | null;
@@ -150,7 +153,9 @@ function findTable(schema: SchemaNode[], ref: TableRef) {
  * column in the schema, collapsed to one entry per distinct name so a wide
  * schema's dozens of `id`/`created_at` columns don't flood the list.
  */
-function columnOptions(schema: SchemaNode[], doc: string, pos: number): Completion[] {
+// Exported only for testing — see the `parseTableRefs` note above; this is
+// the function that actually exercises it end to end.
+export function columnOptions(schema: SchemaNode[], doc: string, pos: number): Completion[] {
   const stmt = statementAt(doc, pos);
   const text = stmt ? doc.slice(stmt.start, stmt.end) : doc;
 
@@ -178,16 +183,25 @@ function columnOptions(schema: SchemaNode[], doc: string, pos: number): Completi
 
   // Fallback: no table in scope yet. One entry per distinct column name,
   // labelled with where it comes from.
-  const byName = new Map<string, { name: string; tables: string[] }>();
+  const byName = new Map<string, { name: string; tables: string[]; qualified: Set<string> }>();
   for (const s of schema) {
     for (const t of s.tables) {
       for (const c of t.columns) {
         const key = c.name.toLowerCase();
+        // Schema-qualified for uniqueness — a bare table name can repeat
+        // across schemas (e.g. `public.users` and `audit.users`), and without
+        // qualifying it here the second would be silently treated as a
+        // duplicate of the first, undercounting how many tables actually have
+        // this column.
+        const qualifiedKey = `${s.name}.${t.name}`;
         const hit = byName.get(key);
         if (hit) {
-          if (!hit.tables.includes(t.name)) hit.tables.push(t.name);
+          if (!hit.qualified.has(qualifiedKey)) {
+            hit.qualified.add(qualifiedKey);
+            hit.tables.push(t.name);
+          }
         } else {
-          byName.set(key, { name: c.name, tables: [t.name] });
+          byName.set(key, { name: c.name, tables: [t.name], qualified: new Set([qualifiedKey]) });
         }
       }
     }
