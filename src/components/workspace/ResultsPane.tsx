@@ -69,8 +69,8 @@ export function ResultsPane({ tab }: { tab: QueryTab }) {
     return result.columns.map((c) => {
       const col = byName.get(c.name);
       return {
-        references: col?.references ?? [],
-        referencedBy: col?.referencedBy ?? [],
+        references: sortByTable(col?.references),
+        referencedBy: sortByTable(col?.referencedBy),
       };
     });
   }, [result, schemaTable]);
@@ -301,6 +301,16 @@ function ResultsMenu({ onExportCsv }: { onExportCsv: () => void }) {
 }
 
 type ColNav = { references: ForeignKeyRef[]; referencedBy: ForeignKeyRef[] };
+
+/** Alphabetical by table name (then column, for the rare case of two FKs into
+ *  the same table) — the schema's own declaration order isn't meaningful to a
+ *  user scanning the FK menu for a specific table. */
+function sortByTable(refs: ForeignKeyRef[] | undefined): ForeignKeyRef[] {
+  if (!refs || refs.length < 2) return refs ?? [];
+  return [...refs].sort(
+    (a, b) => a.table.localeCompare(b.table) || a.column.localeCompare(b.column),
+  );
+}
 
 // In-app cell clipboard, so copy/paste can preserve SQL NULL (which the system
 // text clipboard can't represent). `text` is what was also written to the OS
@@ -538,6 +548,10 @@ function ResultsGrid({
     x: number;
     y: number;
   } | null>(null);
+  // Filters the FK menu's table list — a row can be referenced by dozens of
+  // tables, so typing narrows it rather than requiring a scroll-and-scan.
+  const [fkQuery, setFkQuery] = useState("");
+  const fkQueryRef = useRef<HTMLInputElement>(null);
   // Sort state, cycling default → asc → desc → default. For `table` tabs this
   // is a real `ORDER BY` applied by the backend (persisted on the tab as
   // `sortColumn`/`sortDesc` via `setTableSort`) so it covers every row in the
@@ -712,6 +726,7 @@ function ResultsGrid({
   const onCellContextMenu = useCallback((e: React.MouseEvent, r: number, col: number) => {
     setSelected({ r, col });
     setFkMenu({ r, col, x: e.clientX, y: e.clientY });
+    setFkQuery("");
   }, []);
   const onNewCellClick = useCallback((ni: number, col: number, currentValue: string | null) => {
     setEditing({ r: ni, col, draft: currentValue ?? "", isNew: true });
@@ -1916,6 +1931,21 @@ function ResultsGrid({
               </span>
             </button>
           );
+          // A search box only earns its place once there's enough to search
+          // through — for one or two FKs it'd just be another thing to look
+          // at before the two items right below it.
+          const totalRefs = hasFk ? nav!.references.length + nav!.referencedBy.length : 0;
+          const showFkSearch = totalRefs > 6;
+          const q = fkQuery.trim().toLowerCase();
+          const matchesQuery = (ref: ForeignKeyRef) =>
+            !q || ref.table.toLowerCase().includes(q) || ref.schema.toLowerCase().includes(q);
+          const filteredReferences = hasFk ? nav!.references.filter(matchesQuery) : [];
+          const filteredReferencedBy = hasFk ? nav!.referencedBy.filter(matchesQuery) : [];
+          const fkNoMatches =
+            showFkSearch &&
+            q.length > 0 &&
+            filteredReferences.length === 0 &&
+            filteredReferencedBy.length === 0;
           return (
             <div
               ref={fkMenuRef}
@@ -1923,17 +1953,42 @@ function ResultsGrid({
               style={fkMenuStyle(fkMenu.x, fkMenu.y)}
               onClick={(e) => e.stopPropagation()}
             >
-              {hasFk && nav!.references.length > 0 && (
+              {hasFk && showFkSearch && (
+                <div className="context-menu__search">
+                  <input
+                    ref={fkQueryRef}
+                    className="context-menu__search-input"
+                    value={fkQuery}
+                    onChange={(e) => setFkQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      e.stopPropagation();
+                      if (e.key === "Escape") {
+                        e.preventDefault();
+                        setFkMenu(null);
+                      }
+                    }}
+                    placeholder="Filter tables…"
+                    spellCheck={false}
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    autoFocus
+                  />
+                </div>
+              )}
+              {hasFk && filteredReferences.length > 0 && (
                 <>
                   <div className="context-menu__label">Jump to referenced row</div>
-                  {nav!.references.map((ref, i) => item(ref, `out-${i}`))}
+                  {filteredReferences.map((ref, i) => item(ref, `out-${i}`))}
                 </>
               )}
-              {hasFk && nav!.referencedBy.length > 0 && (
+              {hasFk && filteredReferencedBy.length > 0 && (
                 <>
                   <div className="context-menu__label">Rows referencing this</div>
-                  {nav!.referencedBy.map((ref, i) => item(ref, `in-${i}`))}
+                  {filteredReferencedBy.map((ref, i) => item(ref, `in-${i}`))}
                 </>
+              )}
+              {fkNoMatches && (
+                <div className="context-menu__empty">No matching tables.</div>
               )}
               {canSetNull && (
                 <>

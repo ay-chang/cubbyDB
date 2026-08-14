@@ -117,6 +117,20 @@ export const KEYBINDING_DEFINITIONS = [
     defaultBinding: "mod+shift+]",
     context: "workspace",
   },
+  {
+    id: "workspace.navigateBack",
+    group: "Tab navigation",
+    description: "Go back to the previously active tab",
+    defaultBinding: "mod+[",
+    context: "workspace",
+  },
+  {
+    id: "workspace.navigateForward",
+    group: "Tab navigation",
+    description: "Go forward again after navigating back",
+    defaultBinding: "mod+]",
+    context: "workspace",
+  },
   ...TAB_JUMP_KEYBINDING_IDS.map((id, index) => ({
     id,
     group: "Tab navigation" as const,

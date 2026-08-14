@@ -129,6 +129,14 @@ export interface ConnectionSlot {
   schemaError: string | null;
   tabs: QueryTab[];
   activeTabId: string | null;
+  /** Tab-switch history for Cmd/Ctrl+[ / +] — most-recent last, capped at
+   *  `MAX_NAV_HISTORY`. `navBack` holds where we've been; `navForward` holds
+   *  what a `navigateBack` just stepped away from, so `navigateForward` can
+   *  retrace it. Any *real* tab switch (not itself a history nav) clears
+   *  `navForward`, same as a browser losing its forward history once you
+   *  navigate somewhere new. */
+  navBack: string[];
+  navForward: string[];
   /** This connection's own AI chat thread — scoped per connection (like
    *  `tabs`/`schema`) rather than globally, so switching connections shows
    *  that database's own conversation. */
@@ -1049,6 +1057,13 @@ interface AppStore {
   newTab: (opts?: { title?: string; sql?: string }) => Promise<string>;
   closeTab: (id: string) => void;
   setActiveTab: (id: string) => void;
+  /** Cmd/Ctrl+[ — re-activate whichever tab was active just before the
+   *  current one, like a browser's back button. No-ops at the start of
+   *  history. */
+  navigateBack: () => void;
+  /** Cmd/Ctrl+] — the reverse of `navigateBack`. No-ops unless `navigateBack`
+   *  (or another `navigateForward`) has run since the last real tab switch. */
+  navigateForward: () => void;
   reorderTab: (fromIndex: number, toIndex: number) => void;
   setTabSql: (id: string, sql: string) => void;
   /** Run a tab's query. `sqlOverride`, if given, is sent to the backend
@@ -1851,6 +1866,26 @@ function patchSlot(
   return { ...connections, [connectionId]: { ...slot, ...p } };
 }
 
+/** Pops entries off a nav-history stack (most-recent last) until it finds one
+ *  that's still a real, non-active tab — an id left over from a since-closed
+ *  tab is discarded along the way rather than returned. Returns the
+ *  remaining stack either way, so a caller that comes up empty can still
+ *  persist the pruning instead of re-scanning the same dead entries next
+ *  time. */
+function popValidTabId(
+  stack: string[],
+  slot: ConnectionSlot,
+): { id: string | null; stack: string[] } {
+  const remaining = [...stack];
+  while (remaining.length > 0) {
+    const candidate = remaining.pop()!;
+    if (candidate !== slot.activeTabId && slot.tabs.some((t) => t.id === candidate)) {
+      return { id: candidate, stack: remaining };
+    }
+  }
+  return { id: null, stack: remaining };
+}
+
 /** Patch one connection slot's `tabs` array specifically — the overwhelming
  *  majority of tab actions only ever touch this one field. */
 function mapSlotTabs(
@@ -2139,6 +2174,11 @@ export const useStore = create<AppStore>((set, get) => {
     }
   }
 
+  /** Cap on `navBack`/`navForward` — enough to retrace a real drill-down
+   *  session (FK jump after FK jump) without the stacks growing unbounded
+   *  over a long-lived connection. */
+  const MAX_NAV_HISTORY = 10;
+
   /**
    * Change a connection's active tab, first confirming if its current tab
    * has unsaved cell edits. Returns whether the switch actually happened.
@@ -2146,8 +2186,17 @@ export const useStore = create<AppStore>((set, get) => {
    * connection") so callers that already resolved a specific slot — e.g. via
    * `findTabOwner` — stay correct even if the visible connection changes
    * mid-await.
+   *
+   * Every real switch (not `opts.isHistoryNav`) is recorded onto the slot's
+   * `navBack` stack for Cmd/Ctrl+[ / +], same as a browser's history —
+   * `navigateBack`/`navigateForward` themselves call back in here with
+   * `isHistoryNav: true` so retracing steps doesn't also record new ones.
    */
-  async function switchActiveTab(connectionId: string, newId: string): Promise<boolean> {
+  async function switchActiveTab(
+    connectionId: string,
+    newId: string,
+    opts?: { isHistoryNav?: boolean },
+  ): Promise<boolean> {
     const slot = get().connections[connectionId];
     if (!slot) return false;
     const current = slot.tabs.find((t) => t.id === slot.activeTabId);
@@ -2167,7 +2216,24 @@ export const useStore = create<AppStore>((set, get) => {
         ),
       }));
     }
-    set((s) => ({ connections: patchSlot(s.connections, connectionId, { activeTabId: newId }) }));
+    set((s) => {
+      const prev = s.connections[connectionId];
+      if (!prev) return {};
+      const prevActiveId = prev.activeTabId;
+      const history =
+        !opts?.isHistoryNav && prevActiveId && prevActiveId !== newId
+          ? {
+              navBack: [...prev.navBack, prevActiveId].slice(-MAX_NAV_HISTORY),
+              navForward: [],
+            }
+          : {};
+      return {
+        connections: patchSlot(s.connections, connectionId, {
+          activeTabId: newId,
+          ...history,
+        }),
+      };
+    });
     return true;
   }
 
@@ -2328,6 +2394,8 @@ export const useStore = create<AppStore>((set, get) => {
         schemaError: null,
         tabs: [tab],
         activeTabId: tab.id,
+        navBack: [],
+        navForward: [],
         aiMessages: [],
         aiSending: false,
         aiError: null,
@@ -2514,6 +2582,56 @@ export const useStore = create<AppStore>((set, get) => {
           );
         }
       });
+    },
+
+    navigateBack() {
+      const connectionId = get().activeConnectionId;
+      const slot = connectionId ? get().connections[connectionId] : null;
+      if (!connectionId || !slot) return;
+      const target = popValidTabId(slot.navBack, slot);
+      if (!target.id) {
+        // Nothing usable, but still drop whatever stale entries were in the
+        // way so the next attempt doesn't re-scan them.
+        if (target.stack.length !== slot.navBack.length) {
+          set((s) => ({
+            connections: patchSlot(s.connections, connectionId, { navBack: target.stack }),
+          }));
+        }
+        return;
+      }
+      set((s) => ({
+        connections: patchSlot(s.connections, connectionId, {
+          navBack: target.stack,
+          navForward: slot.activeTabId
+            ? [...slot.navForward, slot.activeTabId].slice(-MAX_NAV_HISTORY)
+            : slot.navForward,
+        }),
+      }));
+      void switchActiveTab(connectionId, target.id, { isHistoryNav: true });
+    },
+
+    navigateForward() {
+      const connectionId = get().activeConnectionId;
+      const slot = connectionId ? get().connections[connectionId] : null;
+      if (!connectionId || !slot) return;
+      const target = popValidTabId(slot.navForward, slot);
+      if (!target.id) {
+        if (target.stack.length !== slot.navForward.length) {
+          set((s) => ({
+            connections: patchSlot(s.connections, connectionId, { navForward: target.stack }),
+          }));
+        }
+        return;
+      }
+      set((s) => ({
+        connections: patchSlot(s.connections, connectionId, {
+          navForward: target.stack,
+          navBack: slot.activeTabId
+            ? [...slot.navBack, slot.activeTabId].slice(-MAX_NAV_HISTORY)
+            : slot.navBack,
+        }),
+      }));
+      void switchActiveTab(connectionId, target.id, { isHistoryNav: true });
     },
 
     reorderTab(fromIndex, toIndex) {

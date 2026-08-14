@@ -234,6 +234,8 @@ function useWorkspaceShortcuts(toggleSidebar: () => void) {
   const newTab = useStore((s) => s.newTab);
   const closeTab = useStore((s) => s.closeTab);
   const setActiveTab = useStore((s) => s.setActiveTab);
+  const navigateBack = useStore((s) => s.navigateBack);
+  const navigateForward = useStore((s) => s.navigateForward);
   const toggleCommandPalette = useStore((s) => s.toggleCommandPalette);
   const toggleAiPanel = useStore((s) => s.toggleAiPanel);
   const refreshActive = useStore((s) => s.refreshActive);
@@ -338,6 +340,19 @@ function useWorkspaceShortcuts(toggleSidebar: () => void) {
         setActiveTab(target.id);
         return;
       }
+      if (
+        matchesKeybinding(e, bindings["workspace.navigateBack"]) ||
+        matchesKeybinding(e, bindings["workspace.navigateForward"])
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (matchesKeybinding(e, bindings["workspace.navigateBack"])) {
+          navigateBack();
+        } else {
+          navigateForward();
+        }
+        return;
+      }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
@@ -347,6 +362,8 @@ function useWorkspaceShortcuts(toggleSidebar: () => void) {
     newTab,
     closeTab,
     setActiveTab,
+    navigateBack,
+    navigateForward,
     toggleCommandPalette,
     toggleAiPanel,
     refreshActive,
