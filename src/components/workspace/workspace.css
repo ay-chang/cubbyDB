@@ -970,6 +970,65 @@
   background: var(--accent);
   color: #fff;
 }
+.results__menu-item--check {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.results__menu-check {
+  color: var(--accent);
+  font-size: 11px;
+}
+.results__menu-item--check:hover .results__menu-check {
+  color: #fff;
+}
+
+/* --- Cell inspector ("Expand cell" from a cell's right-click menu) ---
+   Overlay/head classes (`.settings-overlay`, `.settings-panel__*`) are
+   shared with the other dialogs in common.css; only the card body is
+   specific to this one. */
+.cell-inspector {
+  width: 640px;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 96px);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+.cell-inspector__head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.cell-inspector__badge {
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  color: var(--accent-tint-text);
+  background: var(--accent-tint);
+}
+.cell-inspector__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 20px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.cell-inspector__null {
+  color: var(--text-ghost);
+  font-style: italic;
+}
 .results__note {
   padding: 16px;
   font-size: 12.5px;
@@ -1462,7 +1521,80 @@
 .grid__scroll {
   height: 100%;
   overflow: auto;
+  /* Keeps the last row — real or a draft new one — from sitting flush
+     against the window edge when scrolled to the bottom. Lives here (on the
+     scroll container, after everything) rather than on `.grid__body`, which
+     only wraps the real rows: draft rows added via "+ Add row" render as its
+     siblings, so padding on the body alone would leave this gap sitting
+     *before* them instead of trailing the true last row. */
+  padding-bottom: 40px;
 }
+
+/* --- Transposed results view (More actions > Transpose) ---
+   A plain sticky-header/sticky-first-column HTML table, not the windowed
+   main grid — nothing here is editable or sortable, so a real `<table>` is
+   simpler and plenty fast for one page's worth of rows. */
+.transpose-scroll {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--surface);
+}
+.transpose-table {
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.transpose-table th,
+.transpose-table td {
+  padding: 6px 12px;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--table-border-row, var(--border-row));
+  border-right: 1px solid var(--table-border-cell, var(--border-cell));
+}
+/* The frozen top-left corner and the row-number header row above every
+   column — stays put on both axes/one axis respectively, like a
+   spreadsheet's frozen panes. */
+.transpose-table__corner,
+.transpose-table__rownum {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  min-width: 44px;
+  background: var(--surface-header);
+  color: var(--text-muted);
+  font-size: 10.5px;
+  text-align: center;
+}
+.transpose-table__corner {
+  left: 0;
+  z-index: 3;
+}
+/* The frozen first column — each result column's name, heading its row. */
+.transpose-table__colname {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface-header);
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.transpose-table td {
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+.transpose-table__cell--num {
+  text-align: right;
+}
+.transpose-table__cell--null {
+  color: var(--text-ghost);
+  font-style: italic;
+}
+.transpose-table tbody tr:nth-child(even) td {
+  background: var(--table-zebra);
+}
+
 .grid__head {
   display: grid;
   position: sticky;
@@ -1542,12 +1674,6 @@
    list each time. Now the rows that stay put cost nothing to keep. */
 .grid__body {
   position: relative;
-  /* Keeps the last row from sitting flush against the window edge when
-     scrolled to the bottom. A no-op for `.grid__body--virtual`, whose height
-     is set explicitly in JS (`bodyStyle` in ResultsPane.tsx) — under
-     `box-sizing: border-box` that fixed height caps the box regardless of
-     padding, so the equivalent space is added there instead. */
-  padding-bottom: 40px;
 }
 .grid__body--virtual > .grid__row {
   position: absolute;
@@ -2543,6 +2669,13 @@
 .snippet-actions__btn:hover {
   background: var(--border-faint);
   color: var(--text);
+}
+.snippet-actions__btn:disabled {
+  color: var(--text-ghost);
+  cursor: default;
+}
+.snippet-actions__btn:disabled:hover {
+  background: none;
 }
 .md-code__body {
   margin: 0;

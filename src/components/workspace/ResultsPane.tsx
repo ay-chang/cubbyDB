@@ -138,26 +138,50 @@ export function ResultsPane({ tab }: { tab: QueryTab }) {
       } as React.CSSProperties)
     : undefined;
 
+  // A read-only alternate layout — columns become rows, rows become
+  // columns — for eyeballing a wide row or comparing a few rows' worth of
+  // columns vertically. Local to this pane (which remounts per tab, see
+  // `key={activeTab.id}` in Workspace.tsx), so it's a per-tab view choice,
+  // not a setting that would follow every other tab.
+  const [transposed, setTransposed] = useState(false);
+  const nullDisplay = useStore((s) => s.nullDisplay);
+  const nullText = NULL_DISPLAY_LABELS[nullDisplay];
+
   return (
     <div
       className={"results" + (connPalette ? ` results--conn-${connectionColorStyle}` : "")}
       style={connStyle}
     >
-      <ResultsHeader tab={tab} result={result} readOnlyReason={editability?.reason ?? null} />
+      <ResultsHeader
+        tab={tab}
+        result={result}
+        readOnlyReason={editability?.reason ?? null}
+        transposed={transposed}
+        onToggleTranspose={() => setTransposed((t) => !t)}
+      />
 
       {tab.error ? (
         <ErrorStrip tab={tab} />
       ) : result && result.columns.length > 0 ? (
-        <ResultsGrid
-          tab={tab}
-          result={result}
-          numericCols={numericCols}
-          booleanCols={booleanCols}
-          navByColumn={navByColumn}
-          editable={editability?.editable ?? false}
-          pkColIndices={pkColIndices}
-          nullableColIndices={nullableColIndices}
-        />
+        transposed ? (
+          <TransposedGrid
+            result={result}
+            numericCols={numericCols}
+            booleanCols={booleanCols}
+            nullText={nullText}
+          />
+        ) : (
+          <ResultsGrid
+            tab={tab}
+            result={result}
+            numericCols={numericCols}
+            booleanCols={booleanCols}
+            navByColumn={navByColumn}
+            editable={editability?.editable ?? false}
+            pkColIndices={pkColIndices}
+            nullableColIndices={nullableColIndices}
+          />
+        )
       ) : result ? (
         <div className="results__note">
           Query OK{result.commandTag ? ` · ${result.commandTag}` : ""}
@@ -178,10 +202,14 @@ function ResultsHeader({
   tab,
   result,
   readOnlyReason,
+  transposed,
+  onToggleTranspose,
 }: {
   tab: QueryTab;
   result: QueryResult | null;
   readOnlyReason: string | null;
+  transposed: boolean;
+  onToggleTranspose: () => void;
 }) {
   const csvDelimiter = useStore((s) => s.csvDelimiter);
   const cancelQuery = useStore((s) => s.cancelQuery);
@@ -244,6 +272,8 @@ function ResultsHeader({
               <span>{result.elapsedMs} ms</span>
               <ResultsMenu
                 onExportCsv={() => exportCsv(result, tab.title, csvDelimiter)}
+                transposed={transposed}
+                onToggleTranspose={onToggleTranspose}
               />
             </>
           )
@@ -254,7 +284,15 @@ function ResultsHeader({
 }
 
 /** The "more actions" (three-dots) menu in the results header. */
-function ResultsMenu({ onExportCsv }: { onExportCsv: () => void }) {
+function ResultsMenu({
+  onExportCsv,
+  transposed,
+  onToggleTranspose,
+}: {
+  onExportCsv: () => void;
+  transposed: boolean;
+  onToggleTranspose: () => void;
+}) {
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -293,6 +331,17 @@ function ResultsMenu({ onExportCsv }: { onExportCsv: () => void }) {
             }}
           >
             Export CSV
+          </button>
+          <button
+            className="results__menu-item results__menu-item--check"
+            title="Flip rows and columns for this view — read-only, and just for the tab you're looking at"
+            onClick={() => {
+              setOpen(false);
+              onToggleTranspose();
+            }}
+          >
+            Transpose
+            {transposed && <span className="results__menu-check">✓</span>}
           </button>
         </div>
       )}
@@ -398,14 +447,6 @@ function leadRowsFor(velocity: number, rowH: number): number {
   if (rowH <= 0) return 0;
   return Math.min(Math.ceil(Math.abs(velocity) / rowH), MAX_LEAD_ROWS);
 }
-/** Blank space kept below the last row once scrolled to the bottom, so it
- *  doesn't sit flush against the window edge. Applied via `.grid__body`'s
- *  `padding-bottom` when rows render in normal flow; when virtualized, the
- *  body's height is set explicitly (as `totalRows * rowH`) and CSS padding on
- *  a `box-sizing: border-box` element with a fixed height doesn't add extra
- *  scroll room, so this same constant is added straight into that height
- *  instead — see `bodyStyle` below. */
-const GRID_BOTTOM_PADDING = 40;
 /**
  * The window is snapped to multiples of these, so a scroll only re-renders
  * once it has moved a whole block rather than on every event. The overscan
@@ -447,6 +488,73 @@ function colAt(starts: number[], x: number): number {
     else hi = mid - 1;
   }
   return lo;
+}
+
+/**
+ * Read-only transposed view of the current result: one column per loaded
+ * row, one row per result column — for eyeballing a wide row's many columns
+ * top-to-bottom, or comparing a handful of rows side by side. A plain HTML
+ * table rather than the windowed/virtualized main grid: nothing here is
+ * editable, sortable, or FK-navigable, so none of that machinery earns its
+ * keep, and a page's worth of rows (`PAGE_SIZE`) is small enough to render
+ * in one pass.
+ */
+function TransposedGrid({
+  result,
+  numericCols,
+  booleanCols,
+  nullText,
+}: {
+  result: QueryResult;
+  numericCols: boolean[];
+  booleanCols: boolean[];
+  nullText: string;
+}) {
+  return (
+    <div className="transpose-scroll">
+      <table className="transpose-table">
+        <thead>
+          <tr>
+            <th className="transpose-table__corner" />
+            {result.rows.map((_, i) => (
+              <th key={i} className="transpose-table__rownum mono">
+                {i + 1}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {result.columns.map((col, colIndex) => (
+            <tr key={col.name}>
+              <th className="transpose-table__colname mono">{col.name}</th>
+              {result.rows.map((row, r) => {
+                const value = row[colIndex];
+                const display =
+                  booleanCols[colIndex] && value === "t"
+                    ? "true"
+                    : booleanCols[colIndex] && value === "f"
+                      ? "false"
+                      : value;
+                return (
+                  <td
+                    key={r}
+                    className={
+                      "transpose-table__cell" +
+                      (numericCols[colIndex] ? " mono transpose-table__cell--num" : "") +
+                      (value === null ? " transpose-table__cell--null" : "")
+                    }
+                    title={display ?? "NULL"}
+                  >
+                    {display === null ? nullText : display}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 function ResultsGrid({
@@ -552,6 +660,13 @@ function ResultsGrid({
   // tables, so typing narrows it rather than requiring a scroll-and-scan.
   const [fkQuery, setFkQuery] = useState("");
   const fkQueryRef = useRef<HTMLInputElement>(null);
+  // The cell "Expand" opened from the same right-click menu, shown in
+  // `CellInspectorDialog` below — a full-size, read-only, JSON-aware view
+  // for a value too long to read in a 32px-tall grid cell.
+  const [expandedCell, setExpandedCell] = useState<{
+    value: string | null;
+    columnName: string;
+  } | null>(null);
   // Sort state, cycling default → asc → desc → default. For `table` tabs this
   // is a real `ORDER BY` applied by the backend (persisted on the tab as
   // `sortColumn`/`sortDesc` via `setTableSort`) so it covers every row in the
@@ -784,6 +899,16 @@ function ResultsGrid({
   // Dismiss the FK menu on any outside interaction. Cell/menu clicks stop
   // propagation, so this only fires for clicks elsewhere.
   const fkMenuRef = useRef<HTMLDivElement>(null);
+  // Locked to the menu's rendered width the instant it opens (full,
+  // unfiltered list — `fkQuery` is always reset to "" in the same click that
+  // opens it), so filtering down to shorter table names afterward doesn't
+  // shrink-wrap the box out from under the cursor. Re-measured — via the
+  // `fkMenu` dependency — on every open, since a different cell's FK list is
+  // a different width.
+  const [fkMenuWidth, setFkMenuWidth] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    setFkMenuWidth(fkMenu ? fkMenuRef.current?.offsetWidth ?? null : null);
+  }, [fkMenu]);
   useEffect(() => {
     if (!fkMenu) return;
     const close = () => setFkMenu(null);
@@ -1230,13 +1355,12 @@ function ResultsGrid({
   }, [colGeom, startCol, endCol, visibleOrder, widths]);
 
   // Virtualized rows come out of flow, so the body reserves the full scroll
-  // height itself. See `.grid__body--virtual` in workspace.css for why that
-  // beats the spacer divs this replaced.
+  // height itself — just the real rows; the bottom breathing room is
+  // `.grid__scroll`'s own padding now, so it trails draft new rows too. See
+  // `.grid__body--virtual` in workspace.css for why this beats the spacer
+  // divs this replaced.
   const bodyStyle = useMemo(
-    () =>
-      virtualizeRows
-        ? { height: totalRows * rowH + GRID_BOTTOM_PADDING }
-        : undefined,
+    () => (virtualizeRows ? { height: totalRows * rowH } : undefined),
     [virtualizeRows, totalRows, rowH],
   );
 
@@ -1551,6 +1675,15 @@ function ResultsGrid({
     const index = tab.newRows?.length ?? 0;
     addRow(tab.id);
     selectRow({ kind: "new", index });
+    // New rows always append after everything else (real rows, then earlier
+    // drafts), so the bottom of the scroll container is always exactly where
+    // the one just added lands — no per-row position math needed, unlike
+    // `scrollCellIntoView` for the (virtualized, windowed) real rows above.
+    // One frame out so this runs after the new row has actually rendered.
+    requestAnimationFrame(() => {
+      const el = scrollRef.current;
+      if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    });
   };
   const handleRemoveRow = () => {
     if (rowSel.length === 0) return;
@@ -1834,7 +1967,6 @@ function ResultsGrid({
               booleanCols={booleanCols}
               navByColumn={navByColumn}
               pkColIndices={pkColIndices}
-              nullableColIndices={nullableColIndices}
               nullText={nullText}
               editable={editable}
               isRowActive={selected?.r === r}
@@ -1901,7 +2033,9 @@ function ResultsGrid({
             !pkColIndices.has(col) &&
             nullableColIndices.has(col) &&
             value !== null;
-          if (!hasFk && !canSetNull && !isDirty) return null;
+          // "Expand cell" always applies, so — unlike before this existed —
+          // there's no longer a case where right-clicking a plain cell has
+          // nothing to show.
 
           const literal = (value ?? "").replace(/'/g, "''");
           const openRef = (ref: ForeignKeyRef) => {
@@ -1931,11 +2065,11 @@ function ResultsGrid({
               </span>
             </button>
           );
-          // A search box only earns its place once there's enough to search
-          // through — for one or two FKs it'd just be another thing to look
-          // at before the two items right below it.
+          // Shown whenever there's more than one entry to filter — a fixed
+          // "enough to bother" cutoff meant well but just made it unclear
+          // when typing would actually do anything.
           const totalRefs = hasFk ? nav!.references.length + nav!.referencedBy.length : 0;
-          const showFkSearch = totalRefs > 6;
+          const showFkSearch = totalRefs > 1;
           const q = fkQuery.trim().toLowerCase();
           const matchesQuery = (ref: ForeignKeyRef) =>
             !q || ref.table.toLowerCase().includes(q) || ref.schema.toLowerCase().includes(q);
@@ -1950,9 +2084,22 @@ function ResultsGrid({
             <div
               ref={fkMenuRef}
               className={"context-menu" + (hasFk ? " context-menu--fk" : "")}
-              style={fkMenuStyle(fkMenu.x, fkMenu.y)}
+              style={{
+                ...fkMenuStyle(fkMenu.x, fkMenu.y),
+                ...(fkMenuWidth ? { width: fkMenuWidth } : {}),
+              }}
               onClick={(e) => e.stopPropagation()}
             >
+              <button
+                className="context-menu__item"
+                onClick={() => {
+                  setFkMenu(null);
+                  setExpandedCell({ value, columnName: result.columns[col].name });
+                }}
+              >
+                Expand cell
+              </button>
+              {(hasFk || canSetNull || isDirty) && <div className="context-menu__sep" />}
               {hasFk && showFkSearch && (
                 <div className="context-menu__search">
                   <input
@@ -2108,7 +2255,95 @@ function ResultsGrid({
         )}
       </div>
     )}
+    {expandedCell && (
+      <CellInspectorDialog cell={expandedCell} onClose={() => setExpandedCell(null)} />
+    )}
     </>
+  );
+}
+
+/** Read-only "view full cell value" dialog, opened from a cell's right-click
+ *  menu — for a value too long to read in a 32px-tall grid cell (a long
+ *  string, a JSON blob). Objects/arrays are pretty-printed; this is purely a
+ *  display transform, the cell's stored value is untouched, and Copy copies
+ *  exactly what's shown here (formatted, if it was reformatted). */
+function CellInspectorDialog({
+  cell,
+  onClose,
+}: {
+  cell: { value: string | null; columnName: string };
+  onClose: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const { text, isJson } = useMemo(() => {
+    if (cell.value === null) return { text: null as string | null, isJson: false };
+    try {
+      const parsed: unknown = JSON.parse(cell.value);
+      // Only objects/arrays are worth reformatting — a bare JSON number or
+      // string ('42', '"hi"') parses fine but pretty-printing it wouldn't
+      // show anything the plain value doesn't already.
+      if (parsed !== null && typeof parsed === "object") {
+        return { text: JSON.stringify(parsed, null, 2), isJson: true };
+      }
+    } catch {
+      // Not JSON — falls through to the plain value below.
+    }
+    return { text: cell.value, isJson: false };
+  }, [cell.value]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const copy = () => {
+    if (text === null) return;
+    void copyToClipboard(text).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    });
+  };
+
+  return (
+    <div className="settings-overlay" onClick={onClose}>
+      <div
+        className="cell-inspector"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${cell.columnName} value`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="settings-panel__head">
+          <span className="settings-panel__title mono">{cell.columnName}</span>
+          <div className="cell-inspector__head-actions">
+            {isJson && <span className="cell-inspector__badge">JSON</span>}
+            <button
+              className="snippet-actions__btn"
+              onClick={copy}
+              disabled={text === null}
+              title="Copy to clipboard"
+            >
+              {copied ? "Copied" : "Copy"}
+            </button>
+            <button
+              className="settings-panel__close"
+              onClick={onClose}
+              title="Close"
+              aria-label="Close"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+        <div className="cell-inspector__body mono">
+          {text === null ? <span className="cell-inspector__null">NULL</span> : text}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -2129,7 +2364,6 @@ interface GridCellProps {
   isPk: boolean;
   isFk: boolean;
   nav: ColNav | undefined;
-  canSetNull: boolean;
   numeric: boolean;
   /** True if every non-null value in this column is Postgres's canonical
    *  boolean text form (`t`/`f`) — displayed as `true`/`false` instead. */
@@ -2164,7 +2398,6 @@ const GridCell = memo(function GridCell({
   isPk,
   isFk,
   nav,
-  canSetNull,
   numeric,
   isBoolean,
   editable,
@@ -2240,7 +2473,8 @@ const GridCell = memo(function GridCell({
         onCellDoubleClick(r, colIndex, value);
       }}
       onContextMenu={(e) => {
-        if (!isFk && !canSetNull && !isDirty) return;
+        // Always shown now — "Expand cell" applies to every cell, not just
+        // the ones with an FK/null/dirty action.
         e.preventDefault();
         onCellContextMenu(e, r, colIndex);
       }}
@@ -2270,7 +2504,6 @@ interface GridRowProps {
   booleanCols: boolean[];
   navByColumn: ColNav[] | null;
   pkColIndices: Set<number>;
-  nullableColIndices: Set<number>;
   nullText: string;
   editable: boolean;
   isRowActive: boolean;
@@ -2314,7 +2547,6 @@ const GridRow = memo(function GridRow({
   booleanCols,
   navByColumn,
   pkColIndices,
-  nullableColIndices,
   nullText,
   editable,
   isRowActive,
@@ -2373,9 +2605,6 @@ const GridRow = memo(function GridRow({
           !!nav &&
           original !== null &&
           (nav.references.length > 0 || nav.referencedBy.length > 0);
-        // Right-clickable to set NULL only if the column is editable,
-        // nullable, and not already null.
-        const canSetNull = editable && nullableColIndices.has(colIndex) && value !== null;
         // Exclude `isNew` edits: a draft row shares the same numeric index
         // as an existing row, so without this an existing row would also
         // render an edit input for a draft cell — two autofocus inputs
@@ -2395,7 +2624,6 @@ const GridRow = memo(function GridRow({
             isPk={isPk}
             isFk={isFk}
             nav={nav}
-            canSetNull={canSetNull}
             numeric={numericCols[colIndex]}
             isBoolean={booleanCols[colIndex]}
             editable={editable}
