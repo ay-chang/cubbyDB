@@ -281,13 +281,9 @@ export interface Cubby {
   name: string;
   connectionId: string;
   entries: CubbyEntry[];
-  notes: string;
   createdAt: number;
   updatedAt: number;
 }
-
-/** Mirrors `cubbies::MAX_NOTES_CHARS` — the backend rejects anything longer. */
-export const CUBBY_NOTES_MAX_CHARS = 4000;
 
 // --- AI assistant ------------------------------------------------------------
 

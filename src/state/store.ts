@@ -893,9 +893,9 @@ interface AppStore {
   cubbies: Cubby[];
   cubbiesOpen: boolean;
   /** The cubby currently "open" — pins its tables in the schema tree and
-   *  feeds its tables + notes to the AI as extra context. `null` means no
-   *  cubby is active, identical to today's behavior. Cleared automatically
-   *  on switching to a connection the cubby doesn't belong to. */
+   *  feeds them to the AI as extra context. `null` means no cubby is
+   *  active, identical to today's behavior. Cleared automatically on
+   *  switching to a connection the cubby doesn't belong to. */
   activeCubbyId: string | null;
 
   /** Every live connection's workspace, keyed by session id. */
@@ -1032,8 +1032,8 @@ interface AppStore {
    *  already open elsewhere) and opening/focusing a tab for each saved
    *  query, table, chat, and structure/function/sequence view it holds.
    *  Sets it as the active cubby (pins its tables in the schema tree, and
-   *  feeds its tables + notes to the AI as extra context). No-ops with a
-   *  toast if the cubby's connection isn't currently open. */
+   *  feeds them to the AI as extra context). Connects to the cubby's
+   *  database first if it isn't already open. */
   openCubby: (id: string) => Promise<void>;
   /** Clears the active cubby without touching any open tabs or deleting it —
    *  "I'm done working in this context for now." */
@@ -1046,7 +1046,6 @@ interface AppStore {
    *  entry kind, and firing `removeEntryFromCubby` twice back-to-back would
    *  race against its own read-modify-write. */
   removeTableFromCubby: (cubbyId: string, schema: string, table: string) => Promise<void>;
-  updateCubbyNotes: (id: string, notes: string) => Promise<void>;
   /** Open a new connection and add it as a slot — never replaces an
    *  existing one, so connecting to a second database leaves the first
    *  live. Becomes the active (visible) slot. */
@@ -3738,16 +3737,16 @@ export const useStore = create<AppStore>((set, get) => {
       const savedConnectionId = slot.current.connectionId;
 
       // The active cubby (if any and if it belongs to this connection) gets
-      // its tables rendered in full detail and its notes injected into the
-      // system prompt — see `PromptContext::cubby` on the backend. Sent
-      // fresh on every turn, same as `schema` above.
+      // its tables rendered in full detail in the system prompt — see
+      // `PromptContext::cubby` on the backend. Sent fresh on every turn,
+      // same as `schema` above.
       const activeCubby = get().activeCubbyId
         ? get().cubbies.find(
             (c) => c.id === get().activeCubbyId && c.connectionId === savedConnectionId,
           ) ?? null
         : null;
       const cubbyContext = activeCubby
-        ? { name: activeCubby.name, tables: cubbyTableRefs(activeCubby), notes: activeCubby.notes }
+        ? { name: activeCubby.name, tables: cubbyTableRefs(activeCubby) }
         : null;
 
       const persist = async (messages: AiMessage[]) => {
@@ -4053,7 +4052,6 @@ export const useStore = create<AppStore>((set, get) => {
           name: trimmed,
           connectionId: savedConnectionId,
           entries: [],
-          notes: "",
           createdAt: 0,
           updatedAt: 0,
         });
@@ -4078,7 +4076,7 @@ export const useStore = create<AppStore>((set, get) => {
 
     async deleteCubbyById(id) {
       const ok = await requestConfirm(
-        "Delete this cubby? Its notes will be lost. The tables, queries, and chats it points to are not affected.",
+        "Delete this cubby? The tables, queries, and chats it points to are not affected.",
         "Delete",
       );
       if (!ok) return;
@@ -4202,17 +4200,6 @@ export const useStore = create<AppStore>((set, get) => {
         set((s) => ({ cubbies: s.cubbies.map((c) => (c.id === cubbyId ? saved : c)) }));
       } catch (err) {
         console.error("failed to remove from cubby:", errorMessage(err));
-      }
-    },
-
-    async updateCubbyNotes(id, notes) {
-      const cubby = get().cubbies.find((c) => c.id === id);
-      if (!cubby || cubby.notes === notes) return;
-      try {
-        const saved = await api.saveCubby({ ...cubby, notes });
-        set((s) => ({ cubbies: s.cubbies.map((c) => (c.id === id ? saved : c)) }));
-      } catch (err) {
-        console.error("failed to save cubby notes:", errorMessage(err));
       }
     },
 

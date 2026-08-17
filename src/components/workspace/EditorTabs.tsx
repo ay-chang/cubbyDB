@@ -1,7 +1,36 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { formatShortcutTitle, useKeybindingStore } from "../../lib/keybindings";
-import { useActiveTabId, useActiveTabs, useStore } from "../../state/store";
+import { useActiveCubby, useActiveTabId, useActiveTabs, useStore } from "../../state/store";
+import type { QueryTab } from "../../state/store";
+import type { CubbyEntry } from "../../types";
+
+/** The cubby reference a tab stands for, or `null` when it has nothing stable
+ *  to point at — an ad-hoc query tab that was never saved has no id for a
+ *  cubby entry to survive against, so it has to be saved first. */
+function tabCubbyEntry(tab: QueryTab): CubbyEntry | null {
+  switch (tab.kind) {
+    case "table":
+      return tab.source ? { kind: "table", ...tab.source } : null;
+    case "structure":
+      return tab.source ? { kind: "structure", ...tab.source } : null;
+    case "function":
+      return tab.objectRef
+        ? {
+            kind: "function",
+            schema: tab.objectRef.schema,
+            name: tab.objectRef.name,
+            oid: tab.objectRef.oid ?? null,
+          }
+        : null;
+    case "sequence":
+      return tab.objectRef
+        ? { kind: "sequence", schema: tab.objectRef.schema, name: tab.objectRef.name }
+        : null;
+    case "query":
+      return tab.savedQueryId ? { kind: "savedQuery", savedQueryId: tab.savedQueryId } : null;
+  }
+}
 
 /**
  * The tab strip above the editor. Active tab carries a 2px accent underline.
@@ -16,6 +45,8 @@ export function EditorTabs({ onSaveQuery }: { onSaveQuery: () => void }) {
   const closeTab = useStore((s) => s.closeTab);
   const newTab = useStore((s) => s.newTab);
   const reorderTab = useStore((s) => s.reorderTab);
+  const activeCubby = useActiveCubby();
+  const addEntryToCubby = useStore((s) => s.addEntryToCubby);
   const bindings = useKeybindingStore((s) => s.bindings);
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -25,6 +56,22 @@ export function EditorTabs({ onSaveQuery }: { onSaveQuery: () => void }) {
     targetIndex: number;
     width: number;
   } | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; tabId: string } | null>(null);
+
+  // Dismiss the context menu on any outside interaction — same pattern the
+  // schema tree's own context menu uses.
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    window.addEventListener("click", close);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [menu]);
 
   const DRAG_THRESHOLD = 5;
   const onTabMouseDown =
@@ -97,6 +144,14 @@ export function EditorTabs({ onSaveQuery }: { onSaveQuery: () => void }) {
     return {};
   };
 
+  const menuTab = menu ? tabs.find((t) => t.id === menu.tabId) ?? null : null;
+  const menuEntry = menuTab ? tabCubbyEntry(menuTab) : null;
+  const addDisabledReason = !activeCubby
+    ? "Open a cubby first"
+    : !menuEntry
+      ? "Save this query first"
+      : null;
+
   return (
     <div className="tabs" ref={containerRef}>
       {tabs.map((tab, index) => {
@@ -112,6 +167,10 @@ export function EditorTabs({ onSaveQuery }: { onSaveQuery: () => void }) {
             }
             style={tabStyle(index)}
             onMouseDown={onTabMouseDown(index, tab.id)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setMenu({ x: e.clientX, y: e.clientY, tabId: tab.id });
+            }}
           >
             <span className="tab__marker mono">
               {tab.kind === "table"
@@ -161,6 +220,29 @@ export function EditorTabs({ onSaveQuery }: { onSaveQuery: () => void }) {
       >
         +
       </button>
+
+      {menu && menuTab && (
+        <div
+          className="context-menu"
+          style={{ left: menu.x, top: menu.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Stays visible but disabled when it can't act, so the reason
+              ("open a cubby first", "save this query first") is discoverable
+              rather than the menu just appearing empty. */}
+          <button
+            className="context-menu__item"
+            disabled={addDisabledReason !== null}
+            title={addDisabledReason ?? undefined}
+            onClick={() => {
+              setMenu(null);
+              if (activeCubby && menuEntry) void addEntryToCubby(activeCubby.id, menuEntry);
+            }}
+          >
+            {addDisabledReason ?? `Add to ${activeCubby?.name}`}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 
 import { useActiveCubby, useConnectionCubbies, useStore } from "../../state/store";
 import type { Cubby, CubbyEntry } from "../../types";
-import { CUBBY_NOTES_MAX_CHARS } from "../../types";
 
 function formatTime(ms: number): string {
   const d = new Date(ms);
@@ -47,9 +46,9 @@ const ENTRY_KIND_LABEL: Record<CubbyEntry["kind"], string> = {
 };
 
 /** Slide-in panel listing this connection's cubbies. Click a name to open it
- *  (restores every entry's tab and pins its tables/notes for the schema tree
- *  and AI); the chevron expands a row in place to edit its notes and
- *  entries without touching the workspace. Same drawer treatment as
+ *  (restores every entry's tab and pins its tables for the schema tree and
+ *  AI); the chevron expands a row in place to review and prune its entries
+ *  without touching the workspace. Same drawer treatment as
  *  History/Saved Queries/AI. */
 export function CubbyPanel() {
   const cubbies = useConnectionCubbies();
@@ -58,7 +57,6 @@ export function CubbyPanel() {
   const createCubby = useStore((s) => s.createCubby);
   const renameCubby = useStore((s) => s.renameCubby);
   const deleteCubbyById = useStore((s) => s.deleteCubbyById);
-  const openCubby = useStore((s) => s.openCubby);
 
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -71,8 +69,8 @@ export function CubbyPanel() {
   // as the user left it.
   useEffect(() => {
     if (activeCubby) setExpandedId(activeCubby.id);
-    // Only the id matters — re-running on every field change (e.g. typing in
-    // the notes box below) would fight the user's own expand/collapse.
+    // Only the id matters — re-running whenever the cubby record changes
+    // (e.g. adding an entry) would fight the user's own expand/collapse.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeCubby?.id]);
 
@@ -148,14 +146,14 @@ export function CubbyPanel() {
                 <span
                   className="cubby-panel__chevron"
                   onClick={() => setExpandedId(isExpanded ? null : cubby.id)}
-                  title={isExpanded ? "Collapse" : "Show notes and entries"}
+                  title={isExpanded ? "Collapse" : "Show entries"}
                 >
                   {isExpanded ? "▼" : "▶"}
                 </span>
                 <div
                   className="saved-queries__item-main"
-                  onClick={() => void openCubby(cubby.id)}
-                  title="Open — restores every entry's tab"
+                  onClick={() => setExpandedId(isExpanded ? null : cubby.id)}
+                  title={isExpanded ? "Collapse" : "Show entries"}
                 >
                   {renamingId === cubby.id ? (
                     <input
@@ -222,34 +220,12 @@ function CubbyDetail({ cubby, isActive }: { cubby: Cubby; isActive: boolean }) {
   const openCubby = useStore((s) => s.openCubby);
   const closeCubby = useStore((s) => s.closeCubby);
   const removeEntryFromCubby = useStore((s) => s.removeEntryFromCubby);
-  const updateCubbyNotes = useStore((s) => s.updateCubbyNotes);
-
-  const [notes, setNotes] = useState(cubby.notes);
-  useEffect(() => setNotes(cubby.notes), [cubby.id, cubby.notes]);
 
   const savedQueryName = (id: string) => savedQueries.find((q) => q.id === id)?.name ?? null;
 
   return (
     <div className="cubby-panel__detail">
-      {isActive ? (
-        <button className="ai-panel__btn" onClick={closeCubby} title="Unpin without closing tabs">
-          Close
-        </button>
-      ) : (
-        <button className="ai-panel__btn" onClick={() => void openCubby(cubby.id)}>
-          Open
-        </button>
-      )}
-
-      <span className="cubby-panel__section-label">Notes</span>
-      <textarea
-        className="cubby-panel__notes"
-        value={notes}
-        maxLength={CUBBY_NOTES_MAX_CHARS}
-        placeholder="What this cubby is for, what a column means, anything worth remembering next time — shown to the AI as extra context when this cubby is open."
-        onChange={(e) => setNotes(e.target.value)}
-        onBlur={() => void updateCubbyNotes(cubby.id, notes)}
-      />
+      <div className="cubby-panel__detail-title">{cubby.name}</div>
 
       <span className="cubby-panel__section-label">Entries</span>
       {cubby.entries.length === 0 ? (
@@ -272,6 +248,20 @@ function CubbyDetail({ cubby, isActive }: { cubby: Cubby; isActive: boolean }) {
             </div>
           ))}
         </div>
+      )}
+
+      {isActive ? (
+        <button className="btn btn--primary" onClick={closeCubby} title="Unpin without closing tabs">
+          Close
+        </button>
+      ) : (
+        <button
+          className="btn btn--primary"
+          onClick={() => void openCubby(cubby.id)}
+          title="Restores every entry's tab"
+        >
+          Open
+        </button>
       )}
     </div>
   );

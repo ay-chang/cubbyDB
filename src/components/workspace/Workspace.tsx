@@ -30,6 +30,8 @@ const SIDEBAR_MAX = 800;
 const EDITOR_MIN = 120;
 const AI_PANEL_MIN = 300;
 const AI_PANEL_MAX = 900;
+const CUBBY_PANEL_MIN = 300;
+const CUBBY_PANEL_MAX = 900;
 
 export function Workspace() {
   const tabs = useActiveTabs();
@@ -47,6 +49,7 @@ export function Workspace() {
   const [sidebarWidth, setSidebarWidth] = useState(300);
   const [editorHeight, setEditorHeight] = useState(280);
   const [aiPanelWidth, setAiPanelWidth] = useState(380);
+  const [cubbyPanelWidth, setCubbyPanelWidth] = useState(380);
   const mainRef = useRef<HTMLDivElement>(null);
   const toggleSidebar = useCallback(
     () => setSidebarVisible((visible) => !visible),
@@ -70,6 +73,11 @@ export function Workspace() {
   const startAiPanelDrag = useDrag((dx, startWidth) => {
     setAiPanelWidth(clamp(startWidth - dx, AI_PANEL_MIN, AI_PANEL_MAX));
   }, aiPanelWidth);
+
+  // Cubby panel drag — same left-edge resizer as the AI panel above.
+  const startCubbyPanelDrag = useDrag((dx, startWidth) => {
+    setCubbyPanelWidth(clamp(startWidth - dx, CUBBY_PANEL_MIN, CUBBY_PANEL_MAX));
+  }, cubbyPanelWidth);
 
   // Editor/results horizontal split.
   const startEditorDrag = useDrag(
@@ -177,11 +185,25 @@ export function Workspace() {
             </div>
           </>
         )}
+
+        {/* Same flex-sibling-with-resizer treatment as the AI panel above
+            (not a fixed overlay like History/Saved Queries) — a cubby's
+            entry list is worth resizing room for. */}
+        {cubbiesOpen && (
+          <>
+            <div
+              className="workspace__resizer workspace__resizer--v"
+              onMouseDown={startCubbyPanelDrag}
+            />
+            <div className="workspace__cubby" style={{ width: cubbyPanelWidth }}>
+              <CubbyPanel />
+            </div>
+          </>
+        )}
       </div>
 
       {historyOpen && <HistoryPanel />}
       {savedQueriesOpen && <SavedQueriesPanel />}
-      {cubbiesOpen && <CubbyPanel />}
       {saveDialogOpen && <SaveQueryDialog onClose={closeSaveDialog} />}
       <Toast />
       <CommandPalette />

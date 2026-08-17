@@ -44,7 +44,6 @@ pub struct ActiveConnectionInfo {
 pub struct CubbyPromptInfo {
     pub name: String,
     pub tables: Vec<ActiveTableRef>,
-    pub notes: String,
 }
 
 /// Opaque id for one live session — monotonic-enough for in-memory keys
@@ -949,7 +948,6 @@ pub async fn ai_chat(
         cubby: cubby.as_ref().map(|c| crate::ai::prompt::CubbyContext {
             name: &c.name,
             tables: &cubby_tables,
-            notes: &c.notes,
         }),
     });
 

@@ -71,6 +71,8 @@ function itemIcon(item: PaletteItem): string {
       return "·";
     case "script":
       return "▤";
+    case "cubby":
+      return "▣";
   }
 }
 
@@ -102,6 +104,8 @@ function itemLabel(item: PaletteItem): React.ReactNode {
       );
     case "script":
       return highlight(item.query.name, titleMatch);
+    case "cubby":
+      return highlight(item.cubby.name, titleMatch);
   }
 }
 
@@ -128,6 +132,10 @@ function itemMeta(item: PaletteItem): string {
       return item.dataType;
     case "script":
       return singleLine(item.query.sql, 60);
+    case "cubby": {
+      const n = item.cubby.entries.length;
+      return `${n} ${n === 1 ? "entry" : "entries"}`;
+    }
   }
 }
 
@@ -138,6 +146,8 @@ function emptyMessage(scope: PaletteScope, hasQuery: boolean): string {
       return "Type to search columns.";
     case "scripts":
       return "No saved scripts yet.";
+    case "cubbies":
+      return "No cubbies yet.";
     case "tables":
       return "No tables or views.";
     case "all":
@@ -160,6 +170,9 @@ export function CommandPalette() {
   const activeConnectionId = useStore((s) => s.activeConnectionId);
   const recentObjects = useStore((s) => s.recentDatabaseObjects);
   const savedQueries = useStore((s) => s.savedQueries);
+  const cubbies = useStore((s) => s.cubbies);
+  const savedConnections = useStore((s) => s.savedConnections);
+  const openCubby = useStore((s) => s.openCubby);
   const theme = useStore((s) => s.theme);
   const switchConnection = useStore((s) => s.switchConnection);
   const setActiveTab = useStore((s) => s.setActiveTab);
@@ -205,8 +218,19 @@ export function CommandPalette() {
         activeConnectionId,
         savedQueries,
         recentObjects,
+        cubbies,
+        savedConnections,
       }),
-    [activeConnectionId, query, recentObjects, savedQueries, scope, slots],
+    [
+      activeConnectionId,
+      cubbies,
+      query,
+      recentObjects,
+      savedConnections,
+      savedQueries,
+      scope,
+      slots,
+    ],
   );
   const results = useMemo(() => groups.flatMap((group) => group.items), [groups]);
   const showConnectionBadge = slots.length > 1;
@@ -258,6 +282,9 @@ export function CommandPalette() {
         return;
       case "script":
         void openSavedQuery(item.query);
+        return;
+      case "cubby":
+        void openCubby(item.cubby.id);
         return;
       case "setting":
         openSettings(item.section);
@@ -396,7 +423,10 @@ export function CommandPalette() {
                       : undefined;
                   const binding = keybindingId ? bindings[keybindingId] : null;
                   const connectionName =
-                    item.kind === "table" || item.kind === "column" || item.kind === "tab"
+                    item.kind === "table" ||
+                    item.kind === "column" ||
+                    item.kind === "tab" ||
+                    item.kind === "cubby"
                       ? item.connectionName
                       : null;
                   return (

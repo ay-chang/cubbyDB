@@ -100,16 +100,17 @@ code comments or AGENTS.md's architecture section.
   never silently indistinguishable from a no-op
 - **Cmd/Ctrl+K workspace palette**: search and switch across common actions,
   Settings sections, live connections, open tabs, tables, columns, saved
-  queries, and recent query history. Its empty All view prioritizes useful
-  actions, open tabs, connections, and recently opened database objects
-  instead of dumping the full schema; dedicated Tables / Columns / Scripts /
-  History scopes keep large databases manageable. Results retain connection
-  badges and color tags, fuzzy-match highlighting, and enough context to
-  distinguish similarly named objects. Enter opens or runs the highlighted
-  result, while the persistent footer documents arrow-key navigation, Enter,
-  and Escape. Selecting a table opens its rows; selecting a column opens its
-  table structure and highlights the column; cross-connection results switch
-  connections first
+  queries, and cubbies. Its empty All view prioritizes useful actions, open
+  tabs, connections, and recently opened database objects instead of dumping
+  the full schema — cubbies rank right after recent database objects, before
+  everything else. Dedicated Cubbies / Tables / Columns / Scripts scopes keep
+  large databases manageable. Results retain connection badges and color
+  tags, fuzzy-match highlighting, and enough context to distinguish similarly
+  named objects. Enter opens or runs the highlighted result, while the
+  persistent footer documents arrow-key navigation, Enter, and Escape.
+  Selecting a table opens its rows; selecting a column opens its table
+  structure and highlights the column; selecting a cubby opens it, same as
+  the Cubbies panel; cross-connection results switch connections first
 - The schema filter shows the current quick-jump binding (Cmd/Ctrl+K by
   default) as a compact clickable key hint, so the cross-connection search is
   discoverable without taking space away from the schema tree
@@ -211,31 +212,43 @@ code comments or AGENTS.md's architecture section.
   cubbies. Scoped to one saved connection (a cubby needs the connection
   saved first), since most of what it holds only makes sense against a
   specific database
-- The **Cubby** button (top bar, next to Ask AI) opens the Cubbies panel —
-  create, rename, and delete cubbies for the active connection. Each row
-  expands (▶) in place to edit its free-text **notes** and see/remove its
-  entries, without leaving the panel or touching any open tab
-- Clicking a cubby's name **opens** it: connects to its database (reusing an
-  already-open connection if there is one, otherwise connecting fresh from
-  the saved record) and restores a tab for every entry — the same open/focus
-  logic each entry kind already uses elsewhere (Select top 100, saved query,
-  AI chat, structure/function/sequence view). The opened cubby becomes the
+- The **Cubby** button (top bar, next to Ask AI) opens the Cubbies panel — a
+  resizable drawer (drag its left edge, same as the AI panel) listing every
+  cubby for the active connection, with **New** to create one. Each row
+  expands (▶) in place, showing its title and its entry list with per-entry
+  remove — without touching any open tab. Expanding doesn't open it; an
+  explicit **Open** button at the bottom of the expanded card does that (or
+  **Close**, if it's the active cubby)
+- **Open** connects to the cubby's database (reusing an already-open
+  connection if there is one, otherwise connecting fresh from the saved
+  record) and restores a tab for every entry — the same open/focus logic
+  each entry kind already uses elsewhere (Select top 100, saved query, AI
+  chat, structure/function/sequence view). The opened cubby becomes the
   **active** cubby, shown as its name on the Cubby button, until closed or
   until switching to a different connection un-pins it
+- Two more ways to open a cubby: the **Cubbies** scope in the Cmd/Ctrl+K
+  palette (its own tab, and the second group shown — right after recent
+  database objects — in the default All view), and a switcher pinned to the
+  bottom of the schema tree sidebar showing the active cubby's name, which
+  opens a list of this connection's cubbies (checkmark on the active one)
+  plus **Close** to unpin
 - **Add to cubby**, active only while a cubby is open: on a table's,
-  function's, or sequence's right-click menu in the schema tree, next to a
-  Saved Queries panel row (+), and on the current AI conversation once it has
-  a saved-chat id
-- The active cubby's tables are **pinned** above the regular list in the
-  schema tree sidebar — additive, not a replacement; the text filter above
-  still searches the whole schema regardless of what's pinned. A pinned row's
-  own "×" (on hover) removes it from the cubby directly, without opening the
-  Cubbies panel
+  function's, or sequence's right-click menu in the schema tree; by
+  right-clicking any **tab** in the tab strip; next to a Saved Queries panel
+  row (+); and on the current AI conversation once it has a saved-chat id.
+  Right-clicking a never-saved query tab explains it has to be saved first
+  (an unsaved tab has no stable id for a cubby entry to point at)
+- The active cubby's tables are **pinned** in a collapsible group above the
+  regular list in the schema tree sidebar — additive, not a replacement; the
+  text filter above still searches the whole schema regardless of what's
+  pinned. Rows show the bare table name (with a muted schema prefix only when
+  the pinned tables span more than one schema), and a pinned row's own "×"
+  (on hover) removes it from the cubby directly, without opening the Cubbies
+  panel
 - The AI assistant gets the active cubby's context automatically: its tables
   render in full column detail even on a large schema that would otherwise
-  abbreviate everything past 30 tables, and its notes are included as
-  "treat these as ground truth about what the data means" — the rest of the
-  database stays fully reachable via the assistant's own schema tools
+  abbreviate everything past 30 tables, while the rest of the database stays
+  fully reachable via the assistant's own schema tools
 
 ## Results grid
 

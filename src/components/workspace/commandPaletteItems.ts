@@ -8,10 +8,10 @@ import type {
   SettingsSection,
   TabKind,
 } from "../../state/store";
-import type { SavedQuery, TableKind } from "../../types";
+import type { Cubby, SavedConnection, SavedQuery, TableKind } from "../../types";
 import { SETTINGS_SECTIONS } from "../common/settingsSearch";
 
-export type PaletteScope = "all" | "tables" | "columns" | "scripts";
+export type PaletteScope = "all" | "cubbies" | "tables" | "columns" | "scripts";
 
 export const PALETTE_SCOPES: Array<{
   id: PaletteScope;
@@ -19,6 +19,7 @@ export const PALETTE_SCOPES: Array<{
   placeholder: string;
 }> = [
   { id: "all", label: "All", placeholder: "Search CubbyDB…" },
+  { id: "cubbies", label: "Cubbies", placeholder: "Search cubbies…" },
   { id: "tables", label: "Tables", placeholder: "Search tables…" },
   { id: "columns", label: "Columns", placeholder: "Search columns…" },
   { id: "scripts", label: "Scripts", placeholder: "Search saved scripts…" },
@@ -89,6 +90,14 @@ export type PaletteItem =
   | (BaseItem & {
       kind: "script";
       query: SavedQuery;
+    })
+  | (BaseItem & {
+      kind: "cubby";
+      cubby: Cubby;
+      /** Resolved from `cubby.connectionId` via `savedConnections` — a cubby
+       *  doesn't carry a live session id the way a table/tab/connection item
+       *  does, since opening one can connect fresh (see `openCubby`). */
+      connectionName: string | null;
     });
 
 export interface PaletteGroup {
@@ -359,6 +368,29 @@ function buildScriptItems(savedQueries: SavedQuery[], query: string): PaletteIte
   return sortAndLimit(scored, query, query ? PER_GROUP_LIMIT : 40);
 }
 
+function buildCubbyItems(
+  cubbies: Cubby[],
+  savedConnections: SavedConnection[],
+  query: string,
+): PaletteItem[] {
+  const scored: Array<{ item: Extract<PaletteItem, { kind: "cubby" }>; score: number }> = [];
+  for (const cubby of cubbies) {
+    const result = scoreItem<Extract<PaletteItem, { kind: "cubby" }>>(
+      {
+        id: `cubby:${cubby.id}`,
+        kind: "cubby",
+        cubby,
+        connectionName: savedConnections.find((c) => c.id === cubby.connectionId)?.name ?? null,
+      },
+      query,
+      [cubby.name],
+    );
+    if (result) scored.push(result);
+  }
+  if (!query) scored.sort((a, b) => b.item.cubby.updatedAt - a.item.cubby.updatedAt);
+  return sortAndLimit(scored, query, query ? PER_GROUP_LIMIT : 40);
+}
+
 function buildRecentObjectItems(
   recentObjects: RecentDatabaseObject[],
   slots: ConnectionSlot[],
@@ -394,10 +426,19 @@ export function buildPaletteGroups(input: {
   activeConnectionId: string | null;
   savedQueries: SavedQuery[];
   recentObjects: RecentDatabaseObject[];
+  cubbies: Cubby[];
+  savedConnections: SavedConnection[];
 }): PaletteGroup[] {
   const query = input.query.trim();
   const { scope, slots } = input;
 
+  if (scope === "cubbies") {
+    return group(
+      "cubbies",
+      "Cubbies",
+      buildCubbyItems(input.cubbies, input.savedConnections, query),
+    );
+  }
   if (scope === "tables") {
     return group(
       "tables",
@@ -431,6 +472,7 @@ export function buildPaletteGroups(input: {
     );
     return [
       ...group("recent", "Recent database objects", recentItems),
+      ...group("cubbies", "Cubbies", buildCubbyItems(input.cubbies, input.savedConnections, query)),
       ...group("actions", "Actions", buildActionItems(query)),
       ...group("tabs", "Open tabs", buildTabItems(slots, input.activeConnectionId, query)),
       ...group(
@@ -446,6 +488,7 @@ export function buildPaletteGroups(input: {
   return [
     ...group("tables", "Tables and views", objects.tables),
     ...group("columns", "Columns", objects.columns),
+    ...group("cubbies", "Cubbies", buildCubbyItems(input.cubbies, input.savedConnections, query)),
     ...group("actions", "Actions and settings", buildActionItems(query)),
     ...group("tabs", "Open tabs", buildTabItems(slots, input.activeConnectionId, query)),
     ...group(

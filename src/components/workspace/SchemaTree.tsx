@@ -8,6 +8,7 @@ import {
   useActiveSchema,
   useActiveSchemaError,
   useActiveSchemaLoading,
+  useConnectionCubbies,
   useStore,
 } from "../../state/store";
 import type { SchemaNode, TableNode } from "../../types";
@@ -15,7 +16,11 @@ import type { SchemaNode, TableNode } from "../../types";
 type Menu =
   | { kind: "table"; x: number; y: number; schema: string; table: string }
   | { kind: "function"; x: number; y: number; schema: string; oid: number; name: string }
-  | { kind: "sequence"; x: number; y: number; schema: string; name: string };
+  | { kind: "sequence"; x: number; y: number; schema: string; name: string }
+  // The footer cubby switcher. Anchored by its *bottom* edge (the distance
+  // from the viewport's bottom to the button's top) so the list opens
+  // upward out of the footer instead of off the bottom of the window.
+  | { kind: "cubbyList"; x: number; bottom: number };
 
 export function SchemaTree({ onClose }: { onClose: () => void }) {
   const schema = useActiveSchema();
@@ -27,8 +32,11 @@ export function SchemaTree({ onClose }: { onClose: () => void }) {
   const openSequenceDetails = useStore((s) => s.openSequenceDetails);
   const toggleCommandPalette = useStore((s) => s.toggleCommandPalette);
   const activeCubby = useActiveCubby();
+  const connectionCubbies = useConnectionCubbies();
   const addEntryToCubby = useStore((s) => s.addEntryToCubby);
   const removeTableFromCubby = useStore((s) => s.removeTableFromCubby);
+  const openCubby = useStore((s) => s.openCubby);
+  const closeCubby = useStore((s) => s.closeCubby);
   const commandPaletteBinding = useKeybindingStore(
     (s) => s.bindings["workspace.commandPalette"],
   );
@@ -48,6 +56,7 @@ export function SchemaTree({ onClose }: { onClose: () => void }) {
   // extension-installed functions.
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [expandedTypes, setExpandedTypes] = useState<Set<string>>(new Set());
+  const [pinnedCollapsed, setPinnedCollapsed] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
 
@@ -85,6 +94,10 @@ export function SchemaTree({ onClose }: { onClose: () => void }) {
   const pinnedTables = useMemo(
     () => (activeCubby ? cubbyTableRefs(activeCubby) : []),
     [activeCubby],
+  );
+  const pinnedMultiSchema = useMemo(
+    () => new Set(pinnedTables.map((t) => t.schema)).size > 1,
+    [pinnedTables],
   );
 
   function toggleSchema(name: string) {
@@ -164,42 +177,55 @@ export function SchemaTree({ onClose }: { onClose: () => void }) {
 
         {!filtering && activeCubby && pinnedTables.length > 0 && (
           <div className="tree__pinned">
-            <div className="tree__row tree__row--group">
-              <span className="tree__chevron" aria-hidden />
-              <span className="tree__icon" aria-hidden />
+            <div
+              className="tree__row tree__row--group"
+              onClick={() => setPinnedCollapsed((v) => !v)}
+            >
+              <span className="tree__chevron">{pinnedCollapsed ? "▶" : "▼"}</span>
+              <span className="tree__icon">▣</span>
               <span className="tree__label">{activeCubby.name}</span>
               <span className="tree__count mono">{pinnedTables.length}</span>
             </div>
-            <div className="tree__children">
-              {pinnedTables.map((ref) => {
-                const key = `pinned:${ref.schema}.${ref.table}`;
-                return (
-                  <div
-                    key={key}
-                    className="tree__row tree__row--table tree__row--pinned"
-                    onClick={() => {
-                      setSelected(key);
-                      void openSelectTop(ref.schema, ref.table);
-                    }}
-                  >
-                    <span className="tree__chevron" />
-                    <span className="tree__label">
-                      {ref.schema}.{ref.table}
-                    </span>
-                    <span
-                      className="tree__pin-remove"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        void removeTableFromCubby(activeCubby.id, ref.schema, ref.table);
+            {!pinnedCollapsed && (
+              <div className="tree__children">
+                {pinnedTables.map((ref) => {
+                  const key = `pinned:${ref.schema}.${ref.table}`;
+                  return (
+                    <div
+                      key={key}
+                      className="tree__row tree__row--table tree__row--pinned"
+                      title={`${ref.schema}.${ref.table}`}
+                      onClick={() => {
+                        setSelected(key);
+                        void openSelectTop(ref.schema, ref.table);
                       }}
-                      title={`Remove from ${activeCubby.name}`}
                     >
-                      ×
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
+                      <span className="tree__chevron" />
+                      <span className="tree__label">
+                        {/* The schema is normally implied by the tree's own
+                            nesting, which a flat pinned list loses — so show
+                            it only when the pinned tables actually span more
+                            than one schema and the bare name is ambiguous. */}
+                        {pinnedMultiSchema && (
+                          <span className="tree__path">{ref.schema}.</span>
+                        )}
+                        {ref.table}
+                      </span>
+                      <span
+                        className="tree__pin-remove"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void removeTableFromCubby(activeCubby.id, ref.schema, ref.table);
+                        }}
+                        title={`Remove from ${activeCubby.name}`}
+                      >
+                        ×
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
@@ -492,6 +518,42 @@ export function SchemaTree({ onClose }: { onClose: () => void }) {
         })}
       </div>
 
+      <button
+        className={"tree__footer" + (activeCubby ? " tree__footer--active" : "")}
+        disabled={connectionCubbies.length === 0}
+        title={
+          connectionCubbies.length === 0
+            ? "No cubbies yet for this connection"
+            : activeCubby
+              ? `Cubby: ${activeCubby.name}`
+              : "Open a cubby"
+        }
+        onClick={(e) => {
+          e.stopPropagation();
+          const rect = e.currentTarget.getBoundingClientRect();
+          setMenu(
+            menu?.kind === "cubbyList"
+              ? null
+              : {
+                  kind: "cubbyList",
+                  x: rect.left + 6,
+                  bottom: window.innerHeight - rect.top + 4,
+                },
+          );
+        }}
+      >
+        <span className="tree__footer-icon" aria-hidden>
+          ▣
+        </span>
+        <span className="tree__footer-label">
+          {activeCubby?.name ??
+            (connectionCubbies.length === 0 ? "No cubbies" : "Cubbies")}
+        </span>
+        <span className="tree__footer-caret" aria-hidden>
+          ⌃
+        </span>
+      </button>
+
       {menu?.kind === "table" && (
         <div
           className="context-menu"
@@ -597,6 +659,47 @@ export function SchemaTree({ onClose }: { onClose: () => void }) {
             >
               Add to {activeCubby.name}
             </button>
+          )}
+        </div>
+      )}
+
+      {menu?.kind === "cubbyList" && (
+        <div
+          className="context-menu context-menu--up"
+          style={{ left: menu.x, bottom: menu.bottom }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="context-menu__label">Cubbies</div>
+          {connectionCubbies.map((cubby) => (
+            <button
+              key={cubby.id}
+              className="context-menu__item"
+              onClick={() => {
+                setMenu(null);
+                void openCubby(cubby.id);
+              }}
+            >
+              <span className="tree__cubby-check" aria-hidden>
+                {activeCubby?.id === cubby.id ? "✓" : ""}
+              </span>
+              {cubby.name}
+            </button>
+          ))}
+          {activeCubby && (
+            <>
+              <div className="context-menu__sep" />
+              <button
+                className="context-menu__item"
+                onClick={() => {
+                  setMenu(null);
+                  closeCubby();
+                }}
+                title="Unpin without closing tabs"
+              >
+                <span className="tree__cubby-check" aria-hidden />
+                Close {activeCubby.name}
+              </button>
+            </>
           )}
         </div>
       )}

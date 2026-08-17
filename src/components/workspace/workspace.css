@@ -134,6 +134,7 @@
   font-size: 13px;
   line-height: 1;
   opacity: 0;
+  cursor: pointer;
   transition: opacity var(--transition), color var(--transition);
 }
 .conn-pill--switch:hover .conn-pill__close {
@@ -452,6 +453,69 @@
   padding-left: 20px;
   font-size: 11.5px;
 }
+/* The cubby switcher, pinned under the tree. Styled as a status-bar row
+   rather than a form control: the sidebar is a list of rows, and a bordered
+   <select> dropped into it read as a foreign widget. */
+.tree__footer {
+  flex: none;
+  width: 100%;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: left;
+  transition: background var(--transition), color var(--transition);
+}
+.tree__footer:not(:disabled):hover {
+  background: var(--border-faint);
+  color: var(--text);
+}
+.tree__footer:disabled {
+  color: var(--text-ghost);
+  cursor: default;
+}
+.tree__footer--active {
+  color: var(--accent-tint-text);
+  background: var(--accent-tint);
+}
+.tree__footer-icon {
+  flex: none;
+  font-size: 11px;
+}
+.tree__footer-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tree__footer-caret {
+  flex: none;
+  font-size: 10px;
+  opacity: 0.7;
+}
+/* Opens upward out of the footer, so it's anchored by `bottom` and needs to
+   stay inside the viewport the same way the downward menus do. */
+.context-menu--up {
+  max-height: 60vh;
+}
+/* A fixed-width gutter keeps every cubby name left-aligned whether or not it
+   carries the active checkmark. Inline-block rather than flex so it doesn't
+   change `.context-menu__item`'s layout for every other menu that uses it. */
+.tree__cubby-check {
+  display: inline-block;
+  width: 12px;
+}
+/* The schema prefix on a pinned row — muted, since the table name is what's
+   being scanned for. Mirrors the command palette's own path treatment. */
+.tree__path {
+  color: var(--text-faint);
+}
 
 .tree__row {
   display: flex;
@@ -636,6 +700,16 @@
   background: var(--accent);
   color: #fff;
 }
+/* A disabled item is kept visible to explain *why* an action isn't
+   available, so it must not take the accent hover fill. */
+.context-menu__item:disabled {
+  color: var(--text-ghost);
+  cursor: default;
+}
+.context-menu__item:disabled:hover {
+  background: none;
+  color: var(--text-ghost);
+}
 .context-menu__item:hover .mono {
   color: #fff;
 }
@@ -765,6 +839,7 @@
   color: var(--text-ghost);
   font-size: 14px;
   line-height: 1;
+  cursor: pointer;
 }
 .tab__close:hover {
   color: var(--text);
@@ -773,6 +848,7 @@
   color: var(--text-ghost);
   font-size: 11px;
   line-height: 1;
+  cursor: pointer;
 }
 .tab__save:hover {
   color: var(--accent);
@@ -2276,6 +2352,7 @@
   font-size: 12px;
   color: var(--text-faint);
   opacity: 0;
+  cursor: pointer;
   transition: opacity var(--transition), color var(--transition);
 }
 .saved-queries__item:hover .saved-queries__rename,
@@ -2293,19 +2370,14 @@
    Same fixed-drawer treatment as `.saved-queries` (reuses several of its
    classes directly — row, name, time, rename/delete icon styles are
    identical). Only what's actually different gets its own rules: the
-   chevron, the pinned tag, and the expanded notes/entries detail block. */
+   chevron, the pinned tag, and the expanded entries detail block. */
 .cubby-panel {
-  position: fixed;
-  top: var(--h-topbar);
-  right: 0;
-  bottom: 0;
-  width: 340px;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
   background: var(--surface);
-  border-left: 1px solid var(--border);
-  box-shadow: var(--shadow-drawer);
   display: flex;
   flex-direction: column;
-  z-index: 50;
 }
 .cubby-panel__head {
   height: var(--h-tabs);
@@ -2348,6 +2420,7 @@
   font-size: 9px;
   text-align: center;
   color: var(--text-faint);
+  cursor: pointer;
 }
 .cubby-panel__chevron:hover {
   color: var(--text);
@@ -2385,6 +2458,15 @@
   flex-direction: column;
   gap: 6px;
 }
+.cubby-panel__detail-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+.cubby-panel__detail .btn--primary {
+  margin-top: 6px;
+  justify-content: center;
+}
 .cubby-panel__section-label {
   margin-top: 6px;
   font-size: 10.5px;
@@ -2392,23 +2474,6 @@
   text-transform: uppercase;
   letter-spacing: 0.03em;
   color: var(--text-faint);
-}
-.cubby-panel__notes {
-  width: 100%;
-  min-height: 70px;
-  resize: vertical;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-raised);
-  padding: 7px 8px;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--text);
-  font-family: inherit;
-}
-.cubby-panel__notes:focus {
-  outline: none;
-  border-color: var(--accent);
 }
 .cubby-panel__entries {
   display: flex;
@@ -2458,7 +2523,8 @@
    covering it), so it needs to be positioned to cast its shadow over the
    content on its left. Below the resizer's own z-index, which has to stay
    grabbable. */
-.workspace__ai {
+.workspace__ai,
+.workspace__cubby {
   flex: none;
   min-height: 0;
   position: relative;
@@ -3117,6 +3183,7 @@
   font-size: 12px;
   color: var(--text-faint);
   opacity: 0;
+  cursor: pointer;
   transition: opacity var(--transition), color var(--transition);
 }
 .ai-chat-item:hover .ai-chat-item__rename,

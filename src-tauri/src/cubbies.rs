@@ -24,12 +24,6 @@ use crate::db::{DbError, DbErrorKind};
 
 const FILE_NAME: &str = "cubbies.json";
 
-/// Above this many characters, cubby notes are rejected rather than silently
-/// truncated — notes ride in the AI system prompt on every turn of every
-/// conversation for this cubby, so an unbounded pad would be a growing token
-/// bill nobody asked for. Comfortably more than a task's worth of context.
-pub const MAX_NOTES_CHARS: usize = 4000;
-
 /// One thing a cubby points at. Deliberately a reference (ids / names), never
 /// a copy of the thing itself, so editing the original — the saved query's
 /// SQL, the chat's messages — is instantly reflected everywhere it's
@@ -46,7 +40,12 @@ pub enum CubbyEntry {
 }
 
 /// A user-created cubby: a named collection of entries, scoped to one saved
-/// connection, plus a free-text notes pad.
+/// connection.
+///
+/// An earlier version also carried a free-text `notes` pad. Removing the
+/// field needs no migration: serde ignores unknown fields by default, so an
+/// existing `cubbies.json` still loads and simply drops its stale `notes` on
+/// the next write.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Cubby {
@@ -61,8 +60,6 @@ pub struct Cubby {
     pub connection_id: String,
     #[serde(default)]
     pub entries: Vec<CubbyEntry>,
-    #[serde(default)]
-    pub notes: String,
     #[serde(default)]
     pub created_at: u64,
     #[serde(default)]
@@ -97,13 +94,6 @@ impl CubbyStore {
 
     /// Insert or update a cubby by id, returning the stored record.
     pub fn upsert(&self, mut cubby: Cubby) -> Result<Cubby, DbError> {
-        if cubby.notes.len() > MAX_NOTES_CHARS {
-            return Err(DbError::new(
-                DbErrorKind::Internal,
-                format!("Cubby notes can't exceed {MAX_NOTES_CHARS} characters."),
-            ));
-        }
-
         let mut list = self.list()?;
         let now = now_millis();
         if cubby.id.is_empty() {

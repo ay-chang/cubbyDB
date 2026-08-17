@@ -43,20 +43,16 @@ pub struct PromptContext<'a> {
     pub server_version: &'a str,
     pub connection_name: &'a str,
     /// The active cubby, if the user has one open — a named, curated subset
-    /// of tables plus free-text notes. `None` when no cubby is open;
-    /// identical to today's behavior in that case.
+    /// of tables. `None` when no cubby is open; identical to today's
+    /// behavior in that case.
     pub cubby: Option<CubbyContext<'a>>,
 }
 
-/// The active cubby's contribution to the prompt: which tables it names
-/// (rendered in full detail regardless of `COMPACT_SCHEMA_TABLE_THRESHOLD`)
-/// and its notes (human-written context no amount of schema introspection
-/// can recover — see `describe_table`'s doc comment on table/column
-/// comments for the same idea applied to the catalog instead).
+/// The active cubby's contribution to the prompt: which tables it names,
+/// rendered in full detail regardless of `COMPACT_SCHEMA_TABLE_THRESHOLD`.
 pub struct CubbyContext<'a> {
     pub name: &'a str,
     pub tables: &'a [(String, String)],
-    pub notes: &'a str,
 }
 
 pub fn build_system_prompt(ctx: &PromptContext) -> String {
@@ -175,26 +171,17 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
     );
 
     // --- Cubby ---------------------------------------------------------------
-    // The user's own curation of what matters for this task, plus whatever
-    // they've written down about it. Placed right before the schema so both
-    // sections of database context sit together.
+    // The user's own curation of what matters for this task. Placed right
+    // before the schema so both sections of database context sit together.
     if let Some(cubby) = &ctx.cubby {
         out.push_str(&format!(
             "## Cubby: {}\n\
              The user is working inside this cubby — a named subset of the database for a \
              specific task. Its tables are rendered in full detail below regardless of the \
              schema's overall size, and the rest of the database is still fully reachable via \
-             `search_schema` and `describe_table` if the question needs it.\n",
+             `search_schema` and `describe_table` if the question needs it.\n\n",
             cubby.name
         ));
-        if !cubby.notes.trim().is_empty() {
-            out.push_str(&format!(
-                "\nNotes the user wrote about this cubby — treat these as ground truth about \
-                 what the data means:\n{}\n",
-                cubby.notes.trim()
-            ));
-        }
-        out.push('\n');
     }
 
     // --- Schema ------------------------------------------------------------
