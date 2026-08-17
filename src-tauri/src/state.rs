@@ -13,6 +13,7 @@ use tokio::sync::Mutex;
 use crate::ai::chats::AiChatStore;
 use crate::ai::config::AiConfigStore;
 use crate::connections::{ConnectionStore, LastConnectionStore};
+use crate::cubbies::CubbyStore;
 use crate::db::{ConnectionParams, DbSession, Engine, QueryCanceller};
 use crate::history::HistoryStore;
 use crate::saved_queries::SavedQueryStore;
@@ -67,6 +68,10 @@ impl AppState {
 
     pub fn saved_query_store(&self) -> SavedQueryStore {
         SavedQueryStore::new(&self.data_dir)
+    }
+
+    pub fn cubby_store(&self) -> CubbyStore {
+        CubbyStore::new(&self.data_dir)
     }
 
     pub fn ai_config_store(&self) -> AiConfigStore {

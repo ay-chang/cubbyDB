@@ -11,6 +11,7 @@ import { Spinner } from "../common/Spinner";
 import {
   accentPaletteFor,
   THEME_MODE,
+  useActiveCubby,
   useActiveSchemaLoading,
   useStore,
 } from "../../state/store";
@@ -81,6 +82,9 @@ export function TopBar() {
   const toggleSavedQueries = useStore((s) => s.toggleSavedQueries);
   const aiPanelOpen = useStore((s) => s.aiPanelOpen);
   const toggleAiPanel = useStore((s) => s.toggleAiPanel);
+  const cubbiesOpen = useStore((s) => s.cubbiesOpen);
+  const toggleCubbies = useStore((s) => s.toggleCubbies);
+  const activeCubby = useActiveCubby();
   const refreshActive = useStore((s) => s.refreshActive);
   const disconnect = useStore((s) => s.disconnect);
   const openSettings = useStore((s) => s.openSettings);
@@ -225,6 +229,16 @@ export function TopBar() {
       </div>
 
       <div className="topbar__right">
+        <button
+          className={
+            "topbar__btn topbar__btn--cubby" +
+            (cubbiesOpen || activeCubby ? " topbar__btn--active" : "")
+          }
+          onClick={toggleCubbies}
+          title={activeCubby ? `Cubby: ${activeCubby.name}` : "Cubbies"}
+        >
+          {activeCubby ? activeCubby.name : "Cubby"}
+        </button>
         <button
           className={"topbar__btn" + (aiPanelOpen ? " topbar__btn--active" : "")}
           onClick={toggleAiPanel}

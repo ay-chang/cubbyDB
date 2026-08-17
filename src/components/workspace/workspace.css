@@ -233,6 +233,16 @@
 .topbar__btn--loading {
   cursor: default;
 }
+/* The Cubby button's label is the active cubby's name once one is open —
+   unlike the other right-edge toggles, that's user text of arbitrary
+   length, so it needs its own cap rather than growing the top bar. */
+.topbar__btn--cubby {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+}
 /* Square icon-only variant (settings gear). */
 .topbar__btn--icon {
   width: 28px;
@@ -411,6 +421,32 @@
 }
 .tree__note--error {
   color: var(--error-text);
+}
+/* The active cubby's tables, pinned above the regular schema list — same row
+   styling, just set off with a bottom divider so it still reads as "this is
+   additive" rather than a replacement for the tree below it. */
+.tree__pinned {
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.tree__row--pinned {
+  position: relative;
+}
+.tree__pin-remove {
+  flex: none;
+  margin-left: auto;
+  padding: 0 4px;
+  font-size: 12px;
+  color: var(--text-faint);
+  opacity: 0;
+  transition: opacity var(--transition), color var(--transition);
+}
+.tree__row--pinned:hover .tree__pin-remove {
+  opacity: 1;
+}
+.tree__pin-remove:hover {
+  color: var(--error);
 }
 .tree__note--sub {
   padding-left: 20px;
@@ -2251,6 +2287,163 @@
 }
 .saved-queries__delete:hover {
   color: var(--error);
+}
+
+/* --- Cubbies panel ---
+   Same fixed-drawer treatment as `.saved-queries` (reuses several of its
+   classes directly — row, name, time, rename/delete icon styles are
+   identical). Only what's actually different gets its own rules: the
+   chevron, the pinned tag, and the expanded notes/entries detail block. */
+.cubby-panel {
+  position: fixed;
+  top: var(--h-topbar);
+  right: 0;
+  bottom: 0;
+  width: 340px;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  box-shadow: var(--shadow-drawer);
+  display: flex;
+  flex-direction: column;
+  z-index: 50;
+}
+.cubby-panel__head {
+  height: var(--h-tabs);
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-raised);
+}
+.cubby-panel__head-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.cubby-panel__new {
+  padding: 2px 4px 6px;
+}
+/* `.saved-queries__item` (the shared row wrapper) is `display: flex` with no
+   explicit direction, i.e. row — fine for a single-line saved-query row, but
+   a cubby row can grow a `.cubby-panel__detail` block below it, so the
+   wrapper needs to stack them in a column instead of squeezing both onto one
+   line. */
+.cubby-panel__item {
+  flex-direction: column;
+  align-items: stretch;
+}
+.cubby-panel__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+}
+.cubby-panel__chevron {
+  flex: none;
+  width: 16px;
+  padding-top: 10px;
+  font-size: 9px;
+  text-align: center;
+  color: var(--text-faint);
+}
+.cubby-panel__chevron:hover {
+  color: var(--text);
+}
+.cubby-panel__item--active {
+  background: var(--accent-tint);
+  border-color: var(--accent);
+}
+/* `.saved-queries__item:hover` (two classes, specificity 0,2,0) would
+   otherwise win over `.cubby-panel__item--active` alone (0,1,0) and paint a
+   pinned row gray the moment the mouse enters it — the exact reverse of what
+   "pinned" should look like. Three classes beats that. */
+.saved-queries__item.cubby-panel__item--active:hover {
+  background: var(--accent-tint);
+  border-color: var(--accent);
+}
+.cubby-panel__pin-tag {
+  flex: none;
+  font-size: 9.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent-tint-text);
+  background: var(--accent-tint);
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+.cubby-panel__count {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.cubby-panel__detail {
+  padding: 4px 10px 12px 30px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cubby-panel__section-label {
+  margin-top: 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-faint);
+}
+.cubby-panel__notes {
+  width: 100%;
+  min-height: 70px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  padding: 7px 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  font-family: inherit;
+}
+.cubby-panel__notes:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.cubby-panel__entries {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.cubby-panel__entry {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 2px;
+  border-radius: 5px;
+}
+.cubby-panel__entry:hover {
+  background: var(--surface-raised);
+}
+.cubby-panel__entry:hover .saved-queries__delete {
+  opacity: 1;
+}
+.cubby-panel__entry-kind {
+  flex: none;
+  font-size: 9.5px;
+  color: var(--text-faint);
+  background: var(--border-faint);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.cubby-panel__entry-label {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* --- AI assistant panel ---

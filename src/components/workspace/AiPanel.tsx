@@ -8,6 +8,7 @@ import {
   useActiveAiError,
   useActiveAiSending,
   useActiveConnectionCanSaveChats,
+  useActiveCubby,
   useStore,
 } from "../../state/store";
 import { copyToClipboard } from "../../api/backend";
@@ -54,6 +55,8 @@ export function AiPanel() {
   const renameAiChat = useStore((s) => s.renameAiChat);
   const deleteAiChat = useStore((s) => s.deleteAiChat);
   const openSettings = useStore((s) => s.openSettings);
+  const activeCubby = useActiveCubby();
+  const addEntryToCubby = useStore((s) => s.addEntryToCubby);
   const activeConnectionId = useStore((s) => s.activeConnectionId);
   const sessionId = useStore((s) =>
     s.activeConnectionId ? s.connections[s.activeConnectionId]?.sessionId ?? null : null,
@@ -141,6 +144,15 @@ export function AiPanel() {
           <button className="ai-panel__btn" onClick={newAiChat} title="New chat">
             New
           </button>
+          {!historyView && activeCubby && chatId && (
+            <button
+              className="ai-panel__btn"
+              onClick={() => void addEntryToCubby(activeCubby.id, { kind: "chat", chatId })}
+              title={`Add this chat to ${activeCubby.name}`}
+            >
+              Add to cubby
+            </button>
+          )}
           <button className="ai-panel__close" onClick={toggleAiPanel} title="Close">
             ×
           </button>

@@ -11,6 +11,7 @@ use crate::ai::chats::{AiChatSummary, AiChatThread};
 use crate::ai::config::{AiConfigStatus, AiProvider};
 use crate::ai::{ActiveTableRef, AiChatResult, ChatMessage, ModelInfo, ReasoningEffort};
 use crate::connections::{LastConnection, SavedConnection};
+use crate::cubbies::Cubby;
 use crate::db::{
     driver_for, ColumnValue, ConnectionInfo, ConnectionParams, DbError, DbErrorKind, DeleteImpact,
     Engine, FunctionDefinition, QueryResult, SchemaNode, SequenceDetails, TableStructure,
@@ -30,6 +31,20 @@ pub struct ActiveConnectionInfo {
     pub name: String,
     pub connection_id: Option<String>,
     pub info: ConnectionInfo,
+}
+
+/// The active cubby's contribution to an `ai_chat` turn, sent fresh by the
+/// frontend on every call — same treatment as `schema` below, which is also
+/// resent in full each turn rather than cached server-side. It only actually
+/// varies when the user edits the cubby mid-conversation, which is rare
+/// enough that `build_system_prompt`'s prefix-caching note doesn't call it
+/// out specially.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CubbyPromptInfo {
+    pub name: String,
+    pub tables: Vec<ActiveTableRef>,
+    pub notes: String,
 }
 
 /// Opaque id for one live session — monotonic-enough for in-memory keys
@@ -83,6 +98,23 @@ pub async fn save_query(
 #[tauri::command]
 pub async fn delete_saved_query(state: State<'_, AppState>, id: String) -> Result<(), DbError> {
     state.saved_query_store().delete(&id)
+}
+
+// --- Cubbies -----------------------------------------------------------------
+
+#[tauri::command]
+pub async fn list_cubbies(state: State<'_, AppState>) -> Result<Vec<Cubby>, DbError> {
+    state.cubby_store().list()
+}
+
+#[tauri::command]
+pub async fn save_cubby(state: State<'_, AppState>, cubby: Cubby) -> Result<Cubby, DbError> {
+    state.cubby_store().upsert(cubby)
+}
+
+#[tauri::command]
+pub async fn delete_cubby(state: State<'_, AppState>, id: String) -> Result<(), DbError> {
+    state.cubby_store().delete(&id)
 }
 
 // --- Connect / test --------------------------------------------------------
@@ -868,6 +900,7 @@ pub async fn ai_chat(
     session_id: String,
     schema: Vec<SchemaNode>,
     active_table: Option<ActiveTableRef>,
+    cubby: Option<CubbyPromptInfo>,
     messages: Vec<ChatMessage>,
 ) -> Result<AiChatResult, DbError> {
     let config = state.ai_config_store().get()?;
@@ -902,6 +935,10 @@ pub async fn ai_chat(
         )
     };
 
+    let cubby_tables: Vec<(String, String)> = cubby
+        .as_ref()
+        .map(|c| c.tables.iter().map(|t| (t.schema.clone(), t.table.clone())).collect())
+        .unwrap_or_default();
     let system_prompt = crate::ai::prompt::build_system_prompt(&crate::ai::prompt::PromptContext {
         schema: &schema,
         active_table: active_table
@@ -909,6 +946,11 @@ pub async fn ai_chat(
             .map(|t| (t.schema.as_str(), t.table.as_str())),
         server_version: &server_version,
         connection_name: &connection_name,
+        cubby: cubby.as_ref().map(|c| crate::ai::prompt::CubbyContext {
+            name: &c.name,
+            tables: &cubby_tables,
+            notes: &c.notes,
+        }),
     });
 
     // A plain `&AppState` (trivially `Copy`, unlike `State` itself) so the

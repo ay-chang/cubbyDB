@@ -9,6 +9,7 @@ import {
 import { useActiveTabId, useActiveTabs, useStore } from "../../state/store";
 import { AiPanel } from "./AiPanel";
 import { CommandPalette } from "./CommandPalette";
+import { CubbyPanel } from "./CubbyPanel";
 import { EditorTabs } from "./EditorTabs";
 import { FunctionDefinitionPane } from "./FunctionDefinitionPane";
 import { HistoryPanel } from "./HistoryPanel";
@@ -38,6 +39,7 @@ export function Workspace() {
   const historyOpen = useStore((s) => s.historyOpen);
   const savedQueriesOpen = useStore((s) => s.savedQueriesOpen);
   const aiPanelOpen = useStore((s) => s.aiPanelOpen);
+  const cubbiesOpen = useStore((s) => s.cubbiesOpen);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
 
@@ -179,6 +181,7 @@ export function Workspace() {
 
       {historyOpen && <HistoryPanel />}
       {savedQueriesOpen && <SavedQueriesPanel />}
+      {cubbiesOpen && <CubbyPanel />}
       {saveDialogOpen && <SaveQueryDialog onClose={closeSaveDialog} />}
       <Toast />
       <CommandPalette />

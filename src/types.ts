@@ -258,6 +258,37 @@ export interface SavedQuery {
   createdAt: number;
 }
 
+// --- Cubbies -------------------------------------------------------------
+// A cubby is a named collection of *references* to things spread across the
+// app — never a copy of their contents. See `src-tauri/src/cubbies.rs` for
+// the full reasoning (non-exclusive membership, reference-only, scoped to
+// one connection).
+
+export type CubbyEntry =
+  | { kind: "savedQuery"; savedQueryId: string }
+  | { kind: "table"; schema: string; table: string }
+  | { kind: "chat"; chatId: string }
+  | { kind: "structure"; schema: string; table: string }
+  | { kind: "function"; schema: string; name: string; oid: number | null }
+  | { kind: "sequence"; schema: string; name: string };
+
+/** A user-created cubby — scoped to one *saved* connection (`connectionId`,
+ *  a saved connection's stable id, same reasoning as `AiChatThread`), since
+ *  most of what it can hold (tables, chats) only makes sense against a
+ *  specific database. */
+export interface Cubby {
+  id: string;
+  name: string;
+  connectionId: string;
+  entries: CubbyEntry[];
+  notes: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** Mirrors `cubbies::MAX_NOTES_CHARS` — the backend rejects anything longer. */
+export const CUBBY_NOTES_MAX_CHARS = 4000;
+
 // --- AI assistant ------------------------------------------------------------
 
 export type AiProvider = "anthropic" | "openai" | "codex" | "claudeCode";

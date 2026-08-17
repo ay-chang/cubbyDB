@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { useStore } from "../../state/store";
+import { useActiveCubby, useStore } from "../../state/store";
 import type { SavedQuery } from "../../types";
 
 function formatTime(ms: number): string {
@@ -21,6 +21,8 @@ export function SavedQueriesPanel() {
   const renameSavedQuery = useStore((s) => s.renameSavedQuery);
   const deleteSavedQueryById = useStore((s) => s.deleteSavedQueryById);
   const toggleSavedQueries = useStore((s) => s.toggleSavedQueries);
+  const activeCubby = useActiveCubby();
+  const addEntryToCubby = useStore((s) => s.addEntryToCubby);
 
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -80,6 +82,21 @@ export function SavedQueriesPanel() {
               <code className="saved-queries__sql">{query.sql.trim()}</code>
             </div>
             <div className="saved-queries__item-actions">
+              {activeCubby && (
+                <span
+                  className="saved-queries__rename"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void addEntryToCubby(activeCubby.id, {
+                      kind: "savedQuery",
+                      savedQueryId: query.id,
+                    });
+                  }}
+                  title={`Add to ${activeCubby.name}`}
+                >
+                  +
+                </span>
+              )}
               <span
                 className="saved-queries__rename"
                 onClick={(e) => {

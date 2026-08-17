@@ -11,6 +11,7 @@
 mod ai;
 mod commands;
 mod connections;
+mod cubbies;
 mod db;
 mod history;
 mod keychain;
@@ -41,6 +42,9 @@ pub fn run() {
             commands::list_saved_queries,
             commands::save_query,
             commands::delete_saved_query,
+            commands::list_cubbies,
+            commands::save_cubby,
+            commands::delete_cubby,
             commands::test_connection,
             commands::connect,
             commands::reconnect_session,

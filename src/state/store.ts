@@ -7,6 +7,7 @@
  * directly (one-shot actions like "test connection" stay local to their form).
  */
 
+import { useMemo } from "react";
 import { create } from "zustand";
 
 import * as api from "../api/backend";
@@ -19,6 +20,8 @@ import type {
   AiReasoningEffort,
   ColumnValue,
   ConnectionParams,
+  Cubby,
+  CubbyEntry,
   DbError,
   DeleteImpact,
   HistoryEntry,
@@ -884,6 +887,17 @@ interface AppStore {
   savedQueries: SavedQuery[];
   savedQueriesOpen: boolean;
 
+  /** Every cubby (all connections' — the panel filters to the active one).
+   *  Small, reference-only records, so unlike AI chats there's no
+   *  list/full-record split. */
+  cubbies: Cubby[];
+  cubbiesOpen: boolean;
+  /** The cubby currently "open" — pins its tables in the schema tree and
+   *  feeds its tables + notes to the AI as extra context. `null` means no
+   *  cubby is active, identical to today's behavior. Cleared automatically
+   *  on switching to a connection the cubby doesn't belong to. */
+  activeCubbyId: string | null;
+
   /** Every live connection's workspace, keyed by session id. */
   connections: Record<string, ConnectionSlot>;
   /** Which connection's workspace is currently visible. */
@@ -1007,6 +1021,32 @@ interface AppStore {
   /** Rename a saved query in place (its SQL is untouched) — the Saved
    *  Queries panel's inline "✎" rename. */
   renameSavedQuery: (id: string, name: string) => Promise<void>;
+
+  // --- cubbies ---
+  loadCubbies: () => Promise<void>;
+  toggleCubbies: () => void;
+  createCubby: (name: string) => Promise<void>;
+  renameCubby: (id: string, name: string) => Promise<void>;
+  deleteCubbyById: (id: string) => Promise<void>;
+  /** Restores every entry in a cubby — switching to its connection (if
+   *  already open elsewhere) and opening/focusing a tab for each saved
+   *  query, table, chat, and structure/function/sequence view it holds.
+   *  Sets it as the active cubby (pins its tables in the schema tree, and
+   *  feeds its tables + notes to the AI as extra context). No-ops with a
+   *  toast if the cubby's connection isn't currently open. */
+  openCubby: (id: string) => Promise<void>;
+  /** Clears the active cubby without touching any open tabs or deleting it —
+   *  "I'm done working in this context for now." */
+  closeCubby: () => void;
+  addEntryToCubby: (cubbyId: string, entry: CubbyEntry) => Promise<void>;
+  removeEntryFromCubby: (cubbyId: string, entry: CubbyEntry) => Promise<void>;
+  /** Removes every entry (both `table` and `structure` kinds) pointing at one
+   *  relation, in a single update — what the schema tree's pinned section
+   *  uses, since a pinned row represents the relation, not one specific
+   *  entry kind, and firing `removeEntryFromCubby` twice back-to-back would
+   *  race against its own read-modify-write. */
+  removeTableFromCubby: (cubbyId: string, schema: string, table: string) => Promise<void>;
+  updateCubbyNotes: (id: string, notes: string) => Promise<void>;
   /** Open a new connection and add it as a slot — never replaces an
    *  existing one, so connecting to a second database leaves the first
    *  live. Becomes the active (visible) slot. */
@@ -1841,6 +1881,45 @@ function tableSql(
  *  their target this way rather than assuming "the active connection" —
  *  correct even if the user switches connections while e.g. a query is
  *  still running in a background one). */
+/** Structural equality for two cubby entries — used to dedupe "add to cubby"
+ *  (adding the same table twice is a no-op, not a duplicate row) and to
+ *  find-and-remove one entry from the list. Plain field comparison rather
+ *  than JSON.stringify: key order in an object literal is stable per call
+ *  site in practice, but this doesn't depend on that. */
+export function cubbyEntryEquals(a: CubbyEntry, b: CubbyEntry): boolean {
+  if (a.kind !== b.kind) return false;
+  switch (a.kind) {
+    case "savedQuery":
+      return b.kind === "savedQuery" && a.savedQueryId === b.savedQueryId;
+    case "chat":
+      return b.kind === "chat" && a.chatId === b.chatId;
+    case "table":
+    case "structure":
+      return b.kind === a.kind && a.schema === b.schema && a.table === b.table;
+    case "function":
+      return b.kind === "function" && a.schema === b.schema && a.name === b.name;
+    case "sequence":
+      return b.kind === "sequence" && a.schema === b.schema && a.name === b.name;
+  }
+}
+
+/** The distinct (schema, table) pairs a cubby names — from its `table` and
+ *  `structure` entries (both point at a real relation; `structure` is just a
+ *  different view of the same table). Used to pin the schema tree section and
+ *  to tell the AI which tables in a large schema deserve full detail. */
+export function cubbyTableRefs(cubby: Cubby): { schema: string; table: string }[] {
+  const seen = new Set<string>();
+  const out: { schema: string; table: string }[] = [];
+  for (const entry of cubby.entries) {
+    if (entry.kind !== "table" && entry.kind !== "structure") continue;
+    const key = `${entry.schema}.${entry.table}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ schema: entry.schema, table: entry.table });
+  }
+  return out;
+}
+
 function findTabOwner(
   connections: Record<string, ConnectionSlot>,
   tabId: string,
@@ -2245,6 +2324,9 @@ export const useStore = create<AppStore>((set, get) => {
     savedConnections: [],
     savedQueries: [],
     savedQueriesOpen: false,
+    cubbies: [],
+    cubbiesOpen: false,
+    activeCubbyId: null,
     connections: {},
     activeConnectionId: null,
     history: [],
@@ -2290,6 +2372,7 @@ export const useStore = create<AppStore>((set, get) => {
 
       await get().loadSavedConnections();
       await get().loadSavedQueries();
+      await get().loadCubbies();
 
       // Try to reconnect to the last-used database so the user doesn't have to
       // re-enter it every launch. Remember its params either way, to prefill the
@@ -2442,8 +2525,15 @@ export const useStore = create<AppStore>((set, get) => {
     },
 
     switchConnection(sessionId) {
-      if (!get().connections[sessionId]) return;
-      set({ activeConnectionId: sessionId });
+      const slot = get().connections[sessionId];
+      if (!slot) return;
+      // A cubby belongs to one connection — switching to a different one
+      // (or an ad-hoc slot with no saved identity) un-pins it rather than
+      // showing another database's tables as if they were this one's.
+      const activeCubbyId = get().activeCubbyId;
+      const cubby = activeCubbyId ? get().cubbies.find((c) => c.id === activeCubbyId) : null;
+      const stillValid = cubby && cubby.connectionId === slot.current.connectionId;
+      set({ activeConnectionId: sessionId, activeCubbyId: stillValid ? activeCubbyId : null });
     },
 
     renameLiveConnection(savedConnectionId, name) {
@@ -3417,11 +3507,15 @@ export const useStore = create<AppStore>((set, get) => {
 
     toggleHistory() {
       const next = !get().historyOpen;
-      // History, Saved Queries, and the AI panel share one slot on the right
-      // edge of the window — opening one closes the other two rather than
+      // History, Saved Queries, AI, and Cubbies share one slot on the right
+      // edge of the window — opening one closes the others rather than
       // stacking on top of each other. Closing (next === false) only touches
       // this panel's own flag.
-      set(next ? { historyOpen: true, savedQueriesOpen: false, aiPanelOpen: false } : { historyOpen: false });
+      set(
+        next
+          ? { historyOpen: true, savedQueriesOpen: false, aiPanelOpen: false, cubbiesOpen: false }
+          : { historyOpen: false },
+      );
       if (next) void get().refreshHistory();
     },
 
@@ -3435,9 +3529,12 @@ export const useStore = create<AppStore>((set, get) => {
 
     toggleAiPanel() {
       const next = !get().aiPanelOpen;
-      // See `toggleHistory` — the three right-edge panels are mutually
-      // exclusive.
-      set(next ? { aiPanelOpen: true, historyOpen: false, savedQueriesOpen: false } : { aiPanelOpen: false });
+      // See `toggleHistory` — the right-edge panels are mutually exclusive.
+      set(
+        next
+          ? { aiPanelOpen: true, historyOpen: false, savedQueriesOpen: false, cubbiesOpen: false }
+          : { aiPanelOpen: false },
+      );
       if (!next) return;
       if (!get().aiConfig) void get().loadAiConfig();
 
@@ -3640,6 +3737,19 @@ export const useStore = create<AppStore>((set, get) => {
       // this feature existed.
       const savedConnectionId = slot.current.connectionId;
 
+      // The active cubby (if any and if it belongs to this connection) gets
+      // its tables rendered in full detail and its notes injected into the
+      // system prompt — see `PromptContext::cubby` on the backend. Sent
+      // fresh on every turn, same as `schema` above.
+      const activeCubby = get().activeCubbyId
+        ? get().cubbies.find(
+            (c) => c.id === get().activeCubbyId && c.connectionId === savedConnectionId,
+          ) ?? null
+        : null;
+      const cubbyContext = activeCubby
+        ? { name: activeCubby.name, tables: cubbyTableRefs(activeCubby), notes: activeCubby.notes }
+        : null;
+
       const persist = async (messages: AiMessage[]) => {
         if (!savedConnectionId) return;
         try {
@@ -3658,7 +3768,13 @@ export const useStore = create<AppStore>((set, get) => {
       };
 
       try {
-        const result = await api.aiChat(slot.sessionId, slot.schema, activeTable, slot.aiMessages);
+        const result = await api.aiChat(
+          slot.sessionId,
+          slot.schema,
+          activeTable,
+          cubbyContext,
+          slot.aiMessages,
+        );
         // Stopped or superseded while the request was in flight — drop the
         // reply rather than have it appear after the user moved on.
         if (!stillCurrent()) return;
@@ -3802,9 +3918,12 @@ export const useStore = create<AppStore>((set, get) => {
 
     toggleSavedQueries() {
       const next = !get().savedQueriesOpen;
-      // See `toggleHistory` — the three right-edge panels are mutually
-      // exclusive.
-      set(next ? { savedQueriesOpen: true, historyOpen: false, aiPanelOpen: false } : { savedQueriesOpen: false });
+      // See `toggleHistory` — the right-edge panels are mutually exclusive.
+      set(
+        next
+          ? { savedQueriesOpen: true, historyOpen: false, aiPanelOpen: false, cubbiesOpen: false }
+          : { savedQueriesOpen: false },
+      );
       if (next) void get().loadSavedQueries();
     },
 
@@ -3896,6 +4015,205 @@ export const useStore = create<AppStore>((set, get) => {
           ]),
         ),
       }));
+    },
+
+    async loadCubbies() {
+      try {
+        const list = await api.listCubbies();
+        set({ cubbies: list });
+      } catch (err) {
+        console.error("failed to load cubbies:", errorMessage(err));
+      }
+    },
+
+    toggleCubbies() {
+      const next = !get().cubbiesOpen;
+      // See `toggleHistory` — History, Saved Queries, AI, and Cubbies share
+      // one slot on the right edge of the window.
+      set(
+        next
+          ? { cubbiesOpen: true, historyOpen: false, savedQueriesOpen: false, aiPanelOpen: false }
+          : { cubbiesOpen: false },
+      );
+    },
+
+    async createCubby(name) {
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      const connectionId = get().activeConnectionId;
+      const slot = connectionId ? get().connections[connectionId] : null;
+      const savedConnectionId = slot?.current.connectionId ?? null;
+      if (!savedConnectionId) {
+        get().showToast("Save this connection before creating a cubby for it.", "error");
+        return;
+      }
+      try {
+        const saved = await api.saveCubby({
+          id: "",
+          name: trimmed,
+          connectionId: savedConnectionId,
+          entries: [],
+          notes: "",
+          createdAt: 0,
+          updatedAt: 0,
+        });
+        set((s) => ({ cubbies: [saved, ...s.cubbies], activeCubbyId: saved.id }));
+      } catch (err) {
+        console.error("failed to create cubby:", errorMessage(err));
+      }
+    },
+
+    async renameCubby(id, name) {
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      const existing = get().cubbies.find((c) => c.id === id);
+      if (!existing) return;
+      try {
+        const saved = await api.saveCubby({ ...existing, name: trimmed });
+        set((s) => ({ cubbies: s.cubbies.map((c) => (c.id === id ? saved : c)) }));
+      } catch (err) {
+        console.error("failed to rename cubby:", errorMessage(err));
+      }
+    },
+
+    async deleteCubbyById(id) {
+      const ok = await requestConfirm(
+        "Delete this cubby? Its notes will be lost. The tables, queries, and chats it points to are not affected.",
+        "Delete",
+      );
+      if (!ok) return;
+      try {
+        await api.deleteCubby(id);
+        set((s) => ({
+          cubbies: s.cubbies.filter((c) => c.id !== id),
+          activeCubbyId: s.activeCubbyId === id ? null : s.activeCubbyId,
+        }));
+      } catch (err) {
+        console.error("failed to delete cubby:", errorMessage(err));
+      }
+    },
+
+    async openCubby(id) {
+      const cubby = get().cubbies.find((c) => c.id === id);
+      if (!cubby) return;
+
+      // A cubby only makes sense against its own connection — reuse an
+      // already-open slot if there is one, otherwise connect to it fresh
+      // (same saved-connection record the connection screen would use).
+      let targetSessionId = Object.keys(get().connections).find(
+        (sessionId) => get().connections[sessionId]?.current.connectionId === cubby.connectionId,
+      );
+      if (!targetSessionId) {
+        const saved = get().savedConnections.find((c) => c.id === cubby.connectionId);
+        if (!saved) {
+          get().showToast(`Can't find "${cubby.name}"'s saved connection.`, "error");
+          return;
+        }
+        try {
+          await get().connectTo({ params: saved.params, name: saved.name, id: saved.id });
+        } catch (err) {
+          get().showToast(`Couldn't connect to "${saved.name}": ${errorMessage(err)}`, "error");
+          return;
+        }
+        targetSessionId = Object.keys(get().connections).find(
+          (sessionId) => get().connections[sessionId]?.current.connectionId === cubby.connectionId,
+        );
+        if (!targetSessionId) return;
+      }
+      if (get().activeConnectionId !== targetSessionId) {
+        get().switchConnection(targetSessionId);
+      }
+      set({ activeCubbyId: id, cubbiesOpen: false });
+
+      for (const entry of cubby.entries) {
+        switch (entry.kind) {
+          case "savedQuery": {
+            const query = get().savedQueries.find((q) => q.id === entry.savedQueryId);
+            if (query) await get().openSavedQuery(query);
+            break;
+          }
+          case "table":
+            await get().openSelectTop(entry.schema, entry.table);
+            break;
+          case "structure":
+            await get().openTableStructure(entry.schema, entry.table);
+            break;
+          case "function":
+            await get().openFunctionDefinition(entry.schema, entry.oid ?? 0, entry.name);
+            break;
+          case "sequence":
+            await get().openSequenceDetails(entry.schema, entry.name);
+            break;
+          case "chat":
+            await get().openAiChat(entry.chatId);
+            break;
+        }
+      }
+    },
+
+    closeCubby() {
+      set({ activeCubbyId: null });
+    },
+
+    async addEntryToCubby(cubbyId, entry) {
+      const cubby = get().cubbies.find((c) => c.id === cubbyId);
+      if (!cubby) return;
+      if (cubby.entries.some((e) => cubbyEntryEquals(e, entry))) {
+        get().showToast(`Already in "${cubby.name}".`);
+        return;
+      }
+      try {
+        const saved = await api.saveCubby({ ...cubby, entries: [...cubby.entries, entry] });
+        set((s) => ({ cubbies: s.cubbies.map((c) => (c.id === cubbyId ? saved : c)) }));
+        get().showToast(`Added to "${cubby.name}".`);
+      } catch (err) {
+        console.error("failed to add to cubby:", errorMessage(err));
+      }
+    },
+
+    async removeEntryFromCubby(cubbyId, entry) {
+      const cubby = get().cubbies.find((c) => c.id === cubbyId);
+      if (!cubby) return;
+      try {
+        const saved = await api.saveCubby({
+          ...cubby,
+          entries: cubby.entries.filter((e) => !cubbyEntryEquals(e, entry)),
+        });
+        set((s) => ({ cubbies: s.cubbies.map((c) => (c.id === cubbyId ? saved : c)) }));
+      } catch (err) {
+        console.error("failed to remove from cubby:", errorMessage(err));
+      }
+    },
+
+    async removeTableFromCubby(cubbyId, schema, table) {
+      const cubby = get().cubbies.find((c) => c.id === cubbyId);
+      if (!cubby) return;
+      const entries = cubby.entries.filter(
+        (e) =>
+          !(
+            (e.kind === "table" || e.kind === "structure") &&
+            e.schema === schema &&
+            e.table === table
+          ),
+      );
+      if (entries.length === cubby.entries.length) return;
+      try {
+        const saved = await api.saveCubby({ ...cubby, entries });
+        set((s) => ({ cubbies: s.cubbies.map((c) => (c.id === cubbyId ? saved : c)) }));
+      } catch (err) {
+        console.error("failed to remove from cubby:", errorMessage(err));
+      }
+    },
+
+    async updateCubbyNotes(id, notes) {
+      const cubby = get().cubbies.find((c) => c.id === id);
+      if (!cubby || cubby.notes === notes) return;
+      try {
+        const saved = await api.saveCubby({ ...cubby, notes });
+        set((s) => ({ cubbies: s.cubbies.map((c) => (c.id === id ? saved : c)) }));
+      } catch (err) {
+        console.error("failed to save cubby notes:", errorMessage(err));
+      }
     },
 
     setTheme(theme) {
@@ -4047,6 +4365,7 @@ const EMPTY_TABS: QueryTab[] = [];
 const EMPTY_SCHEMA: SchemaNode[] = [];
 const EMPTY_AI_MESSAGES: AiMessage[] = [];
 const EMPTY_AI_CHATS: AiChatSummary[] = [];
+const EMPTY_CUBBIES: Cubby[] = [];
 
 /** The active connection's open tabs. Empty when nothing is connected. */
 export function useActiveTabs(): QueryTab[] {
@@ -4122,6 +4441,37 @@ export function useActiveConnectionCanSaveChats(): boolean {
       ? Boolean(s.connections[s.activeConnectionId]?.current.connectionId)
       : false,
   );
+}
+
+/** The currently open cubby (across any connection — `openCubby` already
+ *  guarantees it belongs to the active one, and `switchConnection` clears it
+ *  otherwise), or `null` if none is open. */
+export function useActiveCubby(): Cubby | null {
+  return useStore((s) =>
+    s.activeCubbyId ? s.cubbies.find((c) => c.id === s.activeCubbyId) ?? null : null,
+  );
+}
+
+/** The active connection's own cubbies (a cubby belongs to exactly one saved
+ *  connection) — for the Cubbies panel's list. Empty for an ad-hoc
+ *  connection, which has no stable id for a cubby to be scoped to.
+ *
+ *  The filter itself is a `useMemo`, not part of the Zustand selector — see
+ *  `useActiveSchemaLoading`'s comment above: a selector that allocates a new
+ *  array on every call defeats `useSyncExternalStore`'s reference-equality
+ *  snapshot check and re-renders on every unrelated store update. `cubbies`
+ *  and `savedConnectionId` below are each selected directly (stable unless
+ *  they actually change), so only the derived list needs memoizing. */
+export function useConnectionCubbies(): Cubby[] {
+  const cubbies = useStore((s) => s.cubbies);
+  const savedConnectionId = useStore((s) =>
+    s.activeConnectionId ? s.connections[s.activeConnectionId]?.current.connectionId ?? null : null,
+  );
+  return useMemo(() => {
+    if (!savedConnectionId) return EMPTY_CUBBIES;
+    const list = cubbies.filter((c) => c.connectionId === savedConnectionId);
+    return list.length > 0 ? list : EMPTY_CUBBIES;
+  }, [cubbies, savedConnectionId]);
 }
 
 /** The active connection's schema-fetch loading/error state, for the tree's

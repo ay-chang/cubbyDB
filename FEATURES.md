@@ -199,6 +199,44 @@ code comments or AGENTS.md's architecture section.
   delete. Clicking one opens it in a new tab (or focuses its already-open
   tab)
 
+## Cubbies
+
+- A cubby is a named collection of *references* — tables, saved queries, AI
+  chats, and structure/function/sequence views — for one task ("Q3 churn
+  investigation"), so opening it brings everything you were using back at
+  once. It stores pointers only, never copies: editing a saved query's SQL or
+  a table's data is instantly reflected everywhere the cubby references it,
+  and deleting a cubby never deletes what it pointed to
+- Membership is non-exclusive — the same table can belong to any number of
+  cubbies. Scoped to one saved connection (a cubby needs the connection
+  saved first), since most of what it holds only makes sense against a
+  specific database
+- The **Cubby** button (top bar, next to Ask AI) opens the Cubbies panel —
+  create, rename, and delete cubbies for the active connection. Each row
+  expands (▶) in place to edit its free-text **notes** and see/remove its
+  entries, without leaving the panel or touching any open tab
+- Clicking a cubby's name **opens** it: connects to its database (reusing an
+  already-open connection if there is one, otherwise connecting fresh from
+  the saved record) and restores a tab for every entry — the same open/focus
+  logic each entry kind already uses elsewhere (Select top 100, saved query,
+  AI chat, structure/function/sequence view). The opened cubby becomes the
+  **active** cubby, shown as its name on the Cubby button, until closed or
+  until switching to a different connection un-pins it
+- **Add to cubby**, active only while a cubby is open: on a table's,
+  function's, or sequence's right-click menu in the schema tree, next to a
+  Saved Queries panel row (+), and on the current AI conversation once it has
+  a saved-chat id
+- The active cubby's tables are **pinned** above the regular list in the
+  schema tree sidebar — additive, not a replacement; the text filter above
+  still searches the whole schema regardless of what's pinned. A pinned row's
+  own "×" (on hover) removes it from the cubby directly, without opening the
+  Cubbies panel
+- The AI assistant gets the active cubby's context automatically: its tables
+  render in full column detail even on a large schema that would otherwise
+  abbreviate everything past 30 tables, and its notes are included as
+  "treat these as ground truth about what the data means" — the rest of the
+  database stays fully reachable via the assistant's own schema tools
+
 ## Results grid
 
 - Any query's result set: resizable columns, drag-to-reorder columns,

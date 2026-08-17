@@ -98,13 +98,23 @@ src/
 
 ## Design system
 
-Transcribed in `src/styles/tokens.css`. Light theme, hairline borders, a single
-indigo accent reserved for actions and active state. 4px base unit.
+Transcribed in `src/styles/tokens.css`. Hairline borders, 4px base unit, no
+shadows/bevels between panes. **Not a single fixed palette** — 8 full themes
+(2 light, 6 dark) and 20 accent-color presets are user-selectable and persist
+across launches; see FEATURES.md's Settings and Design/appearance sections for
+the current theme/accent list and naming — don't duplicate that list here, it
+will drift.
 
 - Fonts: **Geist** (UI), **Geist Mono** (code, values, labels)
-- Accent: `#5E6AD2` (indigo). Success `#1F9D57`, error `#E5484D`, amber `#B45309`
-- Surfaces: app bg `#F7F8F8`, surface `#FFFFFF`, raised `#FCFCFD`
-- Borders are 1px hairlines (`#E8EAED`), never shadows/bevels between panes
+- Accent is a token set (`--accent`, `--accent-hover`, `--accent-tint`,
+  `--accent-tint-text`, `--accent-glow*`), not one hardcoded color — each of
+  the 20 presets supplies one tuned variant per light/dark family
+  (`ACCENT_PALETTES` in `store.ts`). Default is **Green**; existing users keep
+  whatever they'd already picked (or the old indigo default) — see
+  `DEFAULT_ACCENT_COLOR`'s comment
+- The light theme's values (representative, not universal — each of the 8
+  themes tunes its own): app bg `#F7F8F8`, surface `#FFFFFF`, raised `#FCFCFD`,
+  border `#E8EAED`, success `#1F9D57`, error `#E5484D`, amber `#B45309`
 - Radius: 6–7px controls, 12px cards. Transition 120ms ease.
 - Editor syntax: keywords accent, strings green, numbers amber, comments gray
 

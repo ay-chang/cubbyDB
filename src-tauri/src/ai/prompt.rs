@@ -12,6 +12,8 @@
 //! *date*, which is stable for 24 hours — far longer than the cache's own
 //! lifetime — so it costs nothing.
 
+use std::collections::HashSet;
+
 use crate::db::SchemaNode;
 
 /// Above this many tables, the schema is rendered as a compact index and the
@@ -21,7 +23,9 @@ use crate::db::SchemaNode;
 /// small schema costs a few hundred tokens once (and then caches), whereas
 /// making the model ask about every table it touches costs a request each
 /// time. Above it, the full dump is both expensive and mostly irrelevant to
-/// any single question.
+/// any single question. A table named by the active cubby (see
+/// `PromptContext::cubby_tables`) is always rendered in full regardless of
+/// this threshold — the user already told us it matters.
 const COMPACT_SCHEMA_TABLE_THRESHOLD: usize = 30;
 
 /// How many column names a compact-mode table line lists before eliding.
@@ -38,6 +42,21 @@ pub struct PromptContext<'a> {
     /// the user's actual server doesn't have.
     pub server_version: &'a str,
     pub connection_name: &'a str,
+    /// The active cubby, if the user has one open — a named, curated subset
+    /// of tables plus free-text notes. `None` when no cubby is open;
+    /// identical to today's behavior in that case.
+    pub cubby: Option<CubbyContext<'a>>,
+}
+
+/// The active cubby's contribution to the prompt: which tables it names
+/// (rendered in full detail regardless of `COMPACT_SCHEMA_TABLE_THRESHOLD`)
+/// and its notes (human-written context no amount of schema introspection
+/// can recover — see `describe_table`'s doc comment on table/column
+/// comments for the same idea applied to the catalog instead).
+pub struct CubbyContext<'a> {
+    pub name: &'a str,
+    pub tables: &'a [(String, String)],
+    pub notes: &'a str,
 }
 
 pub fn build_system_prompt(ctx: &PromptContext) -> String {
@@ -155,26 +174,61 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
          or a prose list. A short sentence before it is enough.\n\n",
     );
 
+    // --- Cubby ---------------------------------------------------------------
+    // The user's own curation of what matters for this task, plus whatever
+    // they've written down about it. Placed right before the schema so both
+    // sections of database context sit together.
+    if let Some(cubby) = &ctx.cubby {
+        out.push_str(&format!(
+            "## Cubby: {}\n\
+             The user is working inside this cubby — a named subset of the database for a \
+             specific task. Its tables are rendered in full detail below regardless of the \
+             schema's overall size, and the rest of the database is still fully reachable via \
+             `search_schema` and `describe_table` if the question needs it.\n",
+            cubby.name
+        ));
+        if !cubby.notes.trim().is_empty() {
+            out.push_str(&format!(
+                "\nNotes the user wrote about this cubby — treat these as ground truth about \
+                 what the data means:\n{}\n",
+                cubby.notes.trim()
+            ));
+        }
+        out.push('\n');
+    }
+
     // --- Schema ------------------------------------------------------------
     out.push_str("## Database\n");
-    render_schema(&mut out, ctx.schema);
+    let cubby_tables: &[(String, String)] = ctx.cubby.as_ref().map_or(&[], |c| c.tables);
+    render_schema(&mut out, ctx.schema, cubby_tables);
 
     out
 }
 
 /// Renders the schema at whichever level of detail fits its size. See
-/// `COMPACT_SCHEMA_TABLE_THRESHOLD`.
-fn render_schema(out: &mut String, schema: &[SchemaNode]) {
+/// `COMPACT_SCHEMA_TABLE_THRESHOLD`. `cubby_tables` are always rendered in
+/// full even when the schema as a whole is over threshold — the user already
+/// told us these specific tables matter for the task at hand.
+fn render_schema(out: &mut String, schema: &[SchemaNode], cubby_tables: &[(String, String)]) {
     let table_count: usize = schema.iter().map(|s| s.tables.len()).sum();
+    let pinned: HashSet<(&str, &str)> = cubby_tables
+        .iter()
+        .map(|(s, t)| (s.as_str(), t.as_str()))
+        .collect();
 
     if table_count > COMPACT_SCHEMA_TABLE_THRESHOLD {
         out.push_str(&format!(
             "{table_count} tables. Abbreviated below — call `describe_table` for full detail on \
-             any one of them.\n\n"
+             any one of them. Tables named by the active cubby above are rendered in full here \
+             already.\n\n"
         ));
         for s in schema {
             for t in &s.tables {
-                render_table_compact(out, &s.name, t);
+                if pinned.contains(&(s.name.as_str(), t.name.as_str())) {
+                    render_table_full(out, &s.name, t);
+                } else {
+                    render_table_compact(out, &s.name, t);
+                }
             }
         }
     } else {
