@@ -214,24 +214,29 @@ code comments or AGENTS.md's architecture section.
   specific database
 - The **Cubby** button (top bar, next to Ask AI) opens the Cubbies panel — a
   resizable drawer (drag its left edge, same as the AI panel) listing every
-  cubby for the active connection, with **New** to create one. Each row
-  expands (▶) in place, showing its title and its entry list with per-entry
-  remove — without touching any open tab. Expanding doesn't open it; an
-  explicit **Open** button at the bottom of the expanded card does that (or
-  **Close**, if it's the active cubby)
-- **Open** connects to the cubby's database (reusing an already-open
+  cubby for the active connection as one compact row each (name, entry
+  count, last-updated, inline rename and delete), with **New** to create one
+- **Clicking a row opens that cubby** — no expanding first; clicking the
+  active one again closes it (unpins, without closing any tabs). The row's
+  ▶ chevron is separate and non-committal: it expands the entry list in
+  place so entries can be reviewed or removed without opening anything
+- Opening connects to the cubby's database (reusing an already-open
   connection if there is one, otherwise connecting fresh from the saved
   record) and restores a tab for every entry — the same open/focus logic
   each entry kind already uses elsewhere (Select top 100, saved query, AI
   chat, structure/function/sequence view). The opened cubby becomes the
-  **active** cubby, shown as its name on the Cubby button, until closed or
-  until switching to a different connection un-pins it
-- Two more ways to open a cubby: the **Cubbies** scope in the Cmd/Ctrl+K
-  palette (its own tab, and the second group shown — right after recent
-  database objects — in the default All view), and a switcher pinned to the
-  bottom of the schema tree sidebar showing the active cubby's name, which
-  opens a list of this connection's cubbies (checkmark on the active one)
-  plus **Close** to unpin
+  **active** cubby, shown as its name on the Cubby button and marked
+  "pinned" in the list, until closed or until switching to a different
+  connection un-pins it
+- **Close other tabs when opening a cubby** (Settings → General) chooses
+  between the two ways that can go: on, the cubby opens onto a clean slate
+  and its entries become the only open tabs; off (the default), its tabs are
+  added alongside whatever was already open. Clearing asks once up front if
+  any open tab has unsaved cell edits — answering no leaves everything as it
+  was rather than opening the cubby half-way
+- Cubbies are also reachable from the **Cubbies** scope in the Cmd/Ctrl+K
+  palette — its own tab, and the second group shown (right after recent
+  database objects) in the default All view
 - **Add to cubby**, active only while a cubby is open: on a table's,
   function's, or sequence's right-click menu in the schema tree; by
   right-clicking any **tab** in the tab strip; next to a Saved Queries panel
@@ -504,9 +509,9 @@ Cmd/Ctrl+W closes the dialog rather than the database tab behind it.
   it. Arrow keys and Enter work directly from the search field, while Escape
   clears the current search
 
-- **General**: restore tabs on launch, starter SQL template, auto-refresh
-  schema on connect, query-history display limit, CSV export delimiter,
-  row-copy delimiter
+- **General**: restore tabs on launch, close other tabs when opening a cubby,
+  starter SQL template, auto-refresh schema on connect, query-history display
+  limit, CSV export delimiter, row-copy delimiter
 - **Appearance → Interface**: theme (8 presets — 2 light: Light, Paper; 6
   dark: Dark, Midnight, Charcoal, Slate, and two lifted from popular editor
   themes, One Dark and Dracula), accent color (20 presets — Green, Indigo,

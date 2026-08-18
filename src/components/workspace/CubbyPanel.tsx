@@ -3,9 +3,8 @@ import { useEffect, useState } from "react";
 import { useActiveCubby, useConnectionCubbies, useStore } from "../../state/store";
 import type { Cubby, CubbyEntry } from "../../types";
 
-function formatTime(ms: number): string {
-  const d = new Date(ms);
-  return d.toLocaleString(undefined, {
+function formatFull(ms: number): string {
+  return new Date(ms).toLocaleString(undefined, {
     month: "short",
     day: "numeric",
     hour: "2-digit",
@@ -13,12 +12,11 @@ function formatTime(ms: number): string {
   });
 }
 
-/** A short, human label for one entry — used by both the list preview and
- *  the expanded detail view. Saved-query names are looked up live so a
- *  rename elsewhere is reflected here without the cubby itself changing;
- *  everything else is self-describing from the reference alone. Chat
- *  entries don't resolve a title (the active connection's chat list isn't
- *  always loaded) — "AI chat" plus its open action is enough to use it. */
+/** A short, human label for one entry. Saved-query names are looked up live
+ *  so a rename elsewhere is reflected here without the cubby itself
+ *  changing; everything else is self-describing from the reference alone.
+ *  Chat entries don't resolve a title (the active connection's chat list
+ *  isn't always loaded) — "AI chat" is enough to recognize it. */
 function entryLabel(entry: CubbyEntry, savedQueryName: (id: string) => string | null): string {
   switch (entry.kind) {
     case "savedQuery":
@@ -45,10 +43,11 @@ const ENTRY_KIND_LABEL: Record<CubbyEntry["kind"], string> = {
   chat: "chat",
 };
 
-/** Slide-in panel listing this connection's cubbies. Click a name to open it
- *  (restores every entry's tab and pins its tables for the schema tree and
- *  AI); the chevron expands a row in place to review and prune its entries
- *  without touching the workspace. Same drawer treatment as
+/** Slide-in panel listing this connection's cubbies, one compact row each.
+ *  Clicking a row opens that cubby straight away (restoring every entry's
+ *  tab and pinning its tables for the schema tree and AI), or unpins it if
+ *  it's already the active one — the chevron is a separate, non-committal
+ *  way to peek at and prune its entries. Same drawer treatment as
  *  History/Saved Queries/AI. */
 export function CubbyPanel() {
   const cubbies = useConnectionCubbies();
@@ -57,6 +56,8 @@ export function CubbyPanel() {
   const createCubby = useStore((s) => s.createCubby);
   const renameCubby = useStore((s) => s.renameCubby);
   const deleteCubbyById = useStore((s) => s.deleteCubbyById);
+  const openCubby = useStore((s) => s.openCubby);
+  const closeCubby = useStore((s) => s.closeCubby);
 
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -64,9 +65,8 @@ export function CubbyPanel() {
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
 
-  // A freshly-opened cubby (e.g. from "Add to cubby" elsewhere, or just
-  // created) is the one thing worth auto-expanding — everything else stays
-  // as the user left it.
+  // A just-created cubby is worth expanding once so its (empty) entry list
+  // explains what to do next; everything else stays as the user left it.
   useEffect(() => {
     if (activeCubby) setExpandedId(activeCubby.id);
     // Only the id matters — re-running whenever the cubby record changes
@@ -104,7 +104,7 @@ export function CubbyPanel() {
           </button>
         </div>
       </div>
-      <div className="saved-queries__list">
+      <div className="cubby-panel__list">
         {creating && (
           <div className="cubby-panel__new">
             <input
@@ -134,26 +134,27 @@ export function CubbyPanel() {
         {cubbies.map((cubby) => {
           const isActive = activeCubby?.id === cubby.id;
           const isExpanded = expandedId === cubby.id;
+          const count = cubby.entries.length;
           return (
             <div
               key={cubby.id}
-              className={
-                "saved-queries__item cubby-panel__item" +
-                (isActive ? " cubby-panel__item--active" : "")
-              }
+              className={"cubby-panel__item" + (isActive ? " cubby-panel__item--active" : "")}
             >
               <div className="cubby-panel__row">
                 <span
                   className="cubby-panel__chevron"
-                  onClick={() => setExpandedId(isExpanded ? null : cubby.id)}
-                  title={isExpanded ? "Collapse" : "Show entries"}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setExpandedId(isExpanded ? null : cubby.id);
+                  }}
+                  title={isExpanded ? "Hide entries" : "Show entries"}
                 >
                   {isExpanded ? "▼" : "▶"}
                 </span>
                 <div
-                  className="saved-queries__item-main"
-                  onClick={() => setExpandedId(isExpanded ? null : cubby.id)}
-                  title={isExpanded ? "Collapse" : "Show entries"}
+                  className="cubby-panel__main"
+                  onClick={() => (isActive ? closeCubby() : void openCubby(cubby.id))}
+                  title={`${count} ${count === 1 ? "entry" : "entries"} · updated ${formatFull(cubby.updatedAt)}`}
                 >
                   {renamingId === cubby.id ? (
                     <input
@@ -169,21 +170,30 @@ export function CubbyPanel() {
                       }}
                     />
                   ) : (
-                    <div className="saved-queries__item-head">
-                      <span className="saved-queries__name">
-                        {cubby.name}
-                        {isActive && <span className="cubby-panel__pin-tag">pinned</span>}
-                      </span>
-                      <span className="saved-queries__time mono">
-                        {formatTime(cubby.updatedAt)}
-                      </span>
-                    </div>
+                    <>
+                      <span className="cubby-panel__name">{cubby.name}</span>
+                      {isActive && <span className="cubby-panel__pin-tag">pinned</span>}
+                    </>
                   )}
-                  <span className="cubby-panel__count">
-                    {cubby.entries.length} {cubby.entries.length === 1 ? "entry" : "entries"}
-                  </span>
                 </div>
-                <div className="saved-queries__item-actions">
+                <button
+                  className={
+                    "cubby-panel__open" + (isActive ? " cubby-panel__open--active" : "")
+                  }
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (isActive) closeCubby();
+                    else void openCubby(cubby.id);
+                  }}
+                  title={
+                    isActive
+                      ? "Unpin this cubby — open tabs are left alone"
+                      : "Restore every entry's tab"
+                  }
+                >
+                  {isActive ? "Close" : "Open"}
+                </button>
+                <div className="cubby-panel__actions">
                   <span
                     className="saved-queries__rename"
                     onClick={(e) => {
@@ -206,7 +216,7 @@ export function CubbyPanel() {
                   </span>
                 </div>
               </div>
-              {isExpanded && <CubbyDetail cubby={cubby} isActive={isActive} />}
+              {isExpanded && <CubbyEntries cubby={cubby} />}
             </div>
           );
         })}
@@ -215,54 +225,35 @@ export function CubbyPanel() {
   );
 }
 
-function CubbyDetail({ cubby, isActive }: { cubby: Cubby; isActive: boolean }) {
+function CubbyEntries({ cubby }: { cubby: Cubby }) {
   const savedQueries = useStore((s) => s.savedQueries);
-  const openCubby = useStore((s) => s.openCubby);
-  const closeCubby = useStore((s) => s.closeCubby);
   const removeEntryFromCubby = useStore((s) => s.removeEntryFromCubby);
 
   const savedQueryName = (id: string) => savedQueries.find((q) => q.id === id)?.name ?? null;
 
+  if (cubby.entries.length === 0) {
+    return (
+      <p className="cubby-panel__empty">
+        Nothing yet — use "Add to cubby" on a table, saved query, or AI chat.
+      </p>
+    );
+  }
+
   return (
-    <div className="cubby-panel__detail">
-      <div className="cubby-panel__detail-title">{cubby.name}</div>
-
-      <span className="cubby-panel__section-label">Entries</span>
-      {cubby.entries.length === 0 ? (
-        <p className="saved-queries__empty">
-          Nothing yet — use "Add to cubby" on a table, saved query, or AI chat.
-        </p>
-      ) : (
-        <div className="cubby-panel__entries">
-          {cubby.entries.map((entry, i) => (
-            <div className="cubby-panel__entry" key={i}>
-              <span className="cubby-panel__entry-kind mono">{ENTRY_KIND_LABEL[entry.kind]}</span>
-              <span className="cubby-panel__entry-label">{entryLabel(entry, savedQueryName)}</span>
-              <span
-                className="saved-queries__delete"
-                onClick={() => void removeEntryFromCubby(cubby.id, entry)}
-                title="Remove from cubby"
-              >
-                ×
-              </span>
-            </div>
-          ))}
+    <div className="cubby-panel__entries">
+      {cubby.entries.map((entry, i) => (
+        <div className="cubby-panel__entry" key={i}>
+          <span className="cubby-panel__entry-kind mono">{ENTRY_KIND_LABEL[entry.kind]}</span>
+          <span className="cubby-panel__entry-label">{entryLabel(entry, savedQueryName)}</span>
+          <span
+            className="saved-queries__delete"
+            onClick={() => void removeEntryFromCubby(cubby.id, entry)}
+            title="Remove from cubby"
+          >
+            ×
+          </span>
         </div>
-      )}
-
-      {isActive ? (
-        <button className="btn btn--primary" onClick={closeCubby} title="Unpin without closing tabs">
-          Close
-        </button>
-      ) : (
-        <button
-          className="btn btn--primary"
-          onClick={() => void openCubby(cubby.id)}
-          title="Restores every entry's tab"
-        >
-          Open
-        </button>
-      )}
+      ))}
     </div>
   );
 }

@@ -453,64 +453,6 @@
   padding-left: 20px;
   font-size: 11.5px;
 }
-/* The cubby switcher, pinned under the tree. Styled as a status-bar row
-   rather than a form control: the sidebar is a list of rows, and a bordered
-   <select> dropped into it read as a foreign widget. */
-.tree__footer {
-  flex: none;
-  width: 100%;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 0 10px;
-  border-top: 1px solid var(--border);
-  background: var(--surface-raised);
-  color: var(--text-muted);
-  font-size: 12px;
-  text-align: left;
-  transition: background var(--transition), color var(--transition);
-}
-.tree__footer:not(:disabled):hover {
-  background: var(--border-faint);
-  color: var(--text);
-}
-.tree__footer:disabled {
-  color: var(--text-ghost);
-  cursor: default;
-}
-.tree__footer--active {
-  color: var(--accent-tint-text);
-  background: var(--accent-tint);
-}
-.tree__footer-icon {
-  flex: none;
-  font-size: 11px;
-}
-.tree__footer-label {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.tree__footer-caret {
-  flex: none;
-  font-size: 10px;
-  opacity: 0.7;
-}
-/* Opens upward out of the footer, so it's anchored by `bottom` and needs to
-   stay inside the viewport the same way the downward menus do. */
-.context-menu--up {
-  max-height: 60vh;
-}
-/* A fixed-width gutter keeps every cubby name left-aligned whether or not it
-   carries the active checkmark. Inline-block rather than flex so it doesn't
-   change `.context-menu__item`'s layout for every other menu that uses it. */
-.tree__cubby-check {
-  display: inline-block;
-  width: 12px;
-}
 /* The schema prefix on a pinned row — muted, since the table name is what's
    being scanned for. Mirrors the command palette's own path treatment. */
 .tree__path {
@@ -546,6 +488,19 @@
 }
 .tree__row--group .tree__icon {
   color: var(--text-faint);
+}
+/* The pinned cubby's header. Structurally a group, but deliberately *not*
+   `--group`: that style uppercases and shrinks its label, which is right for
+   fixed section labels (TABLES, SEQUENCES) and wrong for a user-authored
+   cubby name. Reads at normal case and weight, tinted so it's identifiable
+   as the active cubby rather than another schema. */
+.tree__row--cubby {
+  font-weight: 500;
+  color: var(--accent-tint-text);
+}
+.tree__row--cubby .tree__chevron {
+  color: var(--accent-tint-text);
+  opacity: 0.75;
 }
 .tree__row--selected,
 .tree__row--selected:hover {
@@ -2397,26 +2352,46 @@
 .cubby-panel__new {
   padding: 2px 4px 6px;
 }
-/* `.saved-queries__item` (the shared row wrapper) is `display: flex` with no
-   explicit direction, i.e. row — fine for a single-line saved-query row, but
-   a cubby row can grow a `.cubby-panel__detail` block below it, so the
-   wrapper needs to stack them in a column instead of squeezing both onto one
-   line. */
+.cubby-panel__list {
+  flex: 1;
+  overflow: auto;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+/* One cubby: a single compact row, plus its entry list when expanded — so
+   the wrapper stacks vertically while the row itself stays on one line. */
 .cubby-panel__item {
+  display: flex;
   flex-direction: column;
   align-items: stretch;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  transition: background var(--transition), border-color var(--transition);
+}
+.cubby-panel__item:hover {
+  background: var(--surface-raised);
+  border-color: var(--border);
+}
+/* The active cubby keeps its accent fill under hover too — letting the plain
+   hover style win would paint "pinned" gray exactly when pointed at, which
+   reads as the reverse of what it means. */
+.cubby-panel__item--active,
+.cubby-panel__item--active:hover {
+  background: var(--accent-tint);
+  border-color: var(--accent);
 }
 .cubby-panel__row {
   display: flex;
-  align-items: flex-start;
-  gap: 4px;
-  width: 100%;
-  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 6px 0 2px;
 }
 .cubby-panel__chevron {
   flex: none;
-  width: 16px;
-  padding-top: 10px;
+  width: 14px;
   font-size: 9px;
   text-align: center;
   color: var(--text-faint);
@@ -2425,77 +2400,96 @@
 .cubby-panel__chevron:hover {
   color: var(--text);
 }
-.cubby-panel__item--active {
-  background: var(--accent-tint);
-  border-color: var(--accent);
+/* The row's open/close target — everything but the chevron and the row's own
+   icon buttons. */
+.cubby-panel__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
 }
-/* `.saved-queries__item:hover` (two classes, specificity 0,2,0) would
-   otherwise win over `.cubby-panel__item--active` alone (0,1,0) and paint a
-   pinned row gray the moment the mouse enters it — the exact reverse of what
-   "pinned" should look like. Three classes beats that. */
-.saved-queries__item.cubby-panel__item--active:hover {
-  background: var(--accent-tint);
-  border-color: var(--accent);
+.cubby-panel__name {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .cubby-panel__pin-tag {
   flex: none;
-  font-size: 9.5px;
+  font-size: 9px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--accent-tint-text);
-  background: var(--accent-tint);
+  border: 1px solid var(--accent);
   border-radius: 999px;
-  padding: 1px 6px;
+  padding: 0 5px;
 }
-.cubby-panel__count {
+/* The row's primary action. Always visible (unlike the hover-revealed
+   rename/delete icons) since it's the whole point of the row — the entry
+   count and last-updated it replaced moved into the row's tooltip. */
+.cubby-panel__open {
+  flex: none;
+  height: 21px;
+  padding: 0 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-muted);
   font-size: 11px;
-  color: var(--text-faint);
+  transition: background var(--transition), border-color var(--transition),
+    color var(--transition);
 }
-.cubby-panel__detail {
-  padding: 4px 10px 12px 30px;
+.cubby-panel__open:hover {
+  border-color: var(--accent);
+  color: var(--accent-tint-text);
+}
+.cubby-panel__open--active {
+  border-color: var(--accent);
+  color: var(--accent-tint-text);
+}
+.cubby-panel__actions {
+  flex: none;
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  align-items: center;
+  gap: 5px;
 }
-.cubby-panel__detail-title {
-  font-size: 13.5px;
-  font-weight: 600;
-  color: var(--text);
+.cubby-panel__item:hover .saved-queries__rename,
+.cubby-panel__item:hover .saved-queries__delete {
+  opacity: 1;
 }
-.cubby-panel__detail .btn--primary {
-  margin-top: 6px;
-  justify-content: center;
-}
-.cubby-panel__section-label {
-  margin-top: 6px;
-  font-size: 10.5px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
+.cubby-panel__empty {
+  padding: 2px 8px 8px 22px;
+  font-size: 11.5px;
+  line-height: 1.45;
   color: var(--text-faint);
 }
 .cubby-panel__entries {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 1px;
+  padding: 0 6px 6px 22px;
 }
 .cubby-panel__entry {
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 4px 2px;
+  padding: 3px 4px;
   border-radius: 5px;
 }
 .cubby-panel__entry:hover {
-  background: var(--surface-raised);
+  background: var(--border-faint);
 }
 .cubby-panel__entry:hover .saved-queries__delete {
   opacity: 1;
 }
 .cubby-panel__entry-kind {
   flex: none;
-  font-size: 9.5px;
+  font-size: 9px;
   color: var(--text-faint);
   background: var(--border-faint);
   border-radius: 4px;
@@ -2504,7 +2498,7 @@
 .cubby-panel__entry-label {
   flex: 1;
   min-width: 0;
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;

@@ -308,6 +308,8 @@ export function SettingsDialog() {
 function GeneralSection() {
   const restoreTabsOnLaunch = useStore((s) => s.restoreTabsOnLaunch);
   const setRestoreTabsOnLaunch = useStore((s) => s.setRestoreTabsOnLaunch);
+  const closeTabsOnCubbyOpen = useStore((s) => s.closeTabsOnCubbyOpen);
+  const setCloseTabsOnCubbyOpen = useStore((s) => s.setCloseTabsOnCubbyOpen);
   const starterSql = useStore((s) => s.starterSql);
   const setStarterSql = useStore((s) => s.setStarterSql);
   const autoRefreshSchema = useStore((s) => s.autoRefreshSchema);
@@ -336,6 +338,24 @@ function GeneralSection() {
         <Toggle
           on={restoreTabsOnLaunch}
           onToggle={() => setRestoreTabsOnLaunch(!restoreTabsOnLaunch)}
+        />
+      </div>
+
+      <div
+        className="settings-field settings-field--spaced settings-toggle-row"
+        data-setting-id="general.cubby-open-mode"
+      >
+        <div>
+          <div className="settings-field__label">Close other tabs when opening a cubby</div>
+          <div className="settings-field__desc">
+            Open a cubby onto a clean slate — its own entries become the only
+            open tabs. Off, a cubby's tabs are added alongside whatever you
+            already had open.
+          </div>
+        </div>
+        <Toggle
+          on={closeTabsOnCubbyOpen}
+          onToggle={() => setCloseTabsOnCubbyOpen(!closeTabsOnCubbyOpen)}
         />
       </div>
 

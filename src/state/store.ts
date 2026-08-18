@@ -974,6 +974,10 @@ interface AppStore {
   compactTopBar: boolean;
   /** Whether previously open tabs are restored on launch. */
   restoreTabsOnLaunch: boolean;
+  /** Whether opening a cubby first closes the connection's other tabs, so it
+   *  opens onto a clean slate instead of adding to whatever was already
+   *  there. Off by default — additive is the less destructive default. */
+  closeTabsOnCubbyOpen: boolean;
   /** Placeholder SQL for new query tabs. */
   starterSql: string;
   /** Whether the schema tree refreshes automatically after connecting. */
@@ -1278,6 +1282,7 @@ interface AppStore {
   setEditorLineWrap: (enabled: boolean) => void;
   setCompactTopBar: (enabled: boolean) => void;
   setRestoreTabsOnLaunch: (enabled: boolean) => void;
+  setCloseTabsOnCubbyOpen: (enabled: boolean) => void;
   setStarterSql: (sql: string) => void;
   setAutoRefreshSchema: (enabled: boolean) => void;
   setHistoryLimit: (limit: number) => void;
@@ -1346,6 +1351,7 @@ const EDITOR_FONT_SIZE_KEY = "cubbydb:editorFontSize";
 const EDITOR_LINE_WRAP_KEY = "cubbydb:editorLineWrap";
 const COMPACT_TOP_BAR_KEY = "cubbydb:compactTopBar";
 const RESTORE_TABS_KEY = "cubbydb:restoreTabsOnLaunch";
+const CLOSE_TABS_ON_CUBBY_OPEN_KEY = "cubbydb:closeTabsOnCubbyOpen";
 const STARTER_SQL_KEY = "cubbydb:starterSql";
 const AUTO_REFRESH_SCHEMA_KEY = "cubbydb:autoRefreshSchema";
 const HISTORY_LIMIT_KEY = "cubbydb:historyLimit";
@@ -1748,6 +1754,25 @@ function loadRestoreTabsOnLaunch(): boolean {
     return localStorage.getItem(RESTORE_TABS_KEY) !== "false";
   } catch {
     return true;
+  }
+}
+
+/** Read the saved close-tabs-on-cubby-open preference. Defaults to *off*,
+ *  unlike most toggles here: it discards open tabs, so the additive
+ *  behavior is the safe default and clearing is opt-in. */
+function loadCloseTabsOnCubbyOpen(): boolean {
+  try {
+    return localStorage.getItem(CLOSE_TABS_ON_CUBBY_OPEN_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function saveCloseTabsOnCubbyOpen(enabled: boolean) {
+  try {
+    localStorage.setItem(CLOSE_TABS_ON_CUBBY_OPEN_KEY, String(enabled));
+  } catch {
+    // Storage unavailable — non-fatal.
   }
 }
 
@@ -2355,6 +2380,7 @@ export const useStore = create<AppStore>((set, get) => {
     editorLineWrap: loadEditorLineWrap(),
     compactTopBar: loadCompactTopBar(),
     restoreTabsOnLaunch: loadRestoreTabsOnLaunch(),
+    closeTabsOnCubbyOpen: loadCloseTabsOnCubbyOpen(),
     starterSql: loadStarterSql(),
     autoRefreshSchema: loadAutoRefreshSchema(),
     historyLimit: loadHistoryLimit(),
@@ -4121,7 +4147,38 @@ export const useStore = create<AppStore>((set, get) => {
       if (get().activeConnectionId !== targetSessionId) {
         get().switchConnection(targetSessionId);
       }
-      set({ activeCubbyId: id, cubbiesOpen: false });
+
+      // "Open onto a clean slate" (Settings → General). Done as one bulk
+      // clear with a single up-front confirmation rather than a loop over
+      // `closeTab`, which would ask about each dirty tab separately. Runs
+      // before `activeCubbyId` is set so a cancel leaves everything — tabs
+      // and the previously active cubby — exactly as it was.
+      if (get().closeTabsOnCubbyOpen) {
+        const dirty = (get().connections[targetSessionId]?.tabs ?? []).filter(tabHasPendingEdits);
+        if (dirty.length > 0) {
+          const ok = await requestConfirm(
+            dirty.length === 1
+              ? `"${dirty[0].title}" has unsaved changes. Close it without saving?`
+              : `${dirty.length} tabs have unsaved changes. Close them without saving?`,
+            "Close",
+          );
+          if (!ok) return;
+        }
+        set((s) => ({
+          connections: patchSlot(s.connections, targetSessionId, {
+            tabs: [],
+            activeTabId: null,
+            navBack: [],
+            navForward: [],
+          }),
+        }));
+      }
+
+      // The panel deliberately stays open — opening a cubby is often one of
+      // several things done here in a row (open, prune an entry, switch to
+      // another), and closing it out from under the user after every open
+      // would make the panel feel like a one-shot dialog.
+      set({ activeCubbyId: id });
 
       for (const entry of cubby.entries) {
         switch (entry.kind) {
@@ -4291,6 +4348,11 @@ export const useStore = create<AppStore>((set, get) => {
     setRestoreTabsOnLaunch(enabled) {
       saveRestoreTabsOnLaunch(enabled);
       set({ restoreTabsOnLaunch: enabled });
+    },
+
+    setCloseTabsOnCubbyOpen(enabled) {
+      saveCloseTabsOnCubbyOpen(enabled);
+      set({ closeTabsOnCubbyOpen: enabled });
     },
 
     setStarterSql(sql) {

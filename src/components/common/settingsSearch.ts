@@ -41,6 +41,15 @@ export const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
     keywords: ["session", "startup", "reopen"],
   },
   {
+    id: "general.cubby-open-mode",
+    label: "Close other tabs when opening a cubby",
+    description: "Open a cubby onto a clean slate instead of alongside your open tabs.",
+    path: "General",
+    section: "general",
+    targetId: "general.cubby-open-mode",
+    keywords: ["cubby", "tabs", "clean slate", "replace"],
+  },
+  {
     id: "general.starter-sql",
     label: "Starter SQL",
     description: "Choose the SQL placed in new query tabs.",
