@@ -2452,15 +2452,26 @@
   border-color: var(--accent);
   color: var(--accent-tint-text);
 }
-.cubby-panel__actions {
-  flex: none;
+/* Rename/delete, shown only once a row is expanded. */
+.cubby-panel__manage {
   display: flex;
-  align-items: center;
-  gap: 5px;
+  gap: 4px;
+  padding: 2px 6px 6px 22px;
 }
-.cubby-panel__item:hover .saved-queries__rename,
-.cubby-panel__item:hover .saved-queries__delete {
-  opacity: 1;
+.cubby-panel__manage-btn {
+  height: 21px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  color: var(--text-faint);
+  transition: background var(--transition), color var(--transition);
+}
+.cubby-panel__manage-btn:hover {
+  background: var(--border-faint);
+  color: var(--text);
+}
+.cubby-panel__manage-btn--danger:hover {
+  color: var(--error);
 }
 .cubby-panel__empty {
   padding: 2px 8px 8px 22px;

@@ -1391,6 +1391,20 @@ function ResultsGrid({
     window.addEventListener("mouseup", onUp);
   };
 
+  /** Double-clicking a resize handle fits that column to its content — the
+   *  same measurement the initial layout uses, but on demand and with a
+   *  higher ceiling, so a column that was capped (or narrowed by hand, or
+   *  laid out before the font size changed) can be corrected in one gesture
+   *  instead of dragged. */
+  const autoFitColumn = (colIndex: number) => (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const next = [...widths];
+    next[colIndex] = measuredWidths(result, numericCols, MAX_AUTOFIT_WIDTH)[colIndex];
+    setWidths(next);
+    persistLayout(signature, result.columns, order, next);
+  };
+
   // Cycle a column's sort: default -> ascending -> descending -> default.
   // `table` tabs push this down to the backend as a real `ORDER BY` (see the
   // `sort` derivation above); everything else just re-sorts the already-
@@ -1934,7 +1948,8 @@ function ResultsGrid({
               <span
                 className="grid__resizer"
                 onMouseDown={startResize(colIndex)}
-                title="Drag to resize"
+                onDoubleClick={autoFitColumn(colIndex)}
+                title="Drag to resize · double-click to fit contents"
               />
             </div>
           ))}
@@ -2831,23 +2846,84 @@ function ErrorStrip({ tab }: { tab: QueryTab }) {
 
 const MIN_COL_WIDTH = 56;
 const MAX_INITIAL_WIDTH = 420;
-const CHAR_PX = 7.6; // approximate width of one mono/sans character
+/** Ceiling for an explicit double-click auto-fit. Higher than
+ *  `MAX_INITIAL_WIDTH`: opening a table shouldn't hand one wide column the
+ *  whole viewport, but asking a specific column to fit its content should be
+ *  taken more literally. */
+const MAX_AUTOFIT_WIDTH = 900;
 const CELL_PADDING = 26;
+/** Breathing room past an exact fit. Measured widths are exact, which on its
+ *  own leaves text touching the cell padding and one sub-pixel rounding away
+ *  from an ellipsis — a few px of slack is the difference between "fits" and
+ *  "looks like it fits". */
+const WIDTH_SLACK = 8;
 const WIDTH_SAMPLE_ROWS = 40;
+/** `.grid__head`'s own type — fixed chrome, unlike the data cells below it,
+ *  whose family *and* size are user settings. Keep in sync with the
+ *  `.grid__head` rule in workspace.css. */
+const HEAD_FONT_SIZE = 10.5;
+const HEAD_LETTER_SPACING = 0.05;
+/** Room for the sort caret that appears in a header cell once sorted. */
+const HEAD_EXTRA = 12;
 
-/** Estimate a sensible starting width per column from its header and content. */
-function initialWidths(result: QueryResult, numericCols: boolean[]): number[] {
+/** Lazily-created scratch context for `textWidth`. `undefined` = not tried
+ *  yet, `null` = tried and unavailable. */
+let measureCtx: CanvasRenderingContext2D | null | undefined;
+
+/** Width of `text` in `font` (a CSS `font` shorthand), in px. Falls back to a
+ *  crude per-character guess only if a 2D context can't be had at all. */
+function textWidth(text: string, font: string): number {
+  if (measureCtx === undefined) {
+    measureCtx = document.createElement("canvas").getContext("2d");
+  }
+  if (!measureCtx) return text.length * 7.6;
+  if (measureCtx.font !== font) measureCtx.font = font;
+  return measureCtx.measureText(text).width;
+}
+
+/** Resolve the fonts the grid actually renders with. The data cells follow
+ *  Settings > Appearance > Table for both family and size (10–18px), which
+ *  is exactly why this can't be a characters-times-a-constant estimate — one
+ *  constant is only ever right at one font size, and too narrow above it. */
+function gridFonts(): { value: string; head: string } {
+  const s = getComputedStyle(document.documentElement);
+  const size = s.getPropertyValue("--table-font-size").trim() || "12.5px";
+  const family = s.getPropertyValue("--table-font").trim() || "sans-serif";
+  const mono = s.getPropertyValue("--font-mono").trim() || "monospace";
+  return { value: `${size} ${family}`, head: `${HEAD_FONT_SIZE}px ${mono}` };
+}
+
+/** Measure a sensible width per column from its header and sampled content.
+ *  Header and values are measured separately because they render in
+ *  different faces at different sizes. */
+function measuredWidths(
+  result: QueryResult,
+  numericCols: boolean[],
+  maxWidth: number,
+): number[] {
+  const fonts = gridFonts();
   const sample = result.rows.slice(0, WIDTH_SAMPLE_ROWS);
   return result.columns.map((col, i) => {
-    let maxChars = col.name.length;
+    let maxPx =
+      textWidth(col.name, fonts.head) +
+      col.name.length * HEAD_LETTER_SPACING * HEAD_FONT_SIZE +
+      HEAD_EXTRA;
     for (const row of sample) {
       const v = row[i];
-      if (v != null && v.length > maxChars) maxChars = v.length;
+      if (v == null) continue;
+      const w = textWidth(v, fonts.value);
+      if (w > maxPx) maxPx = w;
     }
     const floor = numericCols[i] ? 72 : 96;
-    const estimate = Math.round(maxChars * CHAR_PX + CELL_PADDING);
-    return Math.max(floor, Math.min(MAX_INITIAL_WIDTH, estimate));
+    // `ceil`, not `round` — rounding a measured width down is exactly the
+    // half-pixel that turns a fitting cell into an ellipsized one.
+    return Math.max(floor, Math.min(maxWidth, Math.ceil(maxPx + CELL_PADDING + WIDTH_SLACK)));
   });
+}
+
+/** Starting width per column when a result first lands. */
+function initialWidths(result: QueryResult, numericCols: boolean[]): number[] {
+  return measuredWidths(result, numericCols, MAX_INITIAL_WIDTH);
 }
 
 // --- persisted column layout (order + widths), keyed by the column-name set ---

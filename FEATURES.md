@@ -214,12 +214,16 @@ code comments or AGENTS.md's architecture section.
   specific database
 - The **Cubby** button (top bar, next to Ask AI) opens the Cubbies panel — a
   resizable drawer (drag its left edge, same as the AI panel) listing every
-  cubby for the active connection as one compact row each (name, entry
-  count, last-updated, inline rename and delete), with **New** to create one
+  cubby for the active connection as one compact row each — name, and an
+  **Open** button (**Close** when it's the active one) at the right — with
+  **New** to create one. Entry count and last-updated are in the row's
+  tooltip; rename and delete live in the expanded half, so a stray click
+  can't land on Delete next to the button you meant
 - **Clicking a row opens that cubby** — no expanding first; clicking the
   active one again closes it (unpins, without closing any tabs). The row's
   ▶ chevron is separate and non-committal: it expands the entry list in
-  place so entries can be reviewed or removed without opening anything
+  place so entries can be reviewed or removed without opening anything.
+  Opening leaves the panel open rather than dismissing it
 - Opening connects to the cubby's database (reusing an already-open
   connection if there is one, otherwise connecting fresh from the saved
   record) and restores a tab for every entry — the same open/focus logic
@@ -259,6 +263,11 @@ code comments or AGENTS.md's architecture section.
 
 - Any query's result set: resizable columns, drag-to-reorder columns,
   per-column sort (click a header, cycles ascending → descending → none)
+- Starting column widths are measured from the header and the first rows'
+  real rendered text, in whichever font and size the grid is actually set to
+  (Settings → Appearance → Table) — so raising the table font size widens
+  the columns to match instead of clipping every value. **Double-click a
+  column's resize handle** to fit it to its contents at any time
 - Numeric columns are auto-detected and right-aligned in monospace
 - A column too narrow for its content truncates with a visible "…" (a value's
   full text is still one hover away via its tooltip) rather than just

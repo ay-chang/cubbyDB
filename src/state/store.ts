@@ -4180,30 +4180,146 @@ export const useStore = create<AppStore>((set, get) => {
       // would make the panel feel like a one-shot dialog.
       set({ activeCubbyId: id });
 
+      const slot = get().connections[targetSessionId];
+      if (!slot) return;
+
+      // Every tab is built up front and added in ONE state update, then a
+      // single tab is focused at the end. Delegating to
+      // `openSelectTop`/`openTableStructure`/... in a loop is the obvious
+      // implementation but each of those focuses the tab it just made, so
+      // opening an N-entry cubby visibly flipped the workspace through all N
+      // panes on the way in — mounting and discarding each results grid in
+      // turn. This does the same work with one re-render and one focus.
+      const created: QueryTab[] = [];
+      /** The tab the first entry resolves to — newly built or already open —
+       *  so "open" reliably lands somewhere in the cubby either way. */
+      let focusTabId: string | null = null;
+      let chatToOpen: string | null = null;
+
+      const find = (match: (t: QueryTab) => boolean) =>
+        slot.tabs.find(match) ?? created.find(match) ?? null;
+      const take = (existing: QueryTab | null, build: () => QueryTab) => {
+        const tab = existing ?? build();
+        if (!existing) created.push(tab);
+        focusTabId ??= tab.id;
+      };
+
       for (const entry of cubby.entries) {
         switch (entry.kind) {
           case "savedQuery": {
             const query = get().savedQueries.find((q) => q.id === entry.savedQueryId);
-            if (query) await get().openSavedQuery(query);
+            if (!query) break;
+            take(
+              find((t) => t.savedQueryId === query.id),
+              () =>
+                makeTab({
+                  kind: "query",
+                  title: query.name,
+                  sql: query.sql,
+                  savedQueryId: query.id,
+                }),
+            );
             break;
           }
-          case "table":
-            await get().openSelectTop(entry.schema, entry.table);
+          case "table": {
+            const existing = find(
+              (t) =>
+                t.kind === "table" &&
+                t.source?.schema === entry.schema &&
+                t.source?.table === entry.table,
+            );
+            const sql = existing
+              ? ""
+              : await tableSql(slot.sessionId, entry.schema, entry.table, null, 0);
+            take(existing, () =>
+              makeTab({
+                kind: "table",
+                title: entry.table,
+                sql,
+                source: { schema: entry.schema, table: entry.table },
+                page: 0,
+              }),
+            );
+            rememberDatabaseObject(targetSessionId, entry.schema, entry.table);
             break;
-          case "structure":
-            await get().openTableStructure(entry.schema, entry.table);
+          }
+          case "structure": {
+            take(
+              find(
+                (t) =>
+                  t.kind === "structure" &&
+                  t.source?.schema === entry.schema &&
+                  t.source?.table === entry.table,
+              ),
+              () =>
+                makeTab({
+                  kind: "structure",
+                  title: `${entry.table} (structure)`,
+                  source: { schema: entry.schema, table: entry.table },
+                }),
+            );
+            rememberDatabaseObject(targetSessionId, entry.schema, entry.table);
             break;
-          case "function":
-            await get().openFunctionDefinition(entry.schema, entry.oid ?? 0, entry.name);
+          }
+          case "function": {
+            take(
+              find(
+                (t) =>
+                  t.kind === "function" &&
+                  t.objectRef?.schema === entry.schema &&
+                  t.objectRef?.name === entry.name,
+              ),
+              () =>
+                makeTab({
+                  kind: "function",
+                  title: `${entry.name}()`,
+                  objectRef: {
+                    schema: entry.schema,
+                    name: entry.name,
+                    oid: entry.oid ?? undefined,
+                  },
+                }),
+            );
             break;
-          case "sequence":
-            await get().openSequenceDetails(entry.schema, entry.name);
+          }
+          case "sequence": {
+            take(
+              find(
+                (t) =>
+                  t.kind === "sequence" &&
+                  t.objectRef?.schema === entry.schema &&
+                  t.objectRef?.name === entry.name,
+              ),
+              () =>
+                makeTab({
+                  kind: "sequence",
+                  title: entry.name,
+                  objectRef: { schema: entry.schema, name: entry.name },
+                }),
+            );
             break;
+          }
           case "chat":
-            await get().openAiChat(entry.chatId);
+            chatToOpen = entry.chatId;
             break;
         }
       }
+
+      if (created.length > 0 || focusTabId) {
+        set((s) => ({
+          connections: patchSlot(s.connections, targetSessionId, (cur) => ({
+            tabs: created.length > 0 ? [...cur.tabs, ...created] : cur.tabs,
+            activeTabId: focusTabId ?? cur.activeTabId,
+          })),
+        }));
+      }
+
+      // Results load after the layout has settled, so rows filling in never
+      // moves which tab is on screen.
+      for (const tab of created) {
+        if (tab.kind === "table") await get().runTab(tab.id);
+      }
+      if (chatToOpen) await get().openAiChat(chatToOpen);
     },
 
     closeCubby() {

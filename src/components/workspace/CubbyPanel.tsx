@@ -193,30 +193,14 @@ export function CubbyPanel() {
                 >
                   {isActive ? "Close" : "Open"}
                 </button>
-                <div className="cubby-panel__actions">
-                  <span
-                    className="saved-queries__rename"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      startRename(cubby);
-                    }}
-                    title="Rename"
-                  >
-                    ✎
-                  </span>
-                  <span
-                    className="saved-queries__delete"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void deleteCubbyById(cubby.id);
-                    }}
-                    title="Delete"
-                  >
-                    ×
-                  </span>
-                </div>
               </div>
-              {isExpanded && <CubbyEntries cubby={cubby} />}
+              {isExpanded && (
+                <CubbyEntries
+                  cubby={cubby}
+                  onRename={() => startRename(cubby)}
+                  onDelete={() => void deleteCubbyById(cubby.id)}
+                />
+              )}
             </div>
           );
         })}
@@ -225,35 +209,59 @@ export function CubbyPanel() {
   );
 }
 
-function CubbyEntries({ cubby }: { cubby: Cubby }) {
+/** The expanded half of a cubby row: its entries, plus the rename/delete
+ *  actions. Those live here rather than on the row itself so the collapsed
+ *  row stays a clean name-and-Open pair, and so a destructive delete takes
+ *  a deliberate expand first instead of sitting one stray click from the
+ *  button you actually wanted. */
+function CubbyEntries({
+  cubby,
+  onRename,
+  onDelete,
+}: {
+  cubby: Cubby;
+  onRename: () => void;
+  onDelete: () => void;
+}) {
   const savedQueries = useStore((s) => s.savedQueries);
   const removeEntryFromCubby = useStore((s) => s.removeEntryFromCubby);
 
   const savedQueryName = (id: string) => savedQueries.find((q) => q.id === id)?.name ?? null;
 
-  if (cubby.entries.length === 0) {
-    return (
-      <p className="cubby-panel__empty">
-        Nothing yet — use "Add to cubby" on a table, saved query, or AI chat.
-      </p>
-    );
-  }
-
   return (
-    <div className="cubby-panel__entries">
-      {cubby.entries.map((entry, i) => (
-        <div className="cubby-panel__entry" key={i}>
-          <span className="cubby-panel__entry-kind mono">{ENTRY_KIND_LABEL[entry.kind]}</span>
-          <span className="cubby-panel__entry-label">{entryLabel(entry, savedQueryName)}</span>
-          <span
-            className="saved-queries__delete"
-            onClick={() => void removeEntryFromCubby(cubby.id, entry)}
-            title="Remove from cubby"
-          >
-            ×
-          </span>
+    <>
+      {cubby.entries.length === 0 ? (
+        <p className="cubby-panel__empty">
+          Nothing yet — use "Add to cubby" on a table, saved query, or AI chat.
+        </p>
+      ) : (
+        <div className="cubby-panel__entries">
+          {cubby.entries.map((entry, i) => (
+            <div className="cubby-panel__entry" key={i}>
+              <span className="cubby-panel__entry-kind mono">{ENTRY_KIND_LABEL[entry.kind]}</span>
+              <span className="cubby-panel__entry-label">{entryLabel(entry, savedQueryName)}</span>
+              <span
+                className="saved-queries__delete"
+                onClick={() => void removeEntryFromCubby(cubby.id, entry)}
+                title="Remove from cubby"
+              >
+                ×
+              </span>
+            </div>
+          ))}
         </div>
-      ))}
-    </div>
+      )}
+      <div className="cubby-panel__manage">
+        <button className="cubby-panel__manage-btn" onClick={onRename}>
+          Rename
+        </button>
+        <button
+          className="cubby-panel__manage-btn cubby-panel__manage-btn--danger"
+          onClick={onDelete}
+        >
+          Delete
+        </button>
+      </div>
+    </>
   );
 }
