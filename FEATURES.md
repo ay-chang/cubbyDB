@@ -474,6 +474,10 @@ code comments or AGENTS.md's architecture section.
   from the schema tree)
 - Each connection has its own independent set of tabs — switching connections
   switches the whole tab strip, not just what's shown
+- A newly connected database (or one being restored on launch with the
+  setting off, or with nothing saved to restore) starts with **no tabs
+  open** rather than a blank query tab — the main pane prompts to open a
+  table from the sidebar or search with Cmd/Ctrl+K instead
 - Cmd/Ctrl+T opens a new tab in the currently visible connection; Cmd/Ctrl+W
   closes the active one
 - Reopens the previously-open tabs of the one auto-restored connection on

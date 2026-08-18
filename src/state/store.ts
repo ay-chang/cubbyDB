@@ -2433,8 +2433,8 @@ export const useStore = create<AppStore>((set, get) => {
         // Restore the tabs that were open last time (without their stale
         // results), unless the user has opted out. Only this one
         // auto-restored connection gets its tabs restored — connections
-        // added manually during a session always start with one blank tab
-        // and don't persist across a restart.
+        // added manually during a session start empty (the workspace's
+        // empty-state prompt) and don't persist across a restart.
         const connectionId = get().activeConnectionId;
         if (connectionId && pendingRestore) {
           set((s) => ({
@@ -2489,10 +2489,15 @@ export const useStore = create<AppStore>((set, get) => {
         connection.id ?? null,
         options?.rememberAsLast ?? true,
       );
-      const tab = makeTab({ sql: get().starterSql });
       const savedRecord = connection.id
         ? get().savedConnections.find((c) => c.id === connection.id)
         : undefined;
+      // No seeded blank tab — a fresh connection lands on the empty-state
+      // prompt (open a table, or Cmd/Ctrl+K) instead of an untitled query
+      // tab nobody asked for. `initialize()` overwrites `tabs`/`activeTabId`
+      // right after this when restoring the auto-reconnected connection's
+      // saved tabs; every other connect leaves them empty until the user
+      // actually opens something.
       const slot: ConnectionSlot = {
         sessionId: info.sessionId,
         current: info,
@@ -2500,8 +2505,8 @@ export const useStore = create<AppStore>((set, get) => {
         schema: [],
         schemaLoading: false,
         schemaError: null,
-        tabs: [tab],
-        activeTabId: tab.id,
+        tabs: [],
+        activeTabId: null,
         navBack: [],
         navForward: [],
         aiMessages: [],

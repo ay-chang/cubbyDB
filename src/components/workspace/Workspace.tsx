@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
+  formatBinding,
   formatShortcutTitle,
   matchesKeybinding,
   TAB_JUMP_KEYBINDING_IDS,
@@ -42,6 +43,7 @@ export function Workspace() {
   const savedQueriesOpen = useStore((s) => s.savedQueriesOpen);
   const aiPanelOpen = useStore((s) => s.aiPanelOpen);
   const cubbiesOpen = useStore((s) => s.cubbiesOpen);
+  const toggleCommandPalette = useStore((s) => s.toggleCommandPalette);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null;
 
@@ -57,6 +59,9 @@ export function Workspace() {
   );
   const sidebarBinding = useKeybindingStore(
     (s) => s.bindings["workspace.toggleSidebar"],
+  );
+  const commandPaletteBinding = useKeybindingStore(
+    (s) => s.bindings["workspace.commandPalette"],
   );
   const { saveDialogOpen, openSaveDialog, closeSaveDialog } = useWorkspaceShortcuts(
     toggleSidebar,
@@ -166,7 +171,17 @@ export function Workspace() {
             </>
           ) : (
             <div className="workspace__empty">
-              <p>No open tabs.</p>
+              <p>
+                Open a table from the sidebar, or{" "}
+                <span
+                  className="workspace__empty-link"
+                  onClick={toggleCommandPalette}
+                  title="Open the command palette"
+                >
+                  press {commandPaletteBinding ? formatBinding(commandPaletteBinding) : "Cmd/Ctrl+K"}
+                </span>{" "}
+                to search tables, columns, and more.
+              </p>
             </div>
           )}
         </div>
