@@ -3,6 +3,8 @@
 //! constructed here or on the frontend (except the user's editor text).
 
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tauri::State;
@@ -887,21 +889,61 @@ pub async fn run_readonly_query(
     result
 }
 
-/// One AI turn: builds the schema-aware system prompt from the schema tree
-/// the frontend already has (no need to re-fetch it here), then runs
-/// the selected provider's tool-call loop, executing requested SQL read-only against
-/// this session's live connection (see `db::DbSession::run_read_only_query`)
-/// with the same reconnect-on-drop retry every other session-scoped command
-/// uses.
-#[tauri::command]
-pub async fn ai_chat(
-    state: State<'_, AppState>,
+/// Builds the tool-runner closure the provider loops call, for whichever AI
+/// entry point is running: the chat panel (`ai_chat`) or the filter bar
+/// (`ai_generate_filter`).
+///
+/// Session *lifecycle* lives here rather than in `ai::tools`: this closure
+/// owns the lock and the reconnect-on-drop retry every other session-scoped
+/// command uses, and hands the tools an already-known-good session.
+///
+/// The returned future is boxed because a closure cannot name an anonymous
+/// `async` block's type in its own return position — the alternative is
+/// duplicating the whole body at both call sites, which is how the
+/// reconnect retry would drift out of sync between them.
+fn tool_runner<'a>(
+    app_state: &'a AppState,
     session_id: String,
-    schema: Vec<SchemaNode>,
-    active_table: Option<ActiveTableRef>,
-    cubby: Option<CubbyPromptInfo>,
+    schema: &'a [SchemaNode],
+) -> impl Fn(
+    String,
+    serde_json::Value,
+) -> Pin<Box<dyn Future<Output = Result<crate::ai::tools::ToolOutcome, DbError>> + Send + 'a>>
+       + 'a {
+    move |name: String, input: serde_json::Value| {
+        let session_id = session_id.clone();
+        Box::pin(async move {
+            let mut active = app_state.active.lock().await;
+            {
+                let session = active.get(&session_id).ok_or_else(DbError::not_connected)?;
+                let ctx = crate::ai::tools::ToolContext::new(session.session.as_ref(), schema);
+                match crate::ai::tools::execute(&ctx, &name, &input).await {
+                    Err(e) if e.kind == DbErrorKind::Connection => { /* retry below */ }
+                    other => return other,
+                }
+            }
+            reconnect_in_place(&mut active, &session_id, app_state).await?;
+            let session = active.get(&session_id).ok_or_else(DbError::not_connected)?;
+            let ctx = crate::ai::tools::ToolContext::new(session.session.as_ref(), schema);
+            crate::ai::tools::execute(&ctx, &name, &input).await
+        })
+    }
+}
+
+/// Runs one turn against whichever provider is configured, with whatever
+/// system prompt the caller built. Everything provider-shaped — resolving the
+/// API key, the model, and the reasoning effort — is settled here so a new
+/// AI entry point only has to supply a prompt and a message.
+async fn run_provider_turn<F, Fut>(
+    state: &AppState,
+    system_prompt: String,
     messages: Vec<ChatMessage>,
-) -> Result<AiChatResult, DbError> {
+    run_tool: F,
+) -> Result<AiChatResult, DbError>
+where
+    F: Fn(String, serde_json::Value) -> Fut,
+    Fut: std::future::Future<Output = Result<crate::ai::tools::ToolOutcome, DbError>>,
+{
     let config = state.ai_config_store().get()?;
     let provider = config.provider();
     let api_key = if matches!(provider, AiProvider::Codex | AiProvider::ClaudeCode) {
@@ -920,70 +962,6 @@ pub async fn ai_chat(
                 ),
             )
         })?.to_string())
-    };
-
-    // Server version and connection name come from the live session so the
-    // prompt can state what the model is actually talking to. Read and
-    // released before the tool-call closure below takes the same lock.
-    let (server_version, connection_name) = {
-        let active = state.active.lock().await;
-        let session = active.get(&session_id).ok_or_else(DbError::not_connected)?;
-        (
-            session.session.info().server_version.clone(),
-            session.name.clone(),
-        )
-    };
-
-    let cubby_tables: Vec<(String, String)> = cubby
-        .as_ref()
-        .map(|c| c.tables.iter().map(|t| (t.schema.clone(), t.table.clone())).collect())
-        .unwrap_or_default();
-    let system_prompt = crate::ai::prompt::build_system_prompt(&crate::ai::prompt::PromptContext {
-        schema: &schema,
-        active_table: active_table
-            .as_ref()
-            .map(|t| (t.schema.as_str(), t.table.as_str())),
-        server_version: &server_version,
-        connection_name: &connection_name,
-        cubby: cubby.as_ref().map(|c| crate::ai::prompt::CubbyContext {
-            name: &c.name,
-            tables: &cubby_tables,
-        }),
-    });
-
-    // A plain `&AppState` (trivially `Copy`, unlike `State` itself) so the
-    // closure below can be called on every loop iteration without needing
-    // `state` to implement anything beyond what a shared reference already
-    // gives us.
-    //
-    // Session *lifecycle* lives here rather than in `ai::tools`: this closure
-    // owns the lock and the reconnect-on-drop retry every other session-scoped
-    // command uses, and hands the tools an already-known-good session.
-    let app_state: &AppState = state.inner();
-    let schema_ref = &schema;
-    let run_tool = move |name: String, input: serde_json::Value| {
-        let session_id = session_id.clone();
-        async move {
-            let mut active = app_state.active.lock().await;
-            {
-                let session = active.get(&session_id).ok_or_else(DbError::not_connected)?;
-                let ctx = crate::ai::tools::ToolContext::new(
-                    session.session.as_ref(),
-                    schema_ref,
-                );
-                match crate::ai::tools::execute(&ctx, &name, &input).await {
-                    Err(e) if e.kind == DbErrorKind::Connection => { /* retry below */ }
-                    other => return other,
-                }
-            }
-            reconnect_in_place(&mut active, &session_id, app_state).await?;
-            let session = active.get(&session_id).ok_or_else(DbError::not_connected)?;
-            let ctx = crate::ai::tools::ToolContext::new(
-                session.session.as_ref(),
-                schema_ref,
-            );
-            crate::ai::tools::execute(&ctx, &name, &input).await
-        }
     };
 
     let model = config.model();
@@ -1035,6 +1013,115 @@ pub async fn ai_chat(
             .await
         }
     }
+}
+
+/// Server version and connection name from the live session, so a prompt can
+/// state what the model is actually talking to. Read and released before the
+/// tool-call closure takes the same lock.
+async fn session_prompt_context(
+    state: &AppState,
+    session_id: &str,
+) -> Result<(String, String), DbError> {
+    let active = state.active.lock().await;
+    let session = active.get(session_id).ok_or_else(DbError::not_connected)?;
+    Ok((
+        session.session.info().server_version.clone(),
+        session.name.clone(),
+    ))
+}
+
+/// One AI turn: builds the schema-aware system prompt from the schema tree
+/// the frontend already has (no need to re-fetch it here), then runs
+/// the selected provider's tool-call loop, executing requested SQL read-only against
+/// this session's live connection (see `db::DbSession::run_read_only_query`)
+/// with the same reconnect-on-drop retry every other session-scoped command
+/// uses.
+#[tauri::command]
+pub async fn ai_chat(
+    state: State<'_, AppState>,
+    session_id: String,
+    schema: Vec<SchemaNode>,
+    active_table: Option<ActiveTableRef>,
+    cubby: Option<CubbyPromptInfo>,
+    messages: Vec<ChatMessage>,
+) -> Result<AiChatResult, DbError> {
+    let (server_version, connection_name) =
+        session_prompt_context(state.inner(), &session_id).await?;
+
+    let cubby_tables: Vec<(String, String)> = cubby
+        .as_ref()
+        .map(|c| c.tables.iter().map(|t| (t.schema.clone(), t.table.clone())).collect())
+        .unwrap_or_default();
+    let system_prompt = crate::ai::prompt::build_system_prompt(&crate::ai::prompt::PromptContext {
+        schema: &schema,
+        active_table: active_table
+            .as_ref()
+            .map(|t| (t.schema.as_str(), t.table.as_str())),
+        server_version: &server_version,
+        connection_name: &connection_name,
+        cubby: cubby.as_ref().map(|c| crate::ai::prompt::CubbyContext {
+            name: &c.name,
+            tables: &cubby_tables,
+        }),
+    });
+
+    // A plain `&AppState` (trivially `Copy`, unlike `State` itself) so the
+    // tool runner can be called on every loop iteration without needing
+    // `state` to implement anything beyond what a shared reference gives us.
+    let app_state: &AppState = state.inner();
+    let run_tool = tool_runner(app_state, session_id, &schema);
+    run_provider_turn(app_state, system_prompt, messages, run_tool).await
+}
+
+/// Natural language -> a WHERE predicate for the table browser's filter bar.
+///
+/// The same providers, key, model, and read-only tools as `ai_chat` — only
+/// the system prompt differs (see `ai::filter`), and the reply is parsed back
+/// into a bare predicate instead of being shown as prose. Stateless: each
+/// request carries its own description and whatever is currently in the bar,
+/// so there is no conversation to resume and nothing persisted.
+#[tauri::command]
+pub async fn ai_generate_filter(
+    state: State<'_, AppState>,
+    session_id: String,
+    schema: Vec<SchemaNode>,
+    table: ActiveTableRef,
+    prompt: String,
+    current_filter: Option<String>,
+) -> Result<crate::ai::filter::AiFilterResult, DbError> {
+    let description = prompt.trim();
+    if description.is_empty() {
+        return Err(DbError::new(
+            DbErrorKind::Internal,
+            "Describe the rows you want first.",
+        ));
+    }
+
+    let (server_version, _connection_name) =
+        session_prompt_context(state.inner(), &session_id).await?;
+
+    let system_prompt = crate::ai::filter::build_filter_prompt(&crate::ai::filter::FilterPromptContext {
+        schema: &schema,
+        table: (table.schema.as_str(), table.table.as_str()),
+        server_version: &server_version,
+        current_filter: current_filter.as_deref(),
+    });
+
+    let app_state: &AppState = state.inner();
+    let run_tool = tool_runner(app_state, session_id, &schema);
+    let result = run_provider_turn(
+        app_state,
+        system_prompt,
+        vec![ChatMessage {
+            role: "user".to_string(),
+            content: description.to_string(),
+            trace: None,
+        }],
+        run_tool,
+    )
+    .await?;
+
+    Ok(crate::ai::filter::parse_reply(&result.reply))
 }
 
 // --- Saved AI chats -----------------------------------------------------------

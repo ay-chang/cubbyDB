@@ -193,10 +193,12 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
 }
 
 /// Renders the schema at whichever level of detail fits its size. See
-/// `COMPACT_SCHEMA_TABLE_THRESHOLD`. `cubby_tables` are always rendered in
+/// `COMPACT_SCHEMA_TABLE_THRESHOLD`. `pinned` tables are always rendered in
 /// full even when the schema as a whole is over threshold — the user already
-/// told us these specific tables matter for the task at hand.
-fn render_schema(out: &mut String, schema: &[SchemaNode], cubby_tables: &[(String, String)]) {
+/// told us these specific tables matter for the task at hand. That is the
+/// active cubby's tables for the chat prompt, and the table being filtered
+/// for `filter.rs`'s.
+pub fn render_schema(out: &mut String, schema: &[SchemaNode], cubby_tables: &[(String, String)]) {
     let table_count: usize = schema.iter().map(|s| s.tables.len()).sum();
     let pinned: HashSet<(&str, &str)> = cubby_tables
         .iter()

@@ -81,6 +81,7 @@ pub fn run() {
             commands::accept_ai_terms,
             commands::list_ai_models,
             commands::ai_chat,
+            commands::ai_generate_filter,
             commands::list_ai_chats,
             commands::get_ai_chat,
             commands::upsert_ai_chat,

@@ -320,6 +320,20 @@ code comments or AGENTS.md's architecture section.
   Keyword suggestions here are an even smaller curated set — just the
   operators/connectives a single predicate actually uses (`AND`, `OR`,
   `IS`, `NULL`, `LIKE`, `ILIKE`, `BETWEEN`, ...)
+- **AI mode** in the same filter bar (the ✨ toggle inside the field, or
+  Cmd/Ctrl+I while it has focus): describe the rows you want in plain
+  language — "orders over $100 from last week", "signups with no verified
+  email" — and the assistant writes the predicate and applies it. It sees
+  this table in full detail plus the rest of the schema, so it can also
+  filter through a related table with a subquery; it can sample real rows
+  when the wording depends on how values are actually stored. The predicate
+  it writes lands in the `WHERE` field itself and the bar flips back to SQL
+  mode, so what ran is right there to read, tweak, or clear like any
+  hand-typed filter. If it had to assume something ("Interpreted 'last year'
+  as calendar year 2025"), a one-line note appears under the bar until
+  dismissed. If the request can't be expressed as a filter on this table it
+  says so and leaves the table untouched. Same provider, key, and model as
+  Ask AI
 - Pagination — 500 rows per page, Prev/Next; changing the filter resets to
   page 1
 
@@ -470,6 +484,8 @@ code comments or AGENTS.md's architecture section.
   workspace with approvals disabled and a read-only sandbox, and disables web
   search, external environments, and capability roots so the supplied
   read-only database tools are its only useful capabilities
+- The table browser's filter bar has its own **AI mode** built on the same
+  providers, key, model, and read-only tools — see "Table browsing" above
 - Available models are fetched live from the selected provider after its API
   key is saved or its Codex account is signed in. New installs default to
   Anthropic for backward compatibility. OpenAI and Codex use explicit GPT-5.6

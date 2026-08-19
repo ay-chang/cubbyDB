@@ -12,6 +12,7 @@ import {
   useStore,
 } from "../../state/store";
 import { copyToClipboard } from "../../api/backend";
+import { aiProviderLabel, aiProviderReady } from "../../lib/aiProvider";
 import type { AiChatSummary, AiMessage } from "../../types";
 import { Markdown } from "./Markdown";
 import { highlightSql, SnippetActions } from "./sqlSnippet";
@@ -95,22 +96,8 @@ export function AiPanel() {
     el.style.height = `${Math.min(el.scrollHeight + border, AI_INPUT_MAX_HEIGHT)}px`;
   }, [draft]);
 
-  const providerName = aiConfig?.provider === "openai"
-    ? "OpenAI"
-    : aiConfig?.provider === "codex"
-      ? "Codex"
-      : aiConfig?.provider === "claudeCode"
-        ? "Claude Code"
-        : "Anthropic";
-  const hasKey = aiConfig
-    ? aiConfig.provider === "codex"
-      ? aiConfig.codexAuthenticated
-      : aiConfig.provider === "claudeCode"
-        ? aiConfig.claudeCodeAuthenticated
-        : aiConfig.provider === "openai"
-          ? aiConfig.openaiKeySet
-          : aiConfig.anthropicKeySet
-    : true;
+  const providerName = aiProviderLabel(aiConfig);
+  const hasKey = aiProviderReady(aiConfig);
 
   const send = () => {
     const text = draft.trim();

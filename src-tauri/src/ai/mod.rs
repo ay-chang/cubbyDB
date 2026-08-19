@@ -12,6 +12,7 @@ pub mod chats;
 pub mod claude_code;
 pub mod codex;
 pub mod config;
+pub mod filter;
 pub mod openai;
 pub mod prompt;
 pub mod provider;

@@ -1284,6 +1284,120 @@
   opacity: 0.7;
 }
 
+/* --- Filter bar, AI mode ------------------------------------------------
+   Same bar, same box: only the field's contents and the trailing button
+   change, so switching modes doesn't reflow the results header. */
+
+/* The ✨ toggle sits inside the input box on its left edge, where a search
+   icon would — it belongs to the field it changes the meaning of. */
+.filter-bar__ai-toggle {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin-right: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: var(--text-muted);
+  transition:
+    color var(--transition),
+    background var(--transition);
+}
+.filter-bar__ai-toggle:hover {
+  color: var(--accent);
+  background: var(--border-faint);
+}
+.filter-bar__ai-toggle--on,
+.filter-bar__ai-toggle--on:hover {
+  color: #fff;
+  background: var(--accent);
+}
+/* The AI-mode field is prose, not SQL — the proportional UI font sets it
+   apart from the mono predicate field at a glance. */
+.filter-bar__prompt {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 12.5px;
+  /* The wrapper `.filter-bar__input` already draws a focus ring for whatever
+     is inside it. Without this, the UA's own default ring (blue, square,
+     ignoring the accent entirely) draws on top of it — CodeMirror's theme
+     suppresses the same thing for the SQL field, which is why only this
+     plain input ever showed it. */
+  outline: none;
+}
+.filter-bar__prompt:disabled {
+  color: var(--text-faint);
+}
+/* The keyword chip carries the mode, so it needs room for a second word. */
+.filter-bar--ai .filter-bar__kw {
+  white-space: nowrap;
+}
+
+/* --- The AI's note ------------------------------------------------------
+   One line: an assumption the AI made, why it declined, or why the request
+   failed. The predicate itself is never echoed here — it goes straight into
+   the WHERE field, which is where the user reads and edits it.
+
+   Floated under the bar rather than laid out beneath it: the results header
+   is a fixed-height row and a second line would break it. Sized to its own
+   text rather than the full field width, so it reads as an aside rather than
+   a panel. */
+.filter-note {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  max-width: 100%;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px 5px 10px;
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-card);
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+.filter-note--error {
+  background: var(--error-bg);
+  color: var(--error);
+}
+.filter-note__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.filter-note__link {
+  color: var(--accent);
+  cursor: pointer;
+}
+.filter-note__link:hover {
+  text-decoration: underline;
+}
+.filter-note__close {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1;
+  color: inherit;
+  opacity: 0.65;
+}
+.filter-note__close:hover {
+  opacity: 1;
+  background: var(--border-faint);
+}
+
 /* --- Mutation error banner (failed insert/update/delete) --- */
 .mutation-error {
   flex: none;

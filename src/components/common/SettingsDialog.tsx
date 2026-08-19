@@ -1481,6 +1481,9 @@ const SHORTCUT_GROUPS: {
     shortcuts: [
       { keys: ["⏎"], desc: "Apply the typed filter" },
       { keys: ["⇥"], desc: "Accept the highlighted autocomplete suggestion" },
+      { keys: ["⌘", "I"], desc: "Switch the filter bar between SQL and AI mode" },
+      { keys: ["⏎"], desc: "In AI mode: write the filter from your description" },
+      { keys: ["⎋"], desc: "In AI mode: dismiss what the AI reported" },
     ],
   },
   {

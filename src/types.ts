@@ -369,6 +369,15 @@ export interface AiChatResult {
   trace: AiToolTrace[];
 }
 
+/** What the filter bar's AI mode gets back: the predicate to drop in after
+ *  `WHERE`, and an optional one-line note for what the predicate itself
+ *  can't carry — an assumption the AI made, or (with an empty
+ *  `whereClause`) why the request couldn't be turned into a filter. */
+export interface AiFilterResult {
+  whereClause: string;
+  note: string | null;
+}
+
 /** A saved chat's lightweight list-view shape — no message bodies, so
  *  listing a connection's chats doesn't ship every message of every one. */
 export interface AiChatSummary {

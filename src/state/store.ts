@@ -15,6 +15,7 @@ import type {
   ActiveConnectionInfo,
   AiChatSummary,
   AiConfigStatus,
+  AiFilterResult,
   AiMessage,
   AiProvider,
   AiReasoningEffort,
@@ -972,6 +973,13 @@ interface AppStore {
   editorLineWrap: boolean;
   /** Whether the top bar hides the connection's Postgres-version subtext. */
   compactTopBar: boolean;
+  /** Whether the table filter bar is in AI mode — you describe the rows you
+   *  want instead of typing the predicate. App-wide rather than per-tab
+   *  because `FilterBar` is keyed by tab id, so per-tab state would drop the
+   *  mode on every tab switch. Deliberately *not* persisted: a successful
+   *  generation hands the predicate back to the SQL field and turns this off
+   *  again, so the app always opens where the filter bar has always been. */
+  filterAiMode: boolean;
   /** Whether previously open tabs are restored on launch. */
   restoreTabsOnLaunch: boolean;
   /** Whether opening a cubby first closes the connection's other tabs, so it
@@ -1158,6 +1166,11 @@ interface AppStore {
    *  everyone). */
   openWhatsNewTab: () => Promise<void>;
   setTableFilter: (id: string, filter: string) => Promise<void>;
+  /** Filter-bar AI mode: turn `prompt` into a WHERE predicate for this tab's
+   *  table and apply it. Resolves with the AI's own result so the bar can
+   *  surface its note (or explain that nothing came back); rejects with the
+   *  provider's error, which the bar shows inline. */
+  generateTableFilter: (id: string, prompt: string) => Promise<AiFilterResult>;
   openTableWithFilter: (
     schema: string,
     table: string,
@@ -1286,6 +1299,7 @@ interface AppStore {
   setEditorFontSize: (size: EditorFontSize) => void;
   setEditorLineWrap: (enabled: boolean) => void;
   setCompactTopBar: (enabled: boolean) => void;
+  setFilterAiMode: (enabled: boolean) => void;
   setRestoreTabsOnLaunch: (enabled: boolean) => void;
   setCloseTabsOnCubbyOpen: (enabled: boolean) => void;
   setStarterSql: (sql: string) => void;
@@ -2417,6 +2431,7 @@ export const useStore = create<AppStore>((set, get) => {
     editorFontSize: loadEditorFontSize(),
     editorLineWrap: loadEditorLineWrap(),
     compactTopBar: loadCompactTopBar(),
+    filterAiMode: false,
     restoreTabsOnLaunch: loadRestoreTabsOnLaunch(),
     closeTabsOnCubbyOpen: loadCloseTabsOnCubbyOpen(),
     starterSql: loadStarterSql(),
@@ -3201,6 +3216,30 @@ export const useStore = create<AppStore>((set, get) => {
         ),
       }));
       await get().runTab(id);
+    },
+
+    async generateTableFilter(id, prompt) {
+      const owner = findTabOwner(get().connections, id);
+      if (!owner) throw new Error("This tab is no longer open.");
+      const { slot, tab } = owner;
+      if (!tab.source) throw new Error("This tab isn't a table.");
+
+      const result = await api.aiGenerateFilter(
+        slot.sessionId,
+        slot.schema,
+        tab.source,
+        prompt,
+        tab.filter ?? null,
+      );
+      // An empty predicate is a real answer, not a failure — the AI is
+      // saying the request can't be expressed as a filter on this table (its
+      // `note` says why). Applying it would silently wipe whatever filter is
+      // already there, so leave the table exactly as it is and let the bar
+      // show the note.
+      if (result.whereClause.trim()) {
+        await get().setTableFilter(id, result.whereClause);
+      }
+      return result;
     },
 
     setCellEdit(tabId, rowIndex, colIndex, value) {
@@ -4526,6 +4565,10 @@ export const useStore = create<AppStore>((set, get) => {
     setCompactTopBar(enabled) {
       saveCompactTopBar(enabled);
       set({ compactTopBar: enabled });
+    },
+
+    setFilterAiMode(enabled) {
+      set({ filterAiMode: enabled });
     },
 
     setRestoreTabsOnLaunch(enabled) {

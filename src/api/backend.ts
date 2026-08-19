@@ -15,6 +15,7 @@ import type {
   AiChatSummary,
   AiChatThread,
   AiConfigStatus,
+  AiFilterResult,
   AiMessage,
   AiModelInfo,
   AiProvider,
@@ -452,6 +453,27 @@ export function aiChat(
     activeTable,
     cubby,
     messages,
+  });
+}
+
+/** Turns a natural-language description into a WHERE predicate for one
+ *  table — the filter bar's AI mode. Stateless: unlike `aiChat` there is no
+ *  conversation, just this one description plus whatever is already in the
+ *  bar (`currentFilter`), which the AI may refine rather than replace
+ *  wholesale. Runs on the same provider, key, and model as the chat panel. */
+export function aiGenerateFilter(
+  sessionId: string,
+  schema: SchemaNode[],
+  table: { schema: string; table: string },
+  prompt: string,
+  currentFilter: string | null,
+): Promise<AiFilterResult> {
+  return invoke("ai_generate_filter", {
+    sessionId,
+    schema,
+    table,
+    prompt,
+    currentFilter,
   });
 }
 
