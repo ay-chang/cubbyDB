@@ -10,9 +10,19 @@
 .topbar {
   /* Connection pills dim with opacity, which makes each pill a stacking
      context. Give the bar an explicit layer so its menus still paint above
-     the workspace body they extend into. */
+     the workspace body they extend into.
+     This value is also a ceiling for the "Add connection"/"Edit connection"
+     modals (`.settings-overlay`), which render inside TopBar's own JSX
+     rather than at the app root the way `SettingsDialog` does — a
+     `position`+`z-index` ancestor caps its descendants' z-index at its own
+     level once compared against anything outside it, so `.settings-overlay`
+     actually needing to reach 210 (`.settings-overlay`'s own value, matched
+     here) requires this to be at least that high too. A `z-index: 1` ceiling
+     here once let the results grid's sticky row-number gutter (or anything
+     else in the workspace body reaching z-index 1+) paint over an open
+     Edit/Add Connection modal. */
   position: relative;
-  z-index: 1;
+  z-index: 210;
   height: var(--h-topbar);
   flex: none;
   display: flex;
@@ -772,14 +782,38 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 12px;
+  /* Fixed width, not content-sized — so a table tab and a long query title
+     don't visibly jostle the whole strip's rhythm. `flex: none` (rather
+     than leaving the default shrink) keeps every tab exactly this wide
+     even once the strip overflows, so `.tabs`' own horizontal scroll is
+     what absorbs more tabs than fit, not a shrinking accordion. */
+  flex: none;
+  width: 168px;
+  padding: 0 10px;
   font-size: 12.5px;
   color: var(--text-faint);
   border-bottom: 2px solid transparent;
+  /* A hairline between every fixed-width tab, so the boundary between one
+     tab's box and the next is never ambiguous — without it, the accent
+     underline (which spans the whole box, not just the label) was the only
+     thing marking where a short title's tab actually ends. */
+  border-right: 1px solid var(--border-faint);
   margin-bottom: -1px;
   white-space: nowrap;
   cursor: default;
   user-select: none;
+}
+.tab__marker,
+.tab__save,
+.tab__close {
+  flex: none;
+}
+.tab__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* Non-dragged tabs ease into their new spot; the dragged one follows the
    pointer (its transition is disabled inline). */
@@ -794,14 +828,24 @@
 .tab--active {
   color: var(--text);
   font-weight: 500;
-  border-bottom-color: var(--accent);
+  /* Falls back to the plain accent for an untagged connection —
+     `--conn-color`/`--conn-color-tint` are only set (in EditorTabs.tsx)
+     when the active connection has its own color, same source as the
+     results pane's connection-tinted border/fill. */
+  border-bottom-color: var(--conn-color, var(--accent));
+  /* The underline alone spans the tab's full fixed width regardless of the
+     label's own length, which for a short or truncated title left it
+     unclear how far "selected" actually extended. A tint across the whole
+     box makes that unambiguous at a glance — same treatment the Cubbies
+     panel's active row already uses. */
+  background: var(--conn-color-tint, var(--accent-tint));
 }
 .tab__marker {
   font-size: 11px;
   color: var(--text-ghost);
 }
 .tab--active .tab__marker {
-  color: var(--accent);
+  color: var(--conn-color, var(--accent));
 }
 .tab__close {
   color: var(--text-ghost);
@@ -1862,6 +1906,36 @@
   background: var(--accent-glow);
   box-shadow: inset 0 0 0 1.5px var(--accent);
 }
+/* A cell inside a drag/Shift-click range. Same fill as a single clicked
+   cell, but the accent outline is split across the block's outer cells so
+   the whole selection reads as one rectangle rather than a stack of boxes:
+   each cell paints only the sides it actually sits on, and interior edges
+   paint nothing. Drawn on a `::before` overlay rather than the cell's own
+   border (which would reflow the text by the border width) or a `box-shadow`
+   (a single property, so per-side classes would overwrite each other rather
+   than compose). `::after` is spoken for by `--dirty`'s corner dot. */
+.grid__cell--range {
+  background: var(--accent-glow);
+}
+.grid__cell--range::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border: 0 solid var(--accent);
+}
+.grid__cell--range-t::before {
+  border-top-width: 1.5px;
+}
+.grid__cell--range-b::before {
+  border-bottom-width: 1.5px;
+}
+.grid__cell--range-l::before {
+  border-left-width: 1.5px;
+}
+.grid__cell--range-r::before {
+  border-right-width: 1.5px;
+}
 /* A foreign-key cell — right-click to jump to related rows. */
 .grid__cell--fk {
   cursor: context-menu;
@@ -1976,6 +2050,20 @@
   background: var(--accent-glow-soft);
 }
 .grid__row--rowsel .grid__gutter {
+  background: var(--accent-tint);
+  color: var(--accent-tint-text);
+}
+/* A row the active range spans: exactly the whole-row tint a gutter
+   selection gets (every one of these rows is what Remove deletes), with no
+   ring of its own — the accent outline belongs to the spanned *cells*, drawn
+   once around the whole block by `.grid__cell--range-*` above. A per-row ring
+   here instead stacked two 1.5px borders between each adjacent pair of rows,
+   which read as stripes rather than a selection. */
+.grid__row--rangesel,
+.grid__row--rangesel.grid__row--zebra {
+  background: var(--accent-glow-soft);
+}
+.grid__row--rangesel .grid__gutter {
   background: var(--accent-tint);
   color: var(--accent-tint-text);
 }

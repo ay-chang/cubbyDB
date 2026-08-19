@@ -7,7 +7,13 @@ import {
   TAB_JUMP_KEYBINDING_IDS,
   useKeybindingStore,
 } from "../../lib/keybindings";
-import { useActiveTabId, useActiveTabs, useStore } from "../../state/store";
+import {
+  tabCubbyEntry,
+  useActiveCubby,
+  useActiveTabId,
+  useActiveTabs,
+  useStore,
+} from "../../state/store";
 import { AiPanel } from "./AiPanel";
 import { CommandPalette } from "./CommandPalette";
 import { CubbyPanel } from "./CubbyPanel";
@@ -278,6 +284,10 @@ function useWorkspaceShortcuts(toggleSidebar: () => void) {
   const navigateForward = useStore((s) => s.navigateForward);
   const toggleCommandPalette = useStore((s) => s.toggleCommandPalette);
   const toggleAiPanel = useStore((s) => s.toggleAiPanel);
+  const toggleCubbies = useStore((s) => s.toggleCubbies);
+  const addEntryToCubby = useStore((s) => s.addEntryToCubby);
+  const showToast = useStore((s) => s.showToast);
+  const activeCubby = useActiveCubby();
   const refreshActive = useStore((s) => s.refreshActive);
   const settingsOpen = useStore((s) => s.settingsOpen);
   const bindings = useKeybindingStore((s) => s.bindings);
@@ -357,6 +367,23 @@ function useWorkspaceShortcuts(toggleSidebar: () => void) {
         toggleAiPanel();
         return;
       }
+      if (matchesKeybinding(e, bindings["workspace.toggleCubbies"])) {
+        e.preventDefault();
+        toggleCubbies();
+        return;
+      }
+      if (matchesKeybinding(e, bindings["workspace.addToCubby"])) {
+        e.preventDefault();
+        if (!activeCubby) {
+          showToast("Open a cubby first", "error");
+        } else {
+          const activeTab = tabs.find((t) => t.id === activeTabId);
+          const entry = activeTab ? tabCubbyEntry(activeTab) : null;
+          if (!entry) showToast("Save this query first", "error");
+          else void addEntryToCubby(activeCubby.id, entry);
+        }
+        return;
+      }
       if (
         matchesKeybinding(e, bindings["workspace.previousTab"]) ||
         matchesKeybinding(e, bindings["workspace.nextTab"])
@@ -406,6 +433,10 @@ function useWorkspaceShortcuts(toggleSidebar: () => void) {
     navigateForward,
     toggleCommandPalette,
     toggleAiPanel,
+    toggleCubbies,
+    addEntryToCubby,
+    showToast,
+    activeCubby,
     refreshActive,
     settingsOpen,
     bindings,

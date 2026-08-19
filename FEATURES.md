@@ -247,6 +247,11 @@ code comments or AGENTS.md's architecture section.
   row (+); and on the current AI conversation once it has a saved-chat id.
   Right-clicking a never-saved query tab explains it has to be saved first
   (an unsaved tab has no stable id for a cubby entry to point at)
+- Two keyboard shortcuts (Settings → Keyboard Shortcuts, rebindable):
+  **Cmd/Ctrl+Shift+C** shows or hides the Cubbies panel; **Cmd/Ctrl+D** adds
+  the active tab to the active cubby (same "bookmark this" mnemonic as a
+  browser) — with a toast explaining why when there's no active cubby, or
+  the active tab hasn't been saved yet
 - The active cubby's tables are **pinned** in a collapsible group above the
   regular list in the schema tree sidebar — additive, not a replacement; the
   text filter above still searches the whole schema regardless of what's
@@ -281,6 +286,12 @@ code comments or AGENTS.md's architecture section.
   this" list is wide enough for most schema/table/column paths to read on one
   line and never wraps or silently truncates a name — anything still too
   long to fit is reachable by scrolling the list horizontally
+  - With a multi-row range selected (see **Drag-select a range** below),
+    right-clicking a cell in the range's own FK/PK column jumps using every
+    distinct id in the selection at once — `IN (...)` instead of `=` — rather
+    than collapsing back to just the one cell you right-clicked. Only applies
+    when that specific column is what the range spans; right-clicking a
+    different column falls back to the normal single-cell jump
 - CSV export, with a configurable field delimiter
 - **Find in results** (Cmd/Ctrl+F): a query box scoped to the active grid,
   matching case-insensitively against every existing-row cell. Matches are
@@ -327,15 +338,30 @@ code comments or AGENTS.md's architecture section.
 - Update commits one row at a time as a backend-generated, primary-key-scoped
   `UPDATE`; editing requires the table to have a detected primary key
 - Right-click a nullable cell to set it to `NULL`
+- Right-click a `uuid`-typed cell for **Generate random UUID** — fills it
+  with a fresh `crypto.randomUUID()` value as a pending edit. Shown for
+  primary-key cells too (unlike "Set to NULL"), since replacing or seeding a
+  uuid primary key before insert is the common case
+  - With a multi-row range selected on that same column (see **Drag-select a
+    range** below), the menu instead offers **Generate random UUIDs for N
+    rows** — a *distinct* fresh uuid per row, not one value broadcast to
+    every cell (that's what Cmd/Ctrl+V paste-fill already does, and would
+    collide immediately on a unique/primary-key column)
 - Right-click a cell with a pending edit for **Revert to original** — undoes
   just that one cell, leaving any other pending edits on the row (or other
   rows) untouched, unlike Discard which clears everything at once
 - **Add row**: appends a blank draft row (unset cells read "default"),
   inserted as an `INSERT` on commit — or `INSERT ... DEFAULT VALUES` if left
-  entirely blank
+  entirely blank. Right-click a draft cell for the same **Set to NULL** /
+  **Generate random UUID** actions as an existing row (no FK-jump or Revert,
+  neither of which makes sense before the row exists) — "Set to NULL" here
+  clears the cell back to "default" rather than forcing a literal NULL,
+  since that's what an unset draft cell already means on insert
 - **Remove row(s)**: deletes one or more selected existing rows (a single
   confirmation covers a multi-row selection) via a primary-key-scoped
-  `DELETE`
+  `DELETE` — selected either via the gutter or by drag-selecting a block of
+  cells (see **Drag-select a range** below); either way, every row the
+  selection touches is removed regardless of which columns were involved
 - **Cascading delete preview**: if other rows reference the one(s) you're
   deleting via a foreign key, deleting shows exactly what else would go
   instead of just failing with a raw constraint error — every dependent row,
@@ -377,6 +403,31 @@ code comments or AGENTS.md's architecture section.
 - Selecting rows only shows the row-tint highlight — cell text itself never
   picks up the browser's native text-selection box, even when dragging across
   several rows (copy/paste still work exactly the same either way)
+- **Drag-select a range**: click and drag across existing-row cells (or
+  Shift-click a second cell) to select a rectangular block spanning one or
+  more rows and columns — independent of the gutter's whole-row selection and
+  click-to-select-one-cell. A run of several Shift+clicks all extend from the
+  same original cell, not from each other (Finder/Gmail/spreadsheet
+  convention), until a plain click resets the anchor
+  - Rendered as a scaled-up version of a single cell click: every row the
+    range touches gets the full-row tint (they're all what Remove deletes),
+    the spanned columns get the same column tint a selected cell's column
+    gets, and one accent outline is drawn around the selected block as a
+    whole — split across the block's outer cells so it reads as a single
+    rectangle rather than a ring per row
+  - Cmd/Ctrl+C copies the block (rows × spanned columns, same delimiter as row
+    copy); Cmd/Ctrl+V takes whatever's on the clipboard as a single value and
+    writes it into *every* cell the range spans — the "highlight column 2 for
+    rows 4–7, paste once, fill all four" flow, not a shaped block-paste
+  - The toolbar's Remove button deletes every row the range touches, same as
+    a gutter-based multi-row selection
+  - The range freezes to the exact rows/columns it had when the selection was
+    made — sorting or reordering columns afterward doesn't drag the selection
+    along to whatever now sits in those display positions
+  - Draft (not-yet-inserted) rows aren't part of this — drag or shift-click a
+    block there and it simply doesn't extend, since a new row has no stable
+    sort position to select a "range" against; the per-cell right-click menu
+    still covers Set to NULL / Generate random UUID for those
 
 ## Query history
 
@@ -472,6 +523,15 @@ code comments or AGENTS.md's architecture section.
   "structure" (read-only columns/indexes/constraints view), and
   "function"/"sequence" (read-only definition/details views, also opened
   from the schema tree)
+- Every tab is the same fixed width regardless of title length — a long
+  table or query name truncates with an ellipsis (the full name is a hover
+  away) rather than stretching the strip. Once more tabs are open than fit,
+  the strip scrolls horizontally instead of shrinking them
+- The active tab's highlight (underline, background tint, and marker icon)
+  follows a tagged connection's own color instead of the app-wide accent, if
+  that connection has one set — same color used for its results-pane border/
+  fill and its pill in the connection switcher, so the association reads the
+  same way everywhere. Untagged connections keep the plain accent
 - Each connection has its own independent set of tabs — switching connections
   switches the whole tab strip, not just what's shown
 - A newly connected database (or one being restored on launch with the

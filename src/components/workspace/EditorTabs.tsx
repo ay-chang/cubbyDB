@@ -1,36 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 
 import { formatShortcutTitle, useKeybindingStore } from "../../lib/keybindings";
-import { useActiveCubby, useActiveTabId, useActiveTabs, useStore } from "../../state/store";
-import type { QueryTab } from "../../state/store";
-import type { CubbyEntry } from "../../types";
-
-/** The cubby reference a tab stands for, or `null` when it has nothing stable
- *  to point at — an ad-hoc query tab that was never saved has no id for a
- *  cubby entry to survive against, so it has to be saved first. */
-function tabCubbyEntry(tab: QueryTab): CubbyEntry | null {
-  switch (tab.kind) {
-    case "table":
-      return tab.source ? { kind: "table", ...tab.source } : null;
-    case "structure":
-      return tab.source ? { kind: "structure", ...tab.source } : null;
-    case "function":
-      return tab.objectRef
-        ? {
-            kind: "function",
-            schema: tab.objectRef.schema,
-            name: tab.objectRef.name,
-            oid: tab.objectRef.oid ?? null,
-          }
-        : null;
-    case "sequence":
-      return tab.objectRef
-        ? { kind: "sequence", schema: tab.objectRef.schema, name: tab.objectRef.name }
-        : null;
-    case "query":
-      return tab.savedQueryId ? { kind: "savedQuery", savedQueryId: tab.savedQueryId } : null;
-  }
-}
+import {
+  accentPaletteFor,
+  tabCubbyEntry,
+  THEME_MODE,
+  useActiveCubby,
+  useActiveTabId,
+  useActiveTabs,
+  useStore,
+} from "../../state/store";
 
 /**
  * The tab strip above the editor. Active tab carries a 2px accent underline.
@@ -48,6 +27,25 @@ export function EditorTabs({ onSaveQuery }: { onSaveQuery: () => void }) {
   const activeCubby = useActiveCubby();
   const addEntryToCubby = useStore((s) => s.addEntryToCubby);
   const bindings = useKeybindingStore((s) => s.bindings);
+
+  // A tagged connection's color carries over to its active tab's highlight
+  // — same source (`ConnectionColorMenu` in TopBar.tsx) and the same
+  // `--conn-color`/`--conn-color-tint` custom properties `ResultsPane`
+  // already sets for the connection-tinted results border/fill, just
+  // applied to the tab strip instead. Untagged connections fall back to the
+  // plain accent color via the CSS `var(..., fallback)` in `.tab--active`.
+  const connColor = useStore((s) => {
+    const id = s.activeConnectionId;
+    return id ? (s.connections[id]?.color ?? null) : null;
+  });
+  const theme = useStore((s) => s.theme);
+  const connPalette = connColor ? accentPaletteFor(connColor, THEME_MODE[theme]) : null;
+  const connStyle = connPalette
+    ? ({
+        "--conn-color": connPalette.accent,
+        "--conn-color-tint": connPalette.accentTint,
+      } as React.CSSProperties)
+    : undefined;
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<{
@@ -153,7 +151,7 @@ export function EditorTabs({ onSaveQuery }: { onSaveQuery: () => void }) {
       : null;
 
   return (
-    <div className="tabs" ref={containerRef}>
+    <div className="tabs" ref={containerRef} style={connStyle}>
       {tabs.map((tab, index) => {
         const active = tab.id === activeTabId;
         return (
@@ -171,6 +169,10 @@ export function EditorTabs({ onSaveQuery }: { onSaveQuery: () => void }) {
               e.preventDefault();
               setMenu({ x: e.clientX, y: e.clientY, tabId: tab.id });
             }}
+            // Fixed-width tabs (see `.tab` in workspace.css) truncate a long
+            // title with an ellipsis, so the full name — otherwise only
+            // visible by widening the pane — is one hover away.
+            title={tab.title}
           >
             <span className="tab__marker mono">
               {tab.kind === "table"
@@ -233,7 +235,10 @@ export function EditorTabs({ onSaveQuery }: { onSaveQuery: () => void }) {
           <button
             className="context-menu__item"
             disabled={addDisabledReason !== null}
-            title={addDisabledReason ?? undefined}
+            title={
+              addDisabledReason ??
+              formatShortcutTitle("Add to cubby", bindings["workspace.addToCubby"])
+            }
             onClick={() => {
               setMenu(null);
               if (activeCubby && menuEntry) void addEntryToCubby(activeCubby.id, menuEntry);

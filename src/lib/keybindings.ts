@@ -89,6 +89,22 @@ export const KEYBINDING_DEFINITIONS = [
     context: "workspace",
   },
   {
+    id: "workspace.toggleCubbies",
+    group: "General",
+    description: "Show or hide the Cubbies panel",
+    defaultBinding: "mod+shift+c",
+    context: "workspace",
+  },
+  {
+    id: "workspace.addToCubby",
+    group: "General",
+    description: "Add the active tab to the active cubby",
+    // Same mnemonic as the browser "bookmark this" shortcut — a cubby entry
+    // is exactly that, for a tab instead of a page.
+    defaultBinding: "mod+d",
+    context: "workspace",
+  },
+  {
     id: "workspace.closeTab",
     group: "General",
     description: "Close the active tab",

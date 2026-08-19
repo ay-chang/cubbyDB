@@ -118,6 +118,24 @@ export function ResultsPane({ tab }: { tab: QueryTab }) {
     );
   }, [result, schemaTable]);
 
+  // Which result columns are actually `uuid`-typed (for the "Generate random
+  // UUID" action) — unlike "Set to NULL", this deliberately isn't excluded
+  // for a primary key: a uuid PK you're about to insert or want to
+  // regenerate is exactly the common case.
+  const uuidColIndices = useMemo(() => {
+    if (!result || !schemaTable) return new Set<number>();
+    const uuidNames = new Set(
+      schemaTable.columns
+        .filter((c) => c.dataType.toLowerCase() === "uuid")
+        .map((c) => c.name),
+    );
+    return new Set(
+      result.columns
+        .map((c, i) => (uuidNames.has(c.name) ? i : -1))
+        .filter((i) => i >= 0),
+    );
+  }, [result, schemaTable]);
+
   // A tagged connection (set in its own edit form) tints this whole pane —
   // a thin border by default, or a flatter full-tint fill if that
   // connection was set up to use the louder style instead.
@@ -180,6 +198,7 @@ export function ResultsPane({ tab }: { tab: QueryTab }) {
             editable={editability?.editable ?? false}
             pkColIndices={pkColIndices}
             nullableColIndices={nullableColIndices}
+            uuidColIndices={uuidColIndices}
           />
         )
       ) : result ? (
@@ -566,6 +585,7 @@ function ResultsGrid({
   editable,
   pkColIndices,
   nullableColIndices,
+  uuidColIndices,
 }: {
   tab: QueryTab;
   result: QueryResult;
@@ -575,6 +595,7 @@ function ResultsGrid({
   editable: boolean;
   pkColIndices: Set<number>;
   nullableColIndices: Set<number>;
+  uuidColIndices: Set<number>;
 }) {
   const openTableWithFilter = useStore((s) => s.openTableWithFilter);
   const nullDisplay = useStore((s) => s.nullDisplay);
@@ -649,6 +670,46 @@ function ResultsGrid({
   // one or more rows; `rowAnchorRef` is the pivot for shift-click ranges.
   const [rowSel, setRowSel] = useState<RowSelection[]>([]);
   const rowAnchorRef = useRef<RowSelection | null>(null);
+  // A rectangle of existing-row cells selected either by dragging across
+  // them or Shift+clicking a second cell (see `onCellMouseDown` and
+  // `onCellClick`), for bulk delete of the spanned rows and "paste one value
+  // into every spanned cell" fill. Visually it's rendered exactly like a
+  // multi-row gutter selection — every row it touches, in full — even though
+  // only the specific *columns* dragged/shift-clicked across actually get
+  // written to on paste; a partial-row highlight for just those columns read
+  // as broken rather than intentional. Rebuilt from *positions* on every
+  // pointer move/click (see below) — "the row three below the anchor" only
+  // means the same thing throughout a drag if it's read off display order,
+  // not raw index — but what's actually stored is the resulting row/column
+  // indices, frozen at whatever they were at that moment. That matches
+  // `rowSel`'s own semantics: once you let go, the selection is a fixed set
+  // of rows, so a sort or column reorder afterward doesn't silently drag the
+  // selection along to whatever now sits in those display positions.
+  // Distinct from `selected`/`rowSel`: all three are mutually exclusive, and
+  // starting a drag or a plain click clears the other two. Draft rows are
+  // deliberately not part of this — they have no stable display position to
+  // select a range against (no sort, no gutter multi-select either) and are
+  // rare enough in bulk that the existing per-cell draft menu already covers
+  // it.
+  const [range, setRange] = useState<{ rows: number[]; cols: number[] } | null>(
+    null,
+  );
+  const rangeDragRef = useRef<{
+    anchorR: number;
+    anchorCol: number;
+    anchorRowPos: number;
+    anchorColPos: number;
+    moved: boolean;
+  } | null>(null);
+  // Set true on mouseup after an actual drag (moved to a different cell), so
+  // the `click` event the browser fires right after doesn't also collapse
+  // the fresh range back down to a single selected cell.
+  const suppressNextCellClickRef = useRef(false);
+  // The reference point a Shift+click on a cell extends *from* — set on
+  // every plain (non-shift) click or drag-start, so a run of several
+  // Shift+clicks all extend from the same original cell rather than each
+  // other, matching Finder/Gmail/spreadsheet range-select conventions.
+  const cellAnchorRef = useRef<{ r: number; col: number } | null>(null);
   // Open FK "jump to referenced row" menu, anchored at the clicked cell.
   const [fkMenu, setFkMenu] = useState<{
     r: number;
@@ -660,6 +721,16 @@ function ResultsGrid({
   // tables, so typing narrows it rather than requiring a scroll-and-scan.
   const [fkQuery, setFkQuery] = useState("");
   const fkQueryRef = useRef<HTMLInputElement>(null);
+  // Right-click menu for a not-yet-inserted draft cell — simpler than
+  // `fkMenu`: a new row has no FK nav (nothing points at a row that doesn't
+  // exist yet) and no "original" value to revert to, just "Set to NULL" /
+  // "Generate random UUID".
+  const [newCellMenu, setNewCellMenu] = useState<{
+    ni: number;
+    col: number;
+    x: number;
+    y: number;
+  } | null>(null);
   // The cell "Expand" opened from the same right-click menu, shown in
   // `CellInspectorDialog` below — a full-size, read-only, JSON-aware view
   // for a value too long to read in a 32px-tall grid cell.
@@ -737,6 +808,7 @@ function ResultsGrid({
     rowAnchorRef.current = sel;
     setSelected(null);
     setFkMenu(null);
+    setRange(null);
   };
 
   // Row indices in display order (sorted client-side when a sort is active).
@@ -763,6 +835,118 @@ function ResultsGrid({
     );
     return indices;
   }, [result, sort, numericCols, isTable]);
+
+  // `Set` views of the active range's rows/columns — every cell in the
+  // visible window checks membership, so this is computed once per range
+  // change rather than per cell.
+  const rangeRowSet = useMemo(() => (range ? new Set(range.rows) : null), [range]);
+  const rangeColSet = useMemo(() => (range ? new Set(range.cols) : null), [range]);
+  // The block's outer edges, in row/column *indices* — `range.rows`/`.cols`
+  // are stored in display order, so first/last are literally the top, bottom,
+  // left and right of the rectangle. Each range cell draws only the border
+  // sides it sits on (see `.grid__cell--range` in workspace.css), which is
+  // what makes the whole selection read as one contiguous outline instead of
+  // a stack of per-row boxes.
+  const rangeEdge = useMemo(
+    () =>
+      range && range.rows.length > 0 && range.cols.length > 0
+        ? {
+            topRow: range.rows[0],
+            bottomRow: range.rows[range.rows.length - 1],
+            leftCol: range.cols[0],
+            rightCol: range.cols[range.cols.length - 1],
+          }
+        : null,
+    [range],
+  );
+  /**
+   * Mousedown on a cell — the start of a potential drag-range. Plain clicks
+   * (no movement before mouseup) fall through to `onCellClick` exactly as
+   * before; this only takes over once the pointer has actually moved to a
+   * different cell, mirroring the tab-reorder drag pattern (window-level
+   * mousemove/mouseup, not per-cell hover handlers, so dragging over cells
+   * doesn't require threading yet another prop through `GridCell`'s `memo()`
+   * boundary).
+   */
+  const onCellMouseDown = useCallback(
+    (e: React.MouseEvent, r: number, col: number) => {
+      if (e.button !== 0) return;
+      // A Shift+click is a range *extension*, handled entirely in
+      // `onCellClick` — bail out before touching `cellAnchorRef`, which is
+      // exactly the point it extends from. (Overwriting it here was the bug
+      // that made Shift+click collapse to a single cell: mousedown fires
+      // before click, so the anchor had already been moved to the cell being
+      // shift-clicked by the time the click handler read it.)
+      if (e.shiftKey) return;
+      const anchorRowPos = sortedRowIndices.indexOf(r);
+      const anchorColPos = order.indexOf(col);
+      if (anchorRowPos < 0 || anchorColPos < 0) return;
+      cellAnchorRef.current = { r, col };
+      rangeDragRef.current = {
+        anchorR: r,
+        anchorCol: col,
+        anchorRowPos,
+        anchorColPos,
+        moved: false,
+      };
+      let lastR = r;
+      let lastCol = col;
+      const onMove = (ev: MouseEvent) => {
+        // `mousemove`'s own `target` already reflects the element under the
+        // pointer (unlike `drag` events, this needs no `elementFromPoint`).
+        const target = (ev.target as HTMLElement | null)
+          ?.closest("[data-cell]")
+          ?.getAttribute("data-cell");
+        if (!target) return;
+        const sep = target.indexOf("-");
+        const rr = Number(target.slice(0, sep));
+        const cc = Number(target.slice(sep + 1));
+        if (rr === lastR && cc === lastCol) return;
+        lastR = rr;
+        lastCol = cc;
+        const drag = rangeDragRef.current;
+        if (!drag) return;
+        if (rr !== drag.anchorR || cc !== drag.anchorCol) drag.moved = true;
+        if (!drag.moved) return;
+        const rowPos = sortedRowIndices.indexOf(rr);
+        const colPos = order.indexOf(cc);
+        if (rowPos < 0 || colPos < 0) return;
+        setSelected(null);
+        setRowSel([]);
+        rowAnchorRef.current = null;
+        const rowLo = Math.min(drag.anchorRowPos, rowPos);
+        const rowHi = Math.max(drag.anchorRowPos, rowPos);
+        const colLo = Math.min(drag.anchorColPos, colPos);
+        const colHi = Math.max(drag.anchorColPos, colPos);
+        setRange({
+          rows: sortedRowIndices.slice(rowLo, rowHi + 1),
+          cols: order.slice(colLo, colHi + 1),
+        });
+      };
+      const onUp = () => {
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+        const drag = rangeDragRef.current;
+        if (drag?.moved) {
+          if (lastR === drag.anchorR && lastCol === drag.anchorCol) {
+            // Dragged away and back to the starting cell before releasing —
+            // collapse to a plain single-cell selection rather than leaving
+            // behind a one-cell "range" that looks identical but copies/
+            // pastes/deletes differently.
+            setRange(null);
+            setSelected({ r: drag.anchorR, col: drag.anchorCol });
+            setRowSel([]);
+          } else {
+            suppressNextCellClickRef.current = true;
+          }
+        }
+        rangeDragRef.current = null;
+      };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    },
+    [sortedRowIndices, order],
+  );
 
   /**
    * Gutter click with modifiers: plain = select just this row, ⌘/Ctrl+click =
@@ -803,6 +987,7 @@ function ResultsGrid({
       }
       setSelected(null);
       setFkMenu(null);
+      setRange(null);
     },
     [sortedRowIndices],
   );
@@ -818,10 +1003,44 @@ function ResultsGrid({
   // Cell selection/editing/context-menu handlers, likewise stable — each
   // takes the row/col as arguments rather than closing over them, so one
   // shared instance works for every row.
-  const onCellClick = useCallback((r: number, col: number) => {
-    setSelected({ r, col });
-    setRowSel([]);
-  }, []);
+  const onCellClick = useCallback(
+    (e: React.MouseEvent, r: number, col: number) => {
+      // Suppressed once, right after a drag actually moved to a different
+      // cell — the `mouseup` that ended the drag is immediately followed by
+      // a native `click`, which would otherwise collapse the range it just
+      // finished dragging back down to a single selected cell.
+      if (suppressNextCellClickRef.current) {
+        suppressNextCellClickRef.current = false;
+        return;
+      }
+      const anchor = cellAnchorRef.current;
+      if (e.shiftKey && anchor) {
+        const anchorRowPos = sortedRowIndices.indexOf(anchor.r);
+        const anchorColPos = order.indexOf(anchor.col);
+        const rowPos = sortedRowIndices.indexOf(r);
+        const colPos = order.indexOf(col);
+        if (anchorRowPos >= 0 && anchorColPos >= 0 && rowPos >= 0 && colPos >= 0) {
+          const rowLo = Math.min(anchorRowPos, rowPos);
+          const rowHi = Math.max(anchorRowPos, rowPos);
+          const colLo = Math.min(anchorColPos, colPos);
+          const colHi = Math.max(anchorColPos, colPos);
+          setSelected(null);
+          setRowSel([]);
+          rowAnchorRef.current = null;
+          setRange({
+            rows: sortedRowIndices.slice(rowLo, rowHi + 1),
+            cols: order.slice(colLo, colHi + 1),
+          });
+          return;
+        }
+      }
+      cellAnchorRef.current = { r, col };
+      setSelected({ r, col });
+      setRowSel([]);
+      setRange(null);
+    },
+    [sortedRowIndices, order],
+  );
   // Escape and clicking the empty corner (gutter/header intersection) both
   // just clear whatever's selected — same "unhighlight the row and column"
   // outcome as clicking elsewhere in the grid, without needing a live target
@@ -830,7 +1049,9 @@ function ResultsGrid({
     setSelected(null);
     setRowSel([]);
     rowAnchorRef.current = null;
+    cellAnchorRef.current = null;
     setFkMenu(null);
+    setRange(null);
   }, []);
   const onCellDoubleClick = useCallback(
     (r: number, col: number, currentValue: string | null) => {
@@ -838,14 +1059,43 @@ function ResultsGrid({
     },
     [],
   );
-  const onCellContextMenu = useCallback((e: React.MouseEvent, r: number, col: number) => {
-    setSelected({ r, col });
-    setFkMenu({ r, col, x: e.clientX, y: e.clientY });
-    setFkQuery("");
-  }, []);
+  const onCellContextMenu = useCallback(
+    (e: React.MouseEvent, r: number, col: number) => {
+      // Right-clicking a cell in the column an active multi-row range spans
+      // keeps that range alive instead of collapsing it to this one cell —
+      // the menu below reads `range`/`rangeColSet` directly to offer
+      // range-scoped actions (FK jump using every id, generate a fresh UUID
+      // per row) instead of ones scoped to just this cell. Only worth
+      // preserving when this column actually has one of those available;
+      // otherwise it's a plain single-cell right-click exactly as before,
+      // range and all.
+      const nav = navByColumn?.[col];
+      const hasRangeAction =
+        (!!nav && (nav.references.length > 0 || nav.referencedBy.length > 0)) ||
+        uuidColIndices.has(col);
+      const isMultiColRange =
+        hasRangeAction &&
+        (rangeColSet?.has(col) ?? false) &&
+        (rangeRowSet?.size ?? 0) > 1;
+      setFkMenu({ r, col, x: e.clientX, y: e.clientY });
+      setFkQuery("");
+      if (isMultiColRange) return;
+      setSelected({ r, col });
+      cellAnchorRef.current = { r, col };
+      setRange(null);
+    },
+    [navByColumn, rangeColSet, rangeRowSet, uuidColIndices],
+  );
   const onNewCellClick = useCallback((ni: number, col: number, currentValue: string | null) => {
     setEditing({ r: ni, col, draft: currentValue ?? "", isNew: true });
   }, []);
+  const onNewCellContextMenu = useCallback(
+    (e: React.MouseEvent, ni: number, col: number) => {
+      e.preventDefault();
+      setNewCellMenu({ ni, col, x: e.clientX, y: e.clientY });
+    },
+    [],
+  );
   const onEditDraftChange = useCallback(
     (r: number, col: number, draft: string, isNew?: boolean) => {
       setEditing({ r, col, draft, isNew });
@@ -889,7 +1139,9 @@ function ResultsGrid({
     setSelected(null);
     setRowSel([]);
     rowAnchorRef.current = null;
+    cellAnchorRef.current = null;
     setFkMenu(null);
+    setRange(null);
     setLocalSort(null);
     setEditing(null);
     setFindOpen(false);
@@ -928,6 +1180,18 @@ function ResultsGrid({
       window.removeEventListener("resize", close);
     };
   }, [fkMenu]);
+  useEffect(() => {
+    if (!newCellMenu) return;
+    const close = () => setNewCellMenu(null);
+    window.addEventListener("click", close);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [newCellMenu]);
 
   // Keyboard copy/paste. With a whole row selected (gutter), Cmd/Ctrl+C copies
   // the row and Cmd/Ctrl+V pastes it over the selected row; with a single cell
@@ -935,12 +1199,51 @@ function ResultsGrid({
   // clipboards. Skipped while a cell's edit input is focused so native
   // copy/paste works there.
   useEffect(() => {
-    if (!selected && rowSel.length === 0) return;
+    if (!selected && rowSel.length === 0 && !range) return;
     const effectiveValue = (r: number, col: number): string | null => {
       const draftEdit = tab.pendingEdits?.[r]?.[col];
       return draftEdit !== undefined ? draftEdit : result.rows[r]?.[col] ?? null;
     };
     const width = result.columns.length;
+
+    // Cmd/Ctrl+C on a drag-range copies the block (rows × the spanned
+    // columns, same delimiter convention as `copyRows`); Cmd/Ctrl+V writes
+    // one value — whatever's on the clipboard, taken as a single string —
+    // into *every* cell the range spans. That's a deliberate simplification:
+    // an Excel-style "paste a matching-shape block back" would need to pick
+    // a column delimiter to split on and decide what happens when the
+    // pasted shape doesn't match the range, neither of which this asked for
+    // ("if I paste a value, it'll paste in all those cells").
+    const copyRange = () => {
+      if (!rangeRowSet || !rangeColSet) return;
+      const rowsInOrder = sortedRowIndices.filter((ri) => rangeRowSet.has(ri));
+      const colsInOrder = order.filter((ci) => rangeColSet.has(ci));
+      const text = rowsInOrder
+        .map((ri) =>
+          colsInOrder.map((ci) => effectiveValue(ri, ci) ?? "").join(rowCopyDelimiter),
+        )
+        .join("\n");
+      void copyToClipboard(text).then(showCopyStatus);
+    };
+    const pasteRange = () => {
+      if (!editable || !rangeRowSet || !rangeColSet) return;
+      const fillWith = (value: string | null) => {
+        for (const ri of rangeRowSet) {
+          for (const ci of rangeColSet) {
+            setCellEdit(tab.id, ri, ci, value);
+          }
+        }
+      };
+      readClipboard()
+        .then((text) => {
+          fillWith(cellClipboard && cellClipboard.text === text ? cellClipboard.value : text);
+        })
+        .catch(() => {
+          // Backend clipboard read unavailable — fall back to whatever we
+          // last copied in-app.
+          if (cellClipboard) fillWith(cellClipboard.value);
+        });
+    };
 
     const rowValues = (sel: RowSelection): Array<string | null> =>
       sel.kind === "new"
@@ -1013,6 +1316,14 @@ function ResultsGrid({
       const isPaste = e.key === "v" || e.key === "V";
       if (!isCopy && !isPaste) return;
 
+      // A drag-range takes precedence over a lingering row or cell selection
+      // — same reasoning as rowSel below, just one selection mode further.
+      if (range) {
+        e.preventDefault();
+        if (isCopy) copyRange();
+        else pasteRange();
+        return;
+      }
       // Whole-row selection takes precedence over a lingering cell selection.
       if (rowSel.length > 0) {
         // preventDefault so the browser's own ⌘C doesn't fire a second copy
@@ -1054,6 +1365,11 @@ function ResultsGrid({
   }, [
     selected,
     rowSel,
+    range,
+    rangeRowSet,
+    rangeColSet,
+    sortedRowIndices,
+    order,
     result,
     tab.pendingEdits,
     tab.newRows,
@@ -1700,6 +2016,14 @@ function ResultsGrid({
     });
   };
   const handleRemoveRow = () => {
+    // A drag-range stands in for a row selection here too — every row it
+    // spans, regardless of which columns were dragged across, same as
+    // clicking those rows' gutters would have selected.
+    if (range && rangeRowSet && rangeRowSet.size > 0) {
+      void deleteExistingRows(tab.id, Array.from(rangeRowSet));
+      setRange(null);
+      return;
+    }
     if (rowSel.length === 0) return;
     // Discard any selected draft rows locally (highest index first so earlier
     // ones don't shift), then delete the selected existing rows with one confirm.
@@ -1931,7 +2255,9 @@ function ResultsGrid({
                 (numericCols[colIndex] ? " grid__cell--num" : "") +
                 (drag ? " grid__hcell--sliding" : "") +
                 (drag && drag.fromPos === pos ? " grid__hcell--dragging" : "") +
-                (selected?.col === colIndex ? " grid__hcell--active" : "")
+                (selected?.col === colIndex || rangeColSet?.has(colIndex)
+                  ? " grid__hcell--active"
+                  : "")
               }
               style={headerStyle(pos)}
               onMouseDown={onHeaderMouseDown(pos, colIndex)}
@@ -1987,6 +2313,9 @@ function ResultsGrid({
               isRowActive={selected?.r === r}
               selectedCol={selectedColGlobal}
               isRowGutterSelected={isRowSelected("existing", r)}
+              isRowInRange={rangeRowSet?.has(r) ?? false}
+              rangeColSet={rangeColSet}
+              rangeEdge={rangeEdge}
               editingCell={
                 !editing?.isNew && editing?.r === r
                   ? { col: editing.col, draft: editing.draft }
@@ -1997,6 +2326,7 @@ function ResultsGrid({
               activeMatchCol={activeMatch?.r === r ? activeMatch.col : null}
               onGutterClick={onExistingGutterClick}
               onCellClick={onCellClick}
+              onCellMouseDown={onCellMouseDown}
               onCellDoubleClick={onCellDoubleClick}
               onCellContextMenu={onCellContextMenu}
               onEditDraftChange={onEditDraftChange}
@@ -2024,6 +2354,7 @@ function ResultsGrid({
               }
               onGutterClick={onNewGutterClick}
               onNewCellClick={onNewCellClick}
+              onNewCellContextMenu={onNewCellContextMenu}
               onEditDraftChange={onEditDraftChange}
               onEditCommit={onEditCommit}
               onEditCancel={onEditCancel}
@@ -2039,39 +2370,76 @@ function ResultsGrid({
           const draftEdit = tab.pendingEdits?.[fkMenu.r]?.[col];
           const isDirty = draftEdit !== undefined;
           const value = isDirty ? draftEdit : original;
+          // A multi-row range on this exact column, preserved by
+          // `onCellContextMenu` specifically so the jump-to items below can
+          // filter on every id in the selection instead of just this row's.
+          const inMultiRange =
+            (rangeColSet?.has(col) ?? false) && (rangeRowSet?.size ?? 0) > 1;
+          // Every distinct non-null value this column holds across the
+          // range's rows (pending edits included) — outside range mode this
+          // is just this one cell's own value.
+          const rangeValues = inMultiRange
+            ? Array.from(
+                new Set(
+                  Array.from(rangeRowSet!)
+                    .map((ri) => {
+                      const draft = tab.pendingEdits?.[ri]?.[col];
+                      return draft !== undefined ? draft : (result.rows[ri]?.[col] ?? null);
+                    })
+                    .filter((v): v is string => v !== null),
+                ),
+              )
+            : value !== null
+              ? [value]
+              : [];
           const hasFk =
             !!nav &&
-            value !== null &&
+            rangeValues.length > 0 &&
             (nav.references.length > 0 || nav.referencedBy.length > 0);
+          // The single-cell editing actions below all act on just
+          // `fkMenu.r` — showing them alongside "jump using all N ids" would
+          // read as if they applied to the whole selection too, so they're
+          // hidden for the duration of a multi-range jump menu instead.
           const canSetNull =
             editable &&
+            !inMultiRange &&
             !pkColIndices.has(col) &&
             nullableColIndices.has(col) &&
             value !== null;
+          const canGenerateUuid = editable && !inMultiRange && uuidColIndices.has(col);
+          // Range-scoped counterpart: a *fresh* uuid per row, not one value
+          // broadcast to all of them (that's what Cmd/Ctrl+V paste-fill is
+          // for, and would collide immediately on anything unique).
+          const canGenerateUuidRange = editable && inMultiRange && uuidColIndices.has(col);
           // "Expand cell" always applies, so — unlike before this existed —
           // there's no longer a case where right-clicking a plain cell has
           // nothing to show.
 
-          const literal = (value ?? "").replace(/'/g, "''");
           const openRef = (ref: ForeignKeyRef) => {
             setFkMenu(null);
+            if (inMultiRange) setRange(null);
             // Double-quote the column name: it's machine-generated from the
             // schema, not user-typed, and mixed-case identifiers (e.g. from a
             // TypeORM/Prisma-created table) fold to lowercase and stop
             // matching if left bare — Postgres then reports the column as
             // not existing.
-            const col = ref.column.replace(/"/g, '""');
-            void openTableWithFilter(
-              ref.schema,
-              ref.table,
-              `"${col}" = '${literal}'`,
-            );
+            const refCol = ref.column.replace(/"/g, '""');
+            const literals = rangeValues.map((v) => `'${v.replace(/'/g, "''")}'`);
+            const whereClause =
+              literals.length === 1
+                ? `"${refCol}" = ${literals[0]}`
+                : `"${refCol}" IN (${literals.join(", ")})`;
+            void openTableWithFilter(ref.schema, ref.table, whereClause);
           };
           const item = (ref: ForeignKeyRef, key: string) => (
             <button
               key={key}
               className="context-menu__item context-menu__item--fk"
-              title={`${ref.schema}.${ref.table}.${ref.column}`}
+              title={
+                rangeValues.length > 1
+                  ? `${ref.schema}.${ref.table}.${ref.column} — ${rangeValues.length} ids`
+                  : `${ref.schema}.${ref.table}.${ref.column}`
+              }
               onClick={() => openRef(ref)}
             >
               <span className="context-menu__fk-name">{ref.table}</span>
@@ -2114,7 +2482,13 @@ function ResultsGrid({
               >
                 Expand cell
               </button>
-              {(hasFk || canSetNull || isDirty) && <div className="context-menu__sep" />}
+              {(hasFk ||
+                canGenerateUuid ||
+                canGenerateUuidRange ||
+                canSetNull ||
+                (isDirty && !inMultiRange)) && (
+                <div className="context-menu__sep" />
+              )}
               {hasFk && showFkSearch && (
                 <div className="context-menu__search">
                   <input
@@ -2139,22 +2513,65 @@ function ResultsGrid({
               )}
               {hasFk && filteredReferences.length > 0 && (
                 <>
-                  <div className="context-menu__label">Jump to referenced row</div>
+                  <div className="context-menu__label">
+                    {rangeValues.length > 1
+                      ? `Jump to referenced rows (${rangeValues.length} ids)`
+                      : "Jump to referenced row"}
+                  </div>
                   {filteredReferences.map((ref, i) => item(ref, `out-${i}`))}
                 </>
               )}
               {hasFk && filteredReferencedBy.length > 0 && (
                 <>
-                  <div className="context-menu__label">Rows referencing this</div>
+                  <div className="context-menu__label">
+                    {rangeValues.length > 1
+                      ? `Rows referencing these (${rangeValues.length} ids)`
+                      : "Rows referencing this"}
+                  </div>
                   {filteredReferencedBy.map((ref, i) => item(ref, `in-${i}`))}
                 </>
               )}
               {fkNoMatches && (
                 <div className="context-menu__empty">No matching tables.</div>
               )}
-              {canSetNull && (
+              {canGenerateUuid && (
                 <>
                   {hasFk && <div className="context-menu__sep" />}
+                  <button
+                    className="context-menu__item"
+                    onClick={() => {
+                      setFkMenu(null);
+                      setCellEdit(tab.id, fkMenu.r, col, crypto.randomUUID());
+                    }}
+                  >
+                    Generate random <span className="mono">UUID</span>
+                  </button>
+                </>
+              )}
+              {canGenerateUuidRange && (
+                <>
+                  {hasFk && <div className="context-menu__sep" />}
+                  <button
+                    className="context-menu__item"
+                    onClick={() => {
+                      setFkMenu(null);
+                      // A fresh uuid per row — not the same value broadcast
+                      // to all of them, which is what Cmd/Ctrl+V paste-fill
+                      // already does and would collide immediately on
+                      // anything unique (e.g. a primary key).
+                      for (const ri of rangeRowSet!) {
+                        setCellEdit(tab.id, ri, col, crypto.randomUUID());
+                      }
+                    }}
+                  >
+                    Generate random <span className="mono">UUID</span>s for{" "}
+                    {rangeRowSet!.size} rows
+                  </button>
+                </>
+              )}
+              {canSetNull && (
+                <>
+                  {(hasFk || canGenerateUuid) && <div className="context-menu__sep" />}
                   <button
                     className="context-menu__item"
                     onClick={() => {
@@ -2166,9 +2583,9 @@ function ResultsGrid({
                   </button>
                 </>
               )}
-              {isDirty && (
+              {isDirty && !inMultiRange && (
                 <>
-                  {(hasFk || canSetNull) && <div className="context-menu__sep" />}
+                  {(hasFk || canGenerateUuid || canSetNull) && <div className="context-menu__sep" />}
                   <button
                     className="context-menu__item"
                     onClick={() => {
@@ -2179,6 +2596,59 @@ function ResultsGrid({
                     }}
                   >
                     Revert to original
+                  </button>
+                </>
+              )}
+            </div>
+          );
+        })()}
+
+      {newCellMenu &&
+        (() => {
+          const { ni, col } = newCellMenu;
+          const value = tab.newRows?.[ni]?.[col] ?? null;
+          // A blank draft cell already means "use the column default" — see
+          // `commitEdits` in store.ts, whose insert-building loop omits any
+          // `null` cell from the `INSERT` entirely rather than sending it as
+          // a literal NULL. So "Set to NULL" here really means "clear back
+          // to that omitted/default state". For the common case — nullable,
+          // no default — that's indistinguishable from a real NULL; for a
+          // nullable column that also has a non-NULL default, this applies
+          // the default rather than forcing NULL, since the frontend has no
+          // way to tell those two apart today (the schema fetch doesn't
+          // carry default expressions).
+          const canSetNull =
+            editable && !pkColIndices.has(col) && nullableColIndices.has(col) && value !== null;
+          const canGenerateUuid = editable && uuidColIndices.has(col);
+          if (!canSetNull && !canGenerateUuid) return null;
+          return (
+            <div
+              className="context-menu"
+              style={fkMenuStyle(newCellMenu.x, newCellMenu.y)}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {canGenerateUuid && (
+                <button
+                  className="context-menu__item"
+                  onClick={() => {
+                    setNewCellMenu(null);
+                    setNewCellEdit(tab.id, ni, col, crypto.randomUUID());
+                  }}
+                >
+                  Generate random <span className="mono">UUID</span>
+                </button>
+              )}
+              {canSetNull && (
+                <>
+                  {canGenerateUuid && <div className="context-menu__sep" />}
+                  <button
+                    className="context-menu__item"
+                    onClick={() => {
+                      setNewCellMenu(null);
+                      setNewCellEdit(tab.id, ni, col, null);
+                    }}
+                  >
+                    Set to <span className="mono">NULL</span>
                   </button>
                 </>
               )}
@@ -2256,15 +2726,22 @@ function ResultsGrid({
             />
             <button
               className="table-toolbar__btn table-toolbar__btn--danger"
-              disabled={rowSel.length === 0}
+              disabled={rowSel.length === 0 && !rangeRowSet?.size}
               onClick={handleRemoveRow}
               title={
-                rowSel.length > 0
-                  ? `Remove the selected row${rowSel.length > 1 ? "s" : ""}`
-                  : "Select a row (click its number) to remove it"
+                rangeRowSet?.size
+                  ? `Remove the ${rangeRowSet.size} dragged-over row${rangeRowSet.size > 1 ? "s" : ""}`
+                  : rowSel.length > 0
+                    ? `Remove the selected row${rowSel.length > 1 ? "s" : ""}`
+                    : "Select a row (click its number), or drag across cells, to remove it"
               }
             >
-              － Remove {rowSel.length > 1 ? `${rowSel.length} rows` : "row"}
+              － Remove{" "}
+              {rangeRowSet?.size
+                ? `${rangeRowSet.size} row${rangeRowSet.size > 1 ? "s" : ""}`
+                : rowSel.length > 1
+                  ? `${rowSel.length} rows`
+                  : "row"}
             </button>
           </div>
         )}
@@ -2376,6 +2853,12 @@ interface GridCellProps {
    *  `memo()`: a click changes this for every row, but only the ~2 columns
    *  (old + new selected) actually need to re-render, not all of them. */
   isColActive: boolean;
+  /** Inside the active range (row *and* column both fall within it). */
+  isInRange: boolean;
+  /** Which sides of the range rectangle this cell sits on — any of `t`/`b`/
+   *  `l`/`r`, empty for an interior cell or one outside the range. Only the
+   *  outer edges paint a border, so the block reads as one outline. */
+  rangeEdges: string;
   isPk: boolean;
   isFk: boolean;
   nav: ColNav | undefined;
@@ -2390,7 +2873,8 @@ interface GridCellProps {
   findOpen: boolean;
   findQuery: string;
   isActiveFindMatch: boolean;
-  onCellClick: (r: number, col: number) => void;
+  onCellClick: (e: React.MouseEvent, r: number, col: number) => void;
+  onCellMouseDown: (e: React.MouseEvent, r: number, col: number) => void;
   onCellDoubleClick: (r: number, col: number, currentValue: string | null) => void;
   onCellContextMenu: (e: React.MouseEvent, r: number, col: number) => void;
   onEditDraftChange: (r: number, col: number, draft: string, isNew?: boolean) => void;
@@ -2410,6 +2894,8 @@ const GridCell = memo(function GridCell({
   isDirty,
   isSelected,
   isColActive,
+  isInRange,
+  rangeEdges,
   isPk,
   isFk,
   nav,
@@ -2423,6 +2909,7 @@ const GridCell = memo(function GridCell({
   findQuery,
   isActiveFindMatch,
   onCellClick,
+  onCellMouseDown,
   onCellDoubleClick,
   onCellContextMenu,
   onEditDraftChange,
@@ -2471,6 +2958,11 @@ const GridCell = memo(function GridCell({
         (value === null ? " grid__cell--null" : "") +
         (isColActive ? " grid__cell--col-active" : "") +
         (isSelected ? " grid__cell--selected" : "") +
+        (isInRange ? " grid__cell--range" : "") +
+        (rangeEdges.includes("t") ? " grid__cell--range-t" : "") +
+        (rangeEdges.includes("b") ? " grid__cell--range-b" : "") +
+        (rangeEdges.includes("l") ? " grid__cell--range-l" : "") +
+        (rangeEdges.includes("r") ? " grid__cell--range-r" : "") +
         (isFk ? " grid__cell--fk" : "") +
         (isDirty ? " grid__cell--dirty" : "") +
         (isPk && editable ? " grid__cell--pk" : "")
@@ -2482,7 +2974,8 @@ const GridCell = memo(function GridCell({
             ? "Primary key — double-click to edit (changes the row's key)"
             : displayValue ?? "NULL"
       }
-      onClick={() => onCellClick(r, colIndex)}
+      onMouseDown={(e) => onCellMouseDown(e, r, colIndex)}
+      onClick={(e) => onCellClick(e, r, colIndex)}
       onDoubleClick={() => {
         if (!editable) return;
         onCellDoubleClick(r, colIndex, value);
@@ -2524,12 +3017,29 @@ interface GridRowProps {
   isRowActive: boolean;
   selectedCol: number | null;
   isRowGutterSelected: boolean;
+  /** This row falls within the active range — the whole row gets the same
+   *  tint a gutter selection gets (every row in the range is what Remove
+   *  deletes), while the accent *outline* is drawn only around the spanned
+   *  cells, per `rangeColSet`/`rangeEdge` below. */
+  isRowInRange: boolean;
+  /** Columns the active range spans — same `Set` reference for every row, so
+   *  only `isRowInRange` varies between rows. `null` when there's no range. */
+  rangeColSet: Set<number> | null;
+  /** The range rectangle's outer row/column indices, so each cell can draw
+   *  just the border sides it sits on. `null` when there's no range. */
+  rangeEdge: {
+    topRow: number;
+    bottomRow: number;
+    leftCol: number;
+    rightCol: number;
+  } | null;
   editingCell: { col: number; draft: string } | null;
   findOpen: boolean;
   findQuery: string;
   activeMatchCol: number | null;
   onGutterClick: (e: React.MouseEvent, r: number) => void;
-  onCellClick: (r: number, col: number) => void;
+  onCellClick: (e: React.MouseEvent, r: number, col: number) => void;
+  onCellMouseDown: (e: React.MouseEvent, r: number, col: number) => void;
   onCellDoubleClick: (r: number, col: number, currentValue: string | null) => void;
   onCellContextMenu: (e: React.MouseEvent, r: number, col: number) => void;
   onEditDraftChange: (r: number, col: number, draft: string, isNew?: boolean) => void;
@@ -2567,12 +3077,16 @@ const GridRow = memo(function GridRow({
   isRowActive,
   selectedCol,
   isRowGutterSelected,
+  isRowInRange,
+  rangeColSet,
+  rangeEdge,
   editingCell,
   findOpen,
   findQuery,
   activeMatchCol,
   onGutterClick,
   onCellClick,
+  onCellMouseDown,
   onCellDoubleClick,
   onCellContextMenu,
   onEditDraftChange,
@@ -2596,13 +3110,14 @@ const GridRow = memo(function GridRow({
         (displayPos % 2 === 1 ? " grid__row--zebra" : "") +
         (isRowActive ? " grid__row--active" : "") +
         (isRowGutterSelected ? " grid__row--rowsel" : "") +
+        (isRowInRange ? " grid__row--rangesel" : "") +
         (rowDirty ? " grid__row--dirty" : "")
       }
       style={style}
     >
       <div
         className="grid__gutter"
-        title="Click to select the row · Shift-click for a range · ⌘/Ctrl-click to add · ⌘C copies, ⌘V pastes/duplicates"
+        title="Click to select the row · Shift-click for a range · ⌘/Ctrl-click to add · ⌘C copies, ⌘V pastes/duplicates · drag across cells to select a block"
         onClick={(e) => onGutterClick(e, r)}
       >
         {displayPos + 1}
@@ -2627,6 +3142,19 @@ const GridRow = memo(function GridRow({
         // by the caller: `editingCell` is only non-null here for a
         // non-draft edit — see the `<GridRow>` call site.)
         const isEditing = editingCell !== null && editingCell.col === colIndex;
+        // Which sides of the range rectangle this cell sits on, as a short
+        // class-suffix string ("" for an interior cell) — see the
+        // `.grid__cell--range-*` rules in workspace.css. A plain string
+        // rather than an object so it stays comparable by value across
+        // `GridCell`'s `memo()`.
+        const inRange = isRowInRange && (rangeColSet?.has(colIndex) ?? false);
+        const rangeEdges =
+          inRange && rangeEdge
+            ? (r === rangeEdge.topRow ? "t" : "") +
+              (r === rangeEdge.bottomRow ? "b" : "") +
+              (colIndex === rangeEdge.leftCol ? "l" : "") +
+              (colIndex === rangeEdge.rightCol ? "r" : "")
+            : "";
         return (
           <GridCell
             key={colIndex}
@@ -2635,7 +3163,12 @@ const GridRow = memo(function GridRow({
             value={value}
             isDirty={isDirty}
             isSelected={isRowActive && selectedCol === colIndex}
-            isColActive={selectedCol === colIndex}
+            // A range tints its own columns the same way a single selected
+            // cell tints its column — the "crosshair" reading stays the
+            // same, there are just several columns lit instead of one.
+            isColActive={selectedCol === colIndex || (rangeColSet?.has(colIndex) ?? false)}
+            isInRange={inRange}
+            rangeEdges={rangeEdges}
             isPk={isPk}
             isFk={isFk}
             nav={nav}
@@ -2649,6 +3182,7 @@ const GridRow = memo(function GridRow({
             findQuery={findQuery}
             isActiveFindMatch={activeMatchCol === colIndex}
             onCellClick={onCellClick}
+            onCellMouseDown={onCellMouseDown}
             onCellDoubleClick={onCellDoubleClick}
             onCellContextMenu={onCellContextMenu}
             onEditDraftChange={onEditDraftChange}
@@ -2673,6 +3207,7 @@ interface GridNewRowProps {
   editingCell: { col: number; draft: string } | null;
   onGutterClick: (e: React.MouseEvent, ni: number) => void;
   onNewCellClick: (ni: number, col: number, currentValue: string | null) => void;
+  onNewCellContextMenu: (e: React.MouseEvent, ni: number, col: number) => void;
   onEditDraftChange: (r: number, col: number, draft: string, isNew?: boolean) => void;
   onEditCommit: (r: number, col: number, draft: string, isNew?: boolean) => void;
   onEditCancel: () => void;
@@ -2694,6 +3229,7 @@ const GridNewRow = memo(function GridNewRow({
   editingCell,
   onGutterClick,
   onNewCellClick,
+  onNewCellContextMenu,
   onEditDraftChange,
   onEditCommit,
   onEditCancel,
@@ -2755,6 +3291,7 @@ const GridNewRow = memo(function GridNewRow({
             // A single click on a draft cell starts editing right away — no
             // double-click needed. (Select the whole row via its gutter.)
             onClick={() => onNewCellClick(ni, colIndex, value)}
+            onContextMenu={(e) => onNewCellContextMenu(e, ni, colIndex)}
           >
             <span className="grid__cell-text">{value === null ? "default" : value}</span>
           </div>

@@ -1944,6 +1944,35 @@ export function cubbyTableRefs(cubby: Cubby): { schema: string; table: string }[
   return out;
 }
 
+/** The cubby entry a tab stands for, or `null` when it has nothing stable to
+ *  point at — an ad-hoc query tab that was never saved has no id for a
+ *  cubby entry to survive against, so it has to be saved first. Shared by
+ *  the tab strip's right-click menu and the "add active tab to cubby"
+ *  keyboard shortcut, so the two agree on exactly what's addable. */
+export function tabCubbyEntry(tab: QueryTab): CubbyEntry | null {
+  switch (tab.kind) {
+    case "table":
+      return tab.source ? { kind: "table", ...tab.source } : null;
+    case "structure":
+      return tab.source ? { kind: "structure", ...tab.source } : null;
+    case "function":
+      return tab.objectRef
+        ? {
+            kind: "function",
+            schema: tab.objectRef.schema,
+            name: tab.objectRef.name,
+            oid: tab.objectRef.oid ?? null,
+          }
+        : null;
+    case "sequence":
+      return tab.objectRef
+        ? { kind: "sequence", schema: tab.objectRef.schema, name: tab.objectRef.name }
+        : null;
+    case "query":
+      return tab.savedQueryId ? { kind: "savedQuery", savedQueryId: tab.savedQueryId } : null;
+  }
+}
+
 function findTabOwner(
   connections: Record<string, ConnectionSlot>,
   tabId: string,
