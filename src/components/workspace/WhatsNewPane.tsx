@@ -67,27 +67,12 @@ function formatDate(iso: string): string {
 /** A version's feature-area sections, straight from `RELEASE_NOTES` — the
  *  heading *is* the category (e.g. "Cubbies", "Fixes"), authored per
  *  release rather than bucketed into a fixed new/improved/fixed taxonomy. */
-function VersionSections({
-  sections,
-  compact,
-}: {
-  sections: ReleaseNotesSection[];
-  compact?: boolean;
-}) {
+function VersionSections({ sections }: { sections: ReleaseNotesSection[] }) {
   return (
     <>
       {sections.map((section) => (
-        <section
-          key={section.heading}
-          className={compact ? "whatsnew-history-group" : "structure__section"}
-        >
-          <div
-            className={
-              compact ? "whatsnew-history-group__title caption" : "structure__section-title caption"
-            }
-          >
-            {section.heading}
-          </div>
+        <section key={section.heading} className="structure__section">
+          <div className="structure__section-title caption">{section.heading}</div>
           <ul className="whatsnew-list">
             {section.items.map((item, i) => (
               <li key={i}>{item}</li>
@@ -99,30 +84,16 @@ function VersionSections({
   );
 }
 
-function HistoryEntry({ entry }: { entry: ReleaseNotesEntry }) {
-  return (
-    <details className="whatsnew-history-entry">
-      <summary className="whatsnew-history-entry__summary">
-        <span className="whatsnew-history-entry__version">CubbyDB {entry.version}</span>
-        <span className="whatsnew-history-entry__date">{formatDate(entry.date)}</span>
-      </summary>
-      <div className="whatsnew-history-entry__body">
-        <VersionSections sections={entry.sections} compact />
-      </div>
-    </details>
-  );
-}
-
 /**
- * The "What's New" tab's content — the latest `RELEASE_NOTES` entry in
- * full, with every earlier version collapsed into a disclosure list below
- * it. Shows the full history rather than just the entry that triggered it,
- * since there's only ever one of these tabs open at a time — closing it and
- * reopening it (there's no dedicated command for that yet) shouldn't lose
- * older entries.
+ * The "What's New" tab's content — just the latest `RELEASE_NOTES` entry,
+ * not a browsable history. Deliberate: `RELEASE_NOTES` accumulates forever
+ * (every release adds an entry, none get removed — see that file's own
+ * maintenance note), so a "past releases" list here would eventually be
+ * hundreds of entries deep. This tab is the one-time "here's what's new"
+ * moment after an update, not a changelog archive.
  */
 export function WhatsNewPane() {
-  const [latest, ...older] = RELEASE_NOTES;
+  const latest = RELEASE_NOTES[0];
   if (!latest) return null;
 
   return (
@@ -134,15 +105,6 @@ export function WhatsNewPane() {
         </div>
 
         <VersionSections sections={latest.sections} />
-
-        {older.length > 0 && (
-          <div className="whatsnew__history">
-            <div className="whatsnew__history-title caption">Earlier releases</div>
-            {older.map((entry) => (
-              <HistoryEntry key={entry.version} entry={entry} />
-            ))}
-          </div>
-        )}
       </div>
     </div>
   );

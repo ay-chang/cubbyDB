@@ -3379,12 +3379,9 @@
   font-size: 11.5px;
   color: var(--text-faint);
 }
-/* Per-version content is grouped into New/Improved/Fixed sections (see
-   `groupByTag`) using the same section/heading/list shape every other pane
-   in this file already uses — `.structure__section` for the latest version,
-   the more compact `.whatsnew-history-group` variant inside a collapsed
-   older one. What kind of change an item is now lives entirely in which
-   section it's under, not a per-item badge repeating the same thing. */
+/* Per-version content is grouped into feature-area sections (see
+   `RELEASE_NOTES`'s `sections`), using the same section/heading/list shape
+   every other pane in this file already uses. */
 .whatsnew-list {
   display: flex;
   flex-direction: column;
@@ -3397,69 +3394,6 @@
 }
 .whatsnew-list li {
   padding-left: 2px;
-}
-.whatsnew__history {
-  margin-top: 10px;
-  padding-top: 18px;
-  border-top: 1px solid var(--border-faint);
-}
-.whatsnew__history-title {
-  margin-bottom: 10px;
-}
-.whatsnew-history-entry {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-control);
-  margin-bottom: 8px;
-  overflow: hidden;
-}
-.whatsnew-history-entry:last-child {
-  margin-bottom: 0;
-}
-.whatsnew-history-entry__summary {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 10px 12px;
-  cursor: pointer;
-  font-size: 12.5px;
-  /* Both engines' default disclosure marker, replaced by the `::before`
-     triangle below so it can flip on `[open]` the same way the schema
-     tree's own expand/collapse chevron does (see `.tree__chevron`). */
-  list-style: none;
-}
-.whatsnew-history-entry__summary::-webkit-details-marker {
-  display: none;
-}
-.whatsnew-history-entry__summary::before {
-  content: "▶";
-  flex: none;
-  width: 14px;
-  font-size: 9px;
-  color: var(--text-faint);
-}
-.whatsnew-history-entry[open] .whatsnew-history-entry__summary::before {
-  content: "▼";
-}
-.whatsnew-history-entry[open] .whatsnew-history-entry__summary {
-  border-bottom: 1px solid var(--border-faint);
-}
-.whatsnew-history-entry__version {
-  font-weight: 600;
-  color: var(--text);
-}
-.whatsnew-history-entry__date {
-  font-size: 11px;
-  color: var(--text-faint);
-}
-.whatsnew-history-entry__body {
-  padding: 12px;
-}
-.whatsnew-history-group + .whatsnew-history-group {
-  margin-top: 14px;
-}
-.whatsnew-history-group__title {
-  margin-bottom: 6px;
 }
 .structure-kv {
   border: 1px solid var(--border);

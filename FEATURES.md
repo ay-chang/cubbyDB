@@ -577,17 +577,21 @@ code comments or AGENTS.md's architecture section.
   Windows-code-signed
 - **What's new**: the first launch of a build whose version has a
   `src/lib/releaseNotes.ts` entry auto-opens a read-only "What's New" tab
-  with that entry (and every earlier one, newest first) — VS Code's
+  with just that entry, grouped into feature-area sections — VS Code's
   post-update Release Notes tab, not a changelog you have to go looking for.
-  Tracked by version in `localStorage`, entirely independent of the updater
-  above (covers a manually-downloaded install same as an in-app update).
-  Silent on the very first launch ever and on any version with no matching
-  entry — nothing to show a brand-new user, and no way to tell that apart
-  from an existing user upgrading past the point this feature was
-  introduced, so both just start tracking from here forward without
-  interrupting the current launch. Tabs are per-connection in this app, so
-  the check runs (and the tab opens into) the active connection once one
-  exists, rather than at the very first splash screen
+  Deliberately not a browsable history of every past release — `RELEASE_NOTES`
+  accumulates over time and would eventually run to hundreds of entries, so
+  only the latest is ever shown; older ones are effectively just a written
+  record (git history already covers that). Tracked by version in
+  `localStorage`, entirely independent of the updater above (covers a
+  manually-downloaded install same as an in-app update). Silent on the very
+  first launch ever and on any version with no matching entry — nothing to
+  show a brand-new user, and no way to tell that apart from an existing user
+  upgrading past the point this feature was introduced, so both just start
+  tracking from here forward without interrupting the current launch. Tabs
+  are per-connection in this app, so the check runs (and the tab opens into)
+  the active connection once one exists, rather than at the very first
+  splash screen
 
 ## Settings
 

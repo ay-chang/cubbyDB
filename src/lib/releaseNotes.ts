@@ -3,11 +3,17 @@
  * "What's New" tab (`WhatsNewPane`/`WhatsNewTrigger`) the first time a
  * build with a new entry launches.
  *
+ * `WhatsNewPane` only ever renders `RELEASE_NOTES[0]` — this is a one-time
+ * "here's what's new" moment after an update, not a browsable changelog
+ * archive, so there's nowhere older entries are ever shown. Keep past
+ * entries around below it if you want a written record in this file, or
+ * don't — `git log` already is one, and nothing here depends on it.
+ *
  * Maintenance: when cutting a release, add a new entry at the *top* of
- * `RELEASE_NOTES` (newest first) with that version's real, user-facing
- * changes — short, plain-language sentences, not commit messages or
- * implementation detail. The version string must exactly match what
- * `getVersion()` (Tauri) resolves to for that build, i.e. `package.json` /
+ * `RELEASE_NOTES` with that version's real, user-facing changes — short,
+ * plain-language sentences, not commit messages or implementation detail.
+ * The version string must exactly match what `getVersion()` (Tauri)
+ * resolves to for that build, i.e. `package.json` /
  * `src-tauri/tauri.conf.json`'s `version` field, or the entry will never be
  * shown. Group changes into `sections` by feature area (however many make
  * sense for that release — there's no fixed list), not by change type
