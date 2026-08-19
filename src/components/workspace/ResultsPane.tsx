@@ -721,6 +721,9 @@ function ResultsGrid({
   // tables, so typing narrows it rather than requiring a scroll-and-scan.
   const [fkQuery, setFkQuery] = useState("");
   const fkQueryRef = useRef<HTMLInputElement>(null);
+  // Index into `fkMenuData.items` (below) the keyboard's ArrowUp/ArrowDown
+  // currently points at — Enter jumps to whichever table this lands on.
+  const [fkMenuSelected, setFkMenuSelected] = useState(0);
   // Right-click menu for a not-yet-inserted draft cell — simpler than
   // `fkMenu`: a new row has no FK nav (nothing points at a row that doesn't
   // exist yet) and no "original" value to revert to, just "Set to NULL" /
@@ -1064,15 +1067,16 @@ function ResultsGrid({
       // Right-clicking a cell in the column an active multi-row range spans
       // keeps that range alive instead of collapsing it to this one cell —
       // the menu below reads `range`/`rangeColSet` directly to offer
-      // range-scoped actions (FK jump using every id, generate a fresh UUID
-      // per row) instead of ones scoped to just this cell. Only worth
-      // preserving when this column actually has one of those available;
-      // otherwise it's a plain single-cell right-click exactly as before,
-      // range and all.
+      // range-scoped actions (FK jump using every id, a fresh UUID per row,
+      // set every spanned cell to NULL) instead of ones scoped to just this
+      // cell. Only worth preserving when this column actually has one of
+      // those available; otherwise it's a plain single-cell right-click
+      // exactly as before, range and all.
       const nav = navByColumn?.[col];
       const hasRangeAction =
         (!!nav && (nav.references.length > 0 || nav.referencedBy.length > 0)) ||
-        uuidColIndices.has(col);
+        uuidColIndices.has(col) ||
+        (editable && !pkColIndices.has(col) && nullableColIndices.has(col));
       const isMultiColRange =
         hasRangeAction &&
         (rangeColSet?.has(col) ?? false) &&
@@ -1084,7 +1088,7 @@ function ResultsGrid({
       cellAnchorRef.current = { r, col };
       setRange(null);
     },
-    [navByColumn, rangeColSet, rangeRowSet, uuidColIndices],
+    [navByColumn, rangeColSet, rangeRowSet, uuidColIndices, editable, pkColIndices, nullableColIndices],
   );
   const onNewCellClick = useCallback((ni: number, col: number, currentValue: string | null) => {
     setEditing({ r: ni, col, draft: currentValue ?? "", isNew: true });
@@ -1180,6 +1184,118 @@ function ResultsGrid({
       window.removeEventListener("resize", close);
     };
   }, [fkMenu]);
+  // Everything the open FK menu needs to render *and* to navigate by
+  // keyboard, computed once here rather than inline in the render below —
+  // the keyboard-nav effect right after this needs the exact same filtered,
+  // ordered list `openFkRef` acts on, and duplicating the computation in two
+  // places would risk them silently drifting apart (e.g. Enter jumping to a
+  // different table than the one visibly highlighted).
+  const fkMenuData = useMemo(() => {
+    if (!fkMenu) return null;
+    const col = fkMenu.col;
+    const nav = navByColumn?.[col];
+    const original = result.rows[fkMenu.r]?.[col] ?? null;
+    const draftEdit = tab.pendingEdits?.[fkMenu.r]?.[col];
+    const isDirty = draftEdit !== undefined;
+    const value = isDirty ? draftEdit : original;
+    // A multi-row range on this exact column, preserved by
+    // `onCellContextMenu` specifically so the jump-to items can filter on
+    // every id in the selection instead of just this row's.
+    const inMultiRange =
+      (rangeColSet?.has(col) ?? false) && (rangeRowSet?.size ?? 0) > 1;
+    // Every distinct non-null value this column holds across the range's
+    // rows (pending edits included) — outside range mode this is just this
+    // one cell's own value.
+    const rangeValues = inMultiRange
+      ? Array.from(
+          new Set(
+            Array.from(rangeRowSet!)
+              .map((ri) => {
+                const draft = tab.pendingEdits?.[ri]?.[col];
+                return draft !== undefined ? draft : (result.rows[ri]?.[col] ?? null);
+              })
+              .filter((v): v is string => v !== null),
+          ),
+        )
+      : value !== null
+        ? [value]
+        : [];
+    const hasFk =
+      !!nav && rangeValues.length > 0 && (nav.references.length > 0 || nav.referencedBy.length > 0);
+    const q = fkQuery.trim().toLowerCase();
+    const matchesQuery = (ref: ForeignKeyRef) =>
+      !q || ref.table.toLowerCase().includes(q) || ref.schema.toLowerCase().includes(q);
+    const filteredReferences = hasFk ? nav!.references.filter(matchesQuery) : [];
+    const filteredReferencedBy = hasFk ? nav!.referencedBy.filter(matchesQuery) : [];
+    // References then referenced-by, flattened into one list — what
+    // ArrowUp/ArrowDown actually move through, so the two sections read as
+    // a single continuous list rather than each having its own cursor.
+    const items = [...filteredReferences, ...filteredReferencedBy];
+    return {
+      col,
+      nav,
+      original,
+      isDirty,
+      value,
+      inMultiRange,
+      rangeValues,
+      hasFk,
+      filteredReferences,
+      filteredReferencedBy,
+      items,
+    };
+  }, [fkMenu, fkQuery, navByColumn, result, tab.pendingEdits, rangeColSet, rangeRowSet]);
+  // Jump to a referenced/referencing table, filtered on every id `rangeValues`
+  // collected (just the one cell's value outside range mode). Shared by the
+  // render below and the keyboard-nav effect's Enter handling.
+  const openFkRef = useCallback(
+    (ref: ForeignKeyRef) => {
+      if (!fkMenuData) return;
+      setFkMenu(null);
+      if (fkMenuData.inMultiRange) setRange(null);
+      // Double-quote the column name: it's machine-generated from the
+      // schema, not user-typed, and mixed-case identifiers (e.g. from a
+      // TypeORM/Prisma-created table) fold to lowercase and stop matching if
+      // left bare — Postgres then reports the column as not existing.
+      const refCol = ref.column.replace(/"/g, '""');
+      const literals = fkMenuData.rangeValues.map((v) => `'${v.replace(/'/g, "''")}'`);
+      const whereClause =
+        literals.length === 1
+          ? `"${refCol}" = ${literals[0]}`
+          : `"${refCol}" IN (${literals.join(", ")})`;
+      void openTableWithFilter(ref.schema, ref.table, whereClause);
+    },
+    [fkMenuData, openTableWithFilter],
+  );
+  // Reset the highlighted item whenever the menu (re)opens or the filter
+  // narrows the list, so Enter always lands on the top match by default.
+  useEffect(() => {
+    setFkMenuSelected(0);
+  }, [fkMenu, fkQuery]);
+  // Keyboard nav fallback for when the filter input isn't focused — a menu
+  // with only one unfiltered target skips rendering the search box
+  // entirely (see `showFkSearch` below), so there'd otherwise be nothing to
+  // receive these keys at all. When the input *is* focused, its own
+  // `onKeyDown` handles this directly and stops propagation before it ever
+  // reaches this window listener, so the two never double-fire.
+  useEffect(() => {
+    if (!fkMenuData || fkMenuData.items.length === 0) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setFkMenuSelected((i) => Math.min(i + 1, fkMenuData.items.length - 1));
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setFkMenuSelected((i) => Math.max(i - 1, 0));
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        const top = fkMenuData.items[fkMenuSelected];
+        if (top) openFkRef(top);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [fkMenuData, fkMenuSelected, openFkRef]);
   useEffect(() => {
     if (!newCellMenu) return;
     const close = () => setNewCellMenu(null);
@@ -2363,84 +2479,52 @@ function ResultsGrid({
       </div>
 
       {fkMenu &&
+        fkMenuData &&
         (() => {
-          const col = fkMenu.col;
-          const nav = navByColumn?.[col];
-          const original = result.rows[fkMenu.r]?.[col] ?? null;
-          const draftEdit = tab.pendingEdits?.[fkMenu.r]?.[col];
-          const isDirty = draftEdit !== undefined;
-          const value = isDirty ? draftEdit : original;
-          // A multi-row range on this exact column, preserved by
-          // `onCellContextMenu` specifically so the jump-to items below can
-          // filter on every id in the selection instead of just this row's.
-          const inMultiRange =
-            (rangeColSet?.has(col) ?? false) && (rangeRowSet?.size ?? 0) > 1;
-          // Every distinct non-null value this column holds across the
-          // range's rows (pending edits included) — outside range mode this
-          // is just this one cell's own value.
-          const rangeValues = inMultiRange
-            ? Array.from(
-                new Set(
-                  Array.from(rangeRowSet!)
-                    .map((ri) => {
-                      const draft = tab.pendingEdits?.[ri]?.[col];
-                      return draft !== undefined ? draft : (result.rows[ri]?.[col] ?? null);
-                    })
-                    .filter((v): v is string => v !== null),
-                ),
-              )
-            : value !== null
-              ? [value]
-              : [];
-          const hasFk =
-            !!nav &&
-            rangeValues.length > 0 &&
-            (nav.references.length > 0 || nav.referencedBy.length > 0);
+          const col = fkMenuData.col;
+          const {
+            original,
+            isDirty,
+            value,
+            inMultiRange,
+            rangeValues,
+            hasFk,
+            filteredReferences,
+            filteredReferencedBy,
+            items,
+          } = fkMenuData;
           // The single-cell editing actions below all act on just
           // `fkMenu.r` — showing them alongside "jump using all N ids" would
           // read as if they applied to the whole selection too, so they're
-          // hidden for the duration of a multi-range jump menu instead.
+          // hidden for the duration of a multi-range jump menu instead (its
+          // own range-scoped counterparts take their place).
           const canSetNull =
             editable &&
             !inMultiRange &&
             !pkColIndices.has(col) &&
             nullableColIndices.has(col) &&
             value !== null;
+          const canSetNullRange =
+            editable && inMultiRange && !pkColIndices.has(col) && nullableColIndices.has(col);
           const canGenerateUuid = editable && !inMultiRange && uuidColIndices.has(col);
           // Range-scoped counterpart: a *fresh* uuid per row, not one value
           // broadcast to all of them (that's what Cmd/Ctrl+V paste-fill is
           // for, and would collide immediately on anything unique).
           const canGenerateUuidRange = editable && inMultiRange && uuidColIndices.has(col);
-          // "Expand cell" always applies, so — unlike before this existed —
-          // there's no longer a case where right-clicking a plain cell has
-          // nothing to show.
 
-          const openRef = (ref: ForeignKeyRef) => {
-            setFkMenu(null);
-            if (inMultiRange) setRange(null);
-            // Double-quote the column name: it's machine-generated from the
-            // schema, not user-typed, and mixed-case identifiers (e.g. from a
-            // TypeORM/Prisma-created table) fold to lowercase and stop
-            // matching if left bare — Postgres then reports the column as
-            // not existing.
-            const refCol = ref.column.replace(/"/g, '""');
-            const literals = rangeValues.map((v) => `'${v.replace(/'/g, "''")}'`);
-            const whereClause =
-              literals.length === 1
-                ? `"${refCol}" = ${literals[0]}`
-                : `"${refCol}" IN (${literals.join(", ")})`;
-            void openTableWithFilter(ref.schema, ref.table, whereClause);
-          };
-          const item = (ref: ForeignKeyRef, key: string) => (
+          const item = (ref: ForeignKeyRef, key: string, globalIndex: number) => (
             <button
               key={key}
-              className="context-menu__item context-menu__item--fk"
+              className={
+                "context-menu__item context-menu__item--fk" +
+                (globalIndex === fkMenuSelected ? " context-menu__item--active" : "")
+              }
               title={
                 rangeValues.length > 1
                   ? `${ref.schema}.${ref.table}.${ref.column} — ${rangeValues.length} ids`
                   : `${ref.schema}.${ref.table}.${ref.column}`
               }
-              onClick={() => openRef(ref)}
+              onClick={() => openFkRef(ref)}
             >
               <span className="context-menu__fk-name">{ref.table}</span>
               <span className="context-menu__sub mono">
@@ -2451,16 +2535,11 @@ function ResultsGrid({
           // Shown whenever there's more than one entry to filter — a fixed
           // "enough to bother" cutoff meant well but just made it unclear
           // when typing would actually do anything.
-          const totalRefs = hasFk ? nav!.references.length + nav!.referencedBy.length : 0;
+          const totalRefs = hasFk ? fkMenuData.nav!.references.length + fkMenuData.nav!.referencedBy.length : 0;
           const showFkSearch = totalRefs > 1;
-          const q = fkQuery.trim().toLowerCase();
-          const matchesQuery = (ref: ForeignKeyRef) =>
-            !q || ref.table.toLowerCase().includes(q) || ref.schema.toLowerCase().includes(q);
-          const filteredReferences = hasFk ? nav!.references.filter(matchesQuery) : [];
-          const filteredReferencedBy = hasFk ? nav!.referencedBy.filter(matchesQuery) : [];
           const fkNoMatches =
             showFkSearch &&
-            q.length > 0 &&
+            fkQuery.trim().length > 0 &&
             filteredReferences.length === 0 &&
             filteredReferencedBy.length === 0;
           return (
@@ -2473,21 +2552,23 @@ function ResultsGrid({
               }}
               onClick={(e) => e.stopPropagation()}
             >
-              <button
-                className="context-menu__item"
-                onClick={() => {
-                  setFkMenu(null);
-                  setExpandedCell({ value, columnName: result.columns[col].name });
-                }}
-              >
-                Expand cell
-              </button>
-              {(hasFk ||
-                canGenerateUuid ||
-                canGenerateUuidRange ||
-                canSetNull ||
-                (isDirty && !inMultiRange)) && (
-                <div className="context-menu__sep" />
+              {/* Doesn't apply to a multi-row selection — there's no single
+                  cell left to expand once several rows are in play. */}
+              {!inMultiRange && (
+                <>
+                  <button
+                    className="context-menu__item"
+                    onClick={() => {
+                      setFkMenu(null);
+                      setExpandedCell({ value, columnName: result.columns[col].name });
+                    }}
+                  >
+                    Expand cell
+                  </button>
+                  {(hasFk || canGenerateUuid || canSetNull || isDirty) && (
+                    <div className="context-menu__sep" />
+                  )}
+                </>
               )}
               {hasFk && showFkSearch && (
                 <div className="context-menu__search">
@@ -2497,10 +2578,24 @@ function ResultsGrid({
                     value={fkQuery}
                     onChange={(e) => setFkQuery(e.target.value)}
                     onKeyDown={(e) => {
+                      // Stopped unconditionally (not just for the keys
+                      // handled below) so the window-level keyboard-nav
+                      // fallback never double-fires while this input has
+                      // focus — see the `fkMenuData` keyboard effect.
                       e.stopPropagation();
                       if (e.key === "Escape") {
                         e.preventDefault();
                         setFkMenu(null);
+                      } else if (e.key === "ArrowDown") {
+                        e.preventDefault();
+                        setFkMenuSelected((i) => Math.min(i + 1, items.length - 1));
+                      } else if (e.key === "ArrowUp") {
+                        e.preventDefault();
+                        setFkMenuSelected((i) => Math.max(i - 1, 0));
+                      } else if (e.key === "Enter") {
+                        e.preventDefault();
+                        const top = items[fkMenuSelected];
+                        if (top) openFkRef(top);
                       }
                     }}
                     placeholder="Filter tables…"
@@ -2518,7 +2613,7 @@ function ResultsGrid({
                       ? `Jump to referenced rows (${rangeValues.length} ids)`
                       : "Jump to referenced row"}
                   </div>
-                  {filteredReferences.map((ref, i) => item(ref, `out-${i}`))}
+                  {filteredReferences.map((ref, i) => item(ref, `out-${i}`, i))}
                 </>
               )}
               {hasFk && filteredReferencedBy.length > 0 && (
@@ -2528,7 +2623,9 @@ function ResultsGrid({
                       ? `Rows referencing these (${rangeValues.length} ids)`
                       : "Rows referencing this"}
                   </div>
-                  {filteredReferencedBy.map((ref, i) => item(ref, `in-${i}`))}
+                  {filteredReferencedBy.map((ref, i) =>
+                    item(ref, `in-${i}`, filteredReferences.length + i),
+                  )}
                 </>
               )}
               {fkNoMatches && (
@@ -2580,6 +2677,22 @@ function ResultsGrid({
                     }}
                   >
                     Set to <span className="mono">NULL</span>
+                  </button>
+                </>
+              )}
+              {canSetNullRange && (
+                <>
+                  {(hasFk || canGenerateUuidRange) && <div className="context-menu__sep" />}
+                  <button
+                    className="context-menu__item"
+                    onClick={() => {
+                      setFkMenu(null);
+                      for (const ri of rangeRowSet!) {
+                        setCellEdit(tab.id, ri, col, null);
+                      }
+                    }}
+                  >
+                    Set to <span className="mono">NULL</span> for {rangeRowSet!.size} rows
                   </button>
                 </>
               )}

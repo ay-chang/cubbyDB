@@ -30,6 +30,7 @@ import { TableStructurePane } from "./TableStructurePane";
 import { Toast } from "./Toast";
 import { TopBar, useIsFullscreen } from "./TopBar";
 import { UpdateBanner } from "./UpdateBanner";
+import { WhatsNewPane, WhatsNewTrigger } from "./WhatsNewPane";
 import "./workspace.css";
 
 const SIDEBAR_MIN = 200;
@@ -104,6 +105,7 @@ export function Workspace() {
     <div className="workspace">
       <TopBar />
       <UpdateBanner />
+      <WhatsNewTrigger />
       <div className="workspace__body">
         {sidebarVisible ? (
           <>
@@ -171,6 +173,8 @@ export function Workspace() {
                 <FunctionDefinitionPane key={activeTab.id} tab={activeTab} />
               ) : activeTab.kind === "sequence" ? (
                 <SequenceDetailsPane key={activeTab.id} tab={activeTab} />
+              ) : activeTab.kind === "whatsnew" ? (
+                <WhatsNewPane key={activeTab.id} />
               ) : (
                 <ResultsPane key={activeTab.id} tab={activeTab} />
               )}

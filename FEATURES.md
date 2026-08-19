@@ -291,7 +291,14 @@ code comments or AGENTS.md's architecture section.
     distinct id in the selection at once — `IN (...)` instead of `=` — rather
     than collapsing back to just the one cell you right-clicked. Only applies
     when that specific column is what the range spans; right-clicking a
-    different column falls back to the normal single-cell jump
+    different column falls back to the normal single-cell jump. "Expand
+    cell" is hidden in this mode — there's no longer one single cell to show
+  - The table list is keyboard-navigable: ArrowUp/ArrowDown moves through
+    "jump to referenced row" and "rows referencing this" as one continuous
+    list, Enter jumps to whichever is highlighted. Works while typing in the
+    filter box (arrows/Enter are intercepted there rather than moving the
+    text cursor) and, for the rare menu with only one unfiltered target and
+    no filter box at all, via a window-level fallback
 - CSV export, with a configurable field delimiter
 - **Find in results** (Cmd/Ctrl+F): a query box scoped to the active grid,
   matching case-insensitively against every existing-row cell. Matches are
@@ -338,15 +345,19 @@ code comments or AGENTS.md's architecture section.
 - Update commits one row at a time as a backend-generated, primary-key-scoped
   `UPDATE`; editing requires the table to have a detected primary key
 - Right-click a nullable cell to set it to `NULL`
+  - With a multi-row range selected on that column (see **Drag-select a
+    range** below), the menu instead offers **Set to NULL for N rows** —
+    every cell the range spans on that column, in one click, rather than
+    needing N separate right-clicks
 - Right-click a `uuid`-typed cell for **Generate random UUID** — fills it
   with a fresh `crypto.randomUUID()` value as a pending edit. Shown for
   primary-key cells too (unlike "Set to NULL"), since replacing or seeding a
   uuid primary key before insert is the common case
-  - With a multi-row range selected on that same column (see **Drag-select a
-    range** below), the menu instead offers **Generate random UUIDs for N
-    rows** — a *distinct* fresh uuid per row, not one value broadcast to
-    every cell (that's what Cmd/Ctrl+V paste-fill already does, and would
-    collide immediately on a unique/primary-key column)
+  - With a multi-row range selected on that same column, the menu instead
+    offers **Generate random UUIDs for N rows** — a *distinct* fresh uuid per
+    row, not one value broadcast to every cell (that's what Cmd/Ctrl+V
+    paste-fill already does, and would collide immediately on a
+    unique/primary-key column)
 - Right-click a cell with a pending edit for **Revert to original** — undoes
   just that one cell, leaving any other pending edits on the row (or other
   rows) untouched, unlike Discard which clears everything at once
@@ -564,6 +575,19 @@ code comments or AGENTS.md's architecture section.
   separate keypair verifies every release before it's installed, regardless
   of whether that release's installer is also Apple-notarized or
   Windows-code-signed
+- **What's new**: the first launch of a build whose version has a
+  `src/lib/releaseNotes.ts` entry auto-opens a read-only "What's New" tab
+  with that entry (and every earlier one, newest first) — VS Code's
+  post-update Release Notes tab, not a changelog you have to go looking for.
+  Tracked by version in `localStorage`, entirely independent of the updater
+  above (covers a manually-downloaded install same as an in-app update).
+  Silent on the very first launch ever and on any version with no matching
+  entry — nothing to show a brand-new user, and no way to tell that apart
+  from an existing user upgrading past the point this feature was
+  introduced, so both just start tracking from here forward without
+  interrupting the current launch. Tabs are per-connection in this app, so
+  the check runs (and the tab opens into) the active connection once one
+  exists, rather than at the very first splash screen
 
 ## Settings
 

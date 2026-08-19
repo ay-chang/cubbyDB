@@ -41,7 +41,7 @@ import { errorMessage, isDbError } from "../api/backend";
  * function or sequence) — the latter three all opened via the schema tree's
  * context menu.
  */
-export type TabKind = "query" | "table" | "structure" | "function" | "sequence";
+export type TabKind = "query" | "table" | "structure" | "function" | "sequence" | "whatsnew";
 
 /** One open tab and its most recent execution. */
 export interface QueryTab {
@@ -1152,6 +1152,11 @@ interface AppStore {
   /** Open (or focus) a read-only "sequence" tab for one sequence — its
    *  current value/config is fetched separately by `SequenceDetailsPane`. */
   openSequenceDetails: (schema: string, name: string) => Promise<void>;
+  /** Open (or focus) the read-only "What's New" tab — content lives in
+   *  `RELEASE_NOTES` and is rendered by `WhatsNewPane`, not stored on the
+   *  tab itself (there's only ever one, showing the same fixed history for
+   *  everyone). */
+  openWhatsNewTab: () => Promise<void>;
   setTableFilter: (id: string, filter: string) => Promise<void>;
   openTableWithFilter: (
     schema: string,
@@ -1970,6 +1975,10 @@ export function tabCubbyEntry(tab: QueryTab): CubbyEntry | null {
         : null;
     case "query":
       return tab.savedQueryId ? { kind: "savedQuery", savedQueryId: tab.savedQueryId } : null;
+    case "whatsnew":
+      // Nothing to save — it's the same fixed content for everyone, not a
+      // database object or a query someone wrote.
+      return null;
   }
 }
 
@@ -3055,6 +3064,30 @@ export const useStore = create<AppStore>((set, get) => {
         title: name,
         objectRef: { schema, name },
       });
+      set((s) => ({ connections: mapSlotTabs(s.connections, connectionId, (tabs) => [...tabs, tab]) }));
+      const switched = await switchActiveTab(connectionId, tab.id);
+      if (!switched) {
+        set((s) => ({
+          connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+            tabs.filter((t) => t.id !== tab.id),
+          ),
+        }));
+      }
+    },
+
+    async openWhatsNewTab() {
+      const connectionId = get().activeConnectionId;
+      if (!connectionId) return;
+      const slot = get().connections[connectionId];
+      if (!slot) return;
+
+      const existing = slot.tabs.find((t) => t.kind === "whatsnew");
+      if (existing) {
+        await switchActiveTab(connectionId, existing.id);
+        return;
+      }
+
+      const tab = makeTab({ kind: "whatsnew", title: "What's New" });
       set((s) => ({ connections: mapSlotTabs(s.connections, connectionId, (tabs) => [...tabs, tab]) }));
       const switched = await switchActiveTab(connectionId, tab.id);
       if (!switched) {

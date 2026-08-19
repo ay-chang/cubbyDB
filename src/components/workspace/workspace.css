@@ -691,6 +691,19 @@
 .context-menu__item:hover .mono {
   color: #fff;
 }
+/* Keyboard-highlighted item (ArrowUp/ArrowDown in the FK jump menu) — same
+   fill as `:hover`, so what Enter is about to do always matches what's
+   visibly selected, whether or not the pointer is anywhere near the list. */
+.context-menu__item--active {
+  background: var(--accent);
+  color: #fff;
+}
+.context-menu__item--active .mono {
+  color: #fff;
+}
+.context-menu__item--active .context-menu__sub {
+  color: rgba(255, 255, 255, 0.75);
+}
 .context-menu__sep {
   height: 1px;
   margin: 4px 6px;
@@ -800,7 +813,7 @@
   border-right: 1px solid var(--border-faint);
   margin-bottom: -1px;
   white-space: nowrap;
-  cursor: default;
+  cursor: pointer;
   user-select: none;
 }
 .tab__marker,
@@ -3343,6 +3356,110 @@
   flex: 1;
   min-height: 0;
   border-top: 1px solid var(--border-faint);
+}
+/* --- "What's New" tab --- */
+/* Plain title + date, not a card — the version banner this used to be read
+   as "doing too much" against a page that's otherwise just headings and a
+   list. */
+.whatsnew__header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 20px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border-faint);
+}
+.whatsnew__title {
+  margin: 0;
+  font-size: 15.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+.whatsnew__date {
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+/* Per-version content is grouped into New/Improved/Fixed sections (see
+   `groupByTag`) using the same section/heading/list shape every other pane
+   in this file already uses — `.structure__section` for the latest version,
+   the more compact `.whatsnew-history-group` variant inside a collapsed
+   older one. What kind of change an item is now lives entirely in which
+   section it's under, not a per-item badge repeating the same thing. */
+.whatsnew-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 0;
+  padding: 0 0 0 18px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text);
+}
+.whatsnew-list li {
+  padding-left: 2px;
+}
+.whatsnew__history {
+  margin-top: 10px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border-faint);
+}
+.whatsnew__history-title {
+  margin-bottom: 10px;
+}
+.whatsnew-history-entry {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+.whatsnew-history-entry:last-child {
+  margin-bottom: 0;
+}
+.whatsnew-history-entry__summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  font-size: 12.5px;
+  /* Both engines' default disclosure marker, replaced by the `::before`
+     triangle below so it can flip on `[open]` the same way the schema
+     tree's own expand/collapse chevron does (see `.tree__chevron`). */
+  list-style: none;
+}
+.whatsnew-history-entry__summary::-webkit-details-marker {
+  display: none;
+}
+.whatsnew-history-entry__summary::before {
+  content: "▶";
+  flex: none;
+  width: 14px;
+  font-size: 9px;
+  color: var(--text-faint);
+}
+.whatsnew-history-entry[open] .whatsnew-history-entry__summary::before {
+  content: "▼";
+}
+.whatsnew-history-entry[open] .whatsnew-history-entry__summary {
+  border-bottom: 1px solid var(--border-faint);
+}
+.whatsnew-history-entry__version {
+  font-weight: 600;
+  color: var(--text);
+}
+.whatsnew-history-entry__date {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.whatsnew-history-entry__body {
+  padding: 12px;
+}
+.whatsnew-history-group + .whatsnew-history-group {
+  margin-top: 14px;
+}
+.whatsnew-history-group__title {
+  margin-bottom: 6px;
 }
 .structure-kv {
   border: 1px solid var(--border);

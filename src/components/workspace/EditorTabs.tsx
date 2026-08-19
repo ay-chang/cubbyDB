@@ -183,7 +183,9 @@ export function EditorTabs({ onSaveQuery }: { onSaveQuery: () => void }) {
                     ? "ƒ"
                     : tab.kind === "sequence"
                       ? "#"
-                      : "◆"}
+                      : tab.kind === "whatsnew"
+                        ? "✦"
+                        : "◆"}
             </span>
             <span className="tab__title">{tab.title}</span>
             {tab.kind === "query" && active && (

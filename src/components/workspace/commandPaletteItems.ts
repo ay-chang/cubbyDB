@@ -187,6 +187,8 @@ function tabKindLabel(kind: TabKind): string {
       return "Sequence";
     case "query":
       return "Query";
+    case "whatsnew":
+      return "What's New";
   }
 }
 
@@ -512,5 +514,7 @@ export function tabIcon(kind: TabKind): string {
       return "#";
     case "query":
       return "◆";
+    case "whatsnew":
+      return "✦";
   }
 }
