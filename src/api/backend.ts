@@ -493,12 +493,16 @@ export function listAiModels(): Promise<AiModelInfo[]> {
  *  the live DB session, so the full history is resent every time. `schema`
  *  is the connection's already-fetched schema tree; `activeTable` is the
  *  active tab's table, if it's a table tab, so the AI knows what's on screen.
- *  `cubby` is the active cubby's name and tables, if one is open — resent
- *  fresh each turn like `schema`, not snapshotted once. */
+ *  `attachedTables` are tables the user explicitly pinned as context via the
+ *  AI panel's "+" button — independent of whatever tab is active, and (like
+ *  a cubby's tables) always rendered in full schema detail. `cubby` is the
+ *  active cubby's name and tables, if one is open — resent fresh each turn
+ *  like `schema`, not snapshotted once. */
 export function aiChat(
   sessionId: string,
   schema: SchemaNode[],
   activeTable: { schema: string; table: string } | null,
+  attachedTables: { schema: string; table: string }[],
   cubby: { name: string; tables: { schema: string; table: string }[] } | null,
   messages: AiMessage[],
 ): Promise<AiChatResult> {
@@ -506,6 +510,7 @@ export function aiChat(
     sessionId,
     schema,
     activeTable,
+    attachedTables,
     cubby,
     messages,
   });

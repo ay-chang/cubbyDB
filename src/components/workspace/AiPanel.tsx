@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import {
+  useActiveAiAttachedTables,
   useActiveAiChatId,
   useActiveAiChats,
   useActiveAiChatsLoading,
@@ -9,11 +10,14 @@ import {
   useActiveAiSending,
   useActiveConnectionCanSaveChats,
   useActiveCubby,
+  useActiveTabId,
+  useActiveTabs,
   useStore,
 } from "../../state/store";
 import { copyToClipboard } from "../../api/backend";
 import { aiProviderLabel, aiProviderReady } from "../../lib/aiProvider";
 import type { AiChatSummary, AiMessage } from "../../types";
+import { AiTablePicker } from "./AiTablePicker";
 import { Markdown } from "./Markdown";
 import { highlightSql, SnippetActions } from "./sqlSnippet";
 
@@ -63,9 +67,16 @@ export function AiPanel() {
     s.activeConnectionId ? s.connections[s.activeConnectionId]?.sessionId ?? null : null,
   );
   const openEditConnection = useStore((s) => s.openEditConnection);
+  const attachedTables = useActiveAiAttachedTables();
+  const attachAiContextTable = useStore((s) => s.attachAiContextTable);
+  const removeAiContextTable = useStore((s) => s.removeAiContextTable);
+  const activeTabs = useActiveTabs();
+  const activeTabId = useActiveTabId();
+  const currentTable = activeTabs.find((t) => t.id === activeTabId)?.source;
 
   const [draft, setDraft] = useState("");
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  const [tablePickerOpen, setTablePickerOpen] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -276,6 +287,54 @@ export function AiPanel() {
             )}
           </div>
           <div className="ai-input-row">
+            <div className="ai-context-row">
+              {currentTable && (
+                <span
+                  className="ai-context-chip ai-context-chip--current"
+                  title="Currently viewing — always included as context"
+                >
+                  <span className="mono">
+                    {currentTable.schema}.{currentTable.table}
+                  </span>
+                </span>
+              )}
+              {attachedTables.map((t) => (
+                <span key={`${t.schema}.${t.table}`} className="ai-context-chip">
+                  <span className="mono">
+                    {t.schema}.{t.table}
+                  </span>
+                  <button
+                    type="button"
+                    className="ai-context-chip__remove"
+                    onClick={() => removeAiContextTable(t.schema, t.table)}
+                    title="Remove from context"
+                    aria-label={`Remove ${t.schema}.${t.table} from context`}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+              <span className="ai-context-add-wrap">
+                <button
+                  type="button"
+                  className="ai-context-add"
+                  onClick={() => setTablePickerOpen((open) => !open)}
+                  title="Attach a table as context"
+                  aria-label="Attach a table as context"
+                >
+                  +
+                </button>
+                {tablePickerOpen && (
+                  <AiTablePicker
+                    onPick={(schema, table) => {
+                      attachAiContextTable(schema, table);
+                      setTablePickerOpen(false);
+                    }}
+                    onClose={() => setTablePickerOpen(false)}
+                  />
+                )}
+              </span>
+            </div>
             <div className="ai-input-box">
               <textarea
                 ref={inputRef}

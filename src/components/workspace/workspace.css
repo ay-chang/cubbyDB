@@ -3294,6 +3294,141 @@
   padding: 10px;
   border-top: 1px solid var(--border);
   background: var(--surface-raised);
+  /* The table picker's positioning context — see `.ai-table-picker`'s own
+     comment for why it anchors here and not to the "+" button itself. */
+  position: relative;
+}
+/* The row of what's being sent to the AI as context — always visible above
+   the composer, not just when something's attached, so the "+" is always
+   reachable. */
+.ai-context-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.ai-context-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--pill-bg);
+  font-size: 11px;
+  color: var(--text);
+}
+/* The implicitly-included "currently viewing" table — same shape as an
+   attached chip but visually quieter and never removable, since it's just
+   surfacing information that's always sent anyway (see `ActiveTableRef`). */
+.ai-context-chip--current {
+  border-style: dashed;
+  color: var(--text-muted);
+}
+.ai-context-chip__remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ai-context-chip__remove:hover {
+  background: var(--border-faint);
+  color: var(--text);
+}
+.ai-context-add-wrap {
+  /* Not a positioning context for the picker — see `.ai-table-picker`. */
+  display: inline-flex;
+}
+.ai-context-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ai-context-add:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.ai-table-picker {
+  position: absolute;
+  /* Anchored to `.ai-input-row` — not the "+" button's own wrapper — and
+     docked to that row's right edge (matching its own padding), so the
+     popover always opens in the same stable corner of the panel regardless
+     of how many chips precede the "+" and where it lands in the wrapped
+     row. Anchoring to the button itself was tried and broke both ways: near
+     the row's right end it opened off the right side of the window, and
+     near the left end (few/no chips) it opened off the left side instead —
+     neither the button nor its immediate wrapper is ever guaranteed to have
+     240px of room on either side of it, but the row itself always does. */
+  bottom: calc(100% + 6px);
+  right: 10px;
+  width: 240px;
+  max-height: 280px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  box-shadow: var(--shadow-md, 0 4px 16px rgba(0, 0, 0, 0.18));
+  z-index: 20;
+  overflow: hidden;
+}
+.ai-table-picker__input {
+  flex: none;
+  padding: 8px 10px;
+  border: none;
+  border-bottom: 1px solid var(--border-faint);
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+}
+.ai-table-picker__list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px;
+}
+.ai-table-picker__empty {
+  padding: 8px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+.ai-table-picker__item {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  /* A long schema.table name truncates with an ellipsis instead of
+     hard-clipping mid-word at the box edge. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ai-table-picker__item:hover {
+  background: var(--border-faint);
 }
 /* The composer reads as one field — textarea plus the send/stop action
    inside its own bottom-right corner — rather than a text box beside a

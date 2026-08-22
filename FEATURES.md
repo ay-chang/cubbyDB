@@ -564,6 +564,15 @@ code comments or AGENTS.md's architecture section.
   hardcoded allowlist rejects writes, DDL, session/transaction commands, and
   multi-statement input before PostgreSQL runs it in an always-rolled-back
   read-only transaction. Tool activity is shown beneath the answer
+- The chip row above the input shows exactly what's being sent as table
+  context: a dashed, non-removable chip for whichever table tab is
+  currently active (this was already sent to the model before, just
+  invisibly), plus a removable chip per table explicitly **attached** via
+  the "+" button. The "+" opens a small search (the same fuzzy table search
+  Cmd+K uses) scoped to the current connection. Attached tables are rendered
+  in full column/index/FK detail in the system prompt regardless of schema
+  size — the same treatment an active cubby's tables already get — and are
+  cleared when starting a new chat, same lifecycle as the conversation itself
 - Supports three independent provider routes: bring-your-own **Anthropic** and
   **OpenAI** API keys, plus the user's current **Codex CLI / ChatGPT
   subscription** login. Switching providers does not replace the others'

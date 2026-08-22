@@ -1224,6 +1224,7 @@ pub async fn ai_chat(
     session_id: String,
     schema: Vec<SchemaNode>,
     active_table: Option<ActiveTableRef>,
+    attached_tables: Vec<ActiveTableRef>,
     cubby: Option<CubbyPromptInfo>,
     messages: Vec<ChatMessage>,
 ) -> Result<AiChatResult, DbError> {
@@ -1234,11 +1235,14 @@ pub async fn ai_chat(
         .as_ref()
         .map(|c| c.tables.iter().map(|t| (t.schema.clone(), t.table.clone())).collect())
         .unwrap_or_default();
+    let attached: Vec<(&str, &str)> =
+        attached_tables.iter().map(|t| (t.schema.as_str(), t.table.as_str())).collect();
     let system_prompt = crate::ai::prompt::build_system_prompt(&crate::ai::prompt::PromptContext {
         schema: &schema,
         active_table: active_table
             .as_ref()
             .map(|t| (t.schema.as_str(), t.table.as_str())),
+        attached_tables: &attached,
         server_version: &server_version,
         connection_name: &connection_name,
         cubby: cubby.as_ref().map(|c| crate::ai::prompt::CubbyContext {

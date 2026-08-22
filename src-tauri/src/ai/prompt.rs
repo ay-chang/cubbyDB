@@ -38,6 +38,11 @@ pub struct PromptContext<'a> {
     pub schema: &'a [SchemaNode],
     /// The table the user is looking at right now, if they're on a table tab.
     pub active_table: Option<(&'a str, &'a str)>,
+    /// Tables the user explicitly attached as context via the AI panel's "+"
+    /// button — independent of whatever tab happens to be active, and
+    /// (unlike `active_table`) rendered in full schema detail regardless of
+    /// `COMPACT_SCHEMA_TABLE_THRESHOLD`, same as the active cubby's tables.
+    pub attached_tables: &'a [(&'a str, &'a str)],
     /// From `ConnectionInfo::server_version` — lets the model avoid syntax
     /// the user's actual server doesn't have.
     pub server_version: &'a str,
@@ -75,6 +80,14 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
         out.push_str(&format!(
             "- Currently viewing: {schema_name}.{table_name}\n"
         ));
+    }
+    if !ctx.attached_tables.is_empty() {
+        let names: Vec<String> = ctx
+            .attached_tables
+            .iter()
+            .map(|(s, t)| format!("{s}.{t}"))
+            .collect();
+        out.push_str(&format!("- Attached for context: {}\n", names.join(", ")));
     }
     out.push('\n');
 
@@ -187,29 +200,29 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
     // --- Schema ------------------------------------------------------------
     out.push_str("## Database\n");
     let cubby_tables: &[(String, String)] = ctx.cubby.as_ref().map_or(&[], |c| c.tables);
-    render_schema(&mut out, ctx.schema, cubby_tables);
+    let mut pinned_tables: Vec<(&str, &str)> =
+        cubby_tables.iter().map(|(s, t)| (s.as_str(), t.as_str())).collect();
+    pinned_tables.extend(ctx.attached_tables.iter().copied());
+    render_schema(&mut out, ctx.schema, &pinned_tables);
 
     out
 }
 
 /// Renders the schema at whichever level of detail fits its size. See
-/// `COMPACT_SCHEMA_TABLE_THRESHOLD`. `pinned` tables are always rendered in
+/// `COMPACT_SCHEMA_TABLE_THRESHOLD`. `pinned_tables` are always rendered in
 /// full even when the schema as a whole is over threshold — the user already
-/// told us these specific tables matter for the task at hand. That is the
-/// active cubby's tables for the chat prompt, and the table being filtered
-/// for `filter.rs`'s.
-pub fn render_schema(out: &mut String, schema: &[SchemaNode], cubby_tables: &[(String, String)]) {
+/// told us these specific tables matter for the task at hand. That's the
+/// active cubby's tables plus any explicitly-attached ones for the chat
+/// prompt, and the table being filtered for `filter.rs`'s.
+pub fn render_schema(out: &mut String, schema: &[SchemaNode], pinned_tables: &[(&str, &str)]) {
     let table_count: usize = schema.iter().map(|s| s.tables.len()).sum();
-    let pinned: HashSet<(&str, &str)> = cubby_tables
-        .iter()
-        .map(|(s, t)| (s.as_str(), t.as_str()))
-        .collect();
+    let pinned: HashSet<(&str, &str)> = pinned_tables.iter().copied().collect();
 
     if table_count > COMPACT_SCHEMA_TABLE_THRESHOLD {
         out.push_str(&format!(
             "{table_count} tables. Abbreviated below — call `describe_table` for full detail on \
-             any one of them. Tables named by the active cubby above are rendered in full here \
-             already.\n\n"
+             any one of them. Tables named by the active cubby or attached for context above are \
+             rendered in full here already.\n\n"
         ));
         for s in schema {
             for t in &s.tables {
@@ -313,5 +326,108 @@ fn render_enums(out: &mut String, schema: &[SchemaNode]) {
                 ty.values.join(", ")
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{ColumnNode, TableKind, TableNode};
+
+    fn column(name: &str) -> ColumnNode {
+        ColumnNode {
+            name: name.to_string(),
+            data_type: "text".to_string(),
+            nullable: true,
+            is_primary_key: false,
+            references: vec![],
+            referenced_by: vec![],
+        }
+    }
+
+    fn table(name: &str, columns: usize) -> TableNode {
+        TableNode {
+            name: name.to_string(),
+            kind: TableKind::Table,
+            estimated_rows: None,
+            columns: (0..columns).map(|i| column(&format!("col_{i}"))).collect(),
+        }
+    }
+
+    fn schema(name: &str, tables: Vec<TableNode>) -> SchemaNode {
+        SchemaNode { name: name.to_string(), tables, functions: vec![], sequences: vec![], types: vec![] }
+    }
+
+    fn base_ctx<'a>(schema: &'a [SchemaNode]) -> PromptContext<'a> {
+        PromptContext {
+            schema,
+            active_table: None,
+            attached_tables: &[],
+            server_version: "16.2",
+            connection_name: "test",
+            cubby: None,
+        }
+    }
+
+    #[test]
+    fn mentions_the_currently_viewed_table() {
+        let schemas = vec![schema("public", vec![table("orders", 2)])];
+        let mut ctx = base_ctx(&schemas);
+        ctx.active_table = Some(("public", "orders"));
+        let prompt = build_system_prompt(&ctx);
+        assert!(prompt.contains("Currently viewing: public.orders"));
+    }
+
+    #[test]
+    fn omits_attached_line_when_nothing_is_attached() {
+        let schemas = vec![schema("public", vec![table("orders", 2)])];
+        let prompt = build_system_prompt(&base_ctx(&schemas));
+        assert!(!prompt.contains("Attached for context"));
+    }
+
+    #[test]
+    fn lists_every_attached_table() {
+        let schemas = vec![schema("public", vec![table("orders", 2), table("users", 2)])];
+        let mut ctx = base_ctx(&schemas);
+        ctx.attached_tables = &[("public", "orders"), ("public", "users")];
+        let prompt = build_system_prompt(&ctx);
+        assert!(prompt.contains("Attached for context: public.orders, public.users"));
+    }
+
+    #[test]
+    fn attached_table_is_rendered_in_full_detail_above_the_compact_threshold() {
+        let mut tables: Vec<TableNode> =
+            (0..COMPACT_SCHEMA_TABLE_THRESHOLD + 1).map(|i| table(&format!("t{i}"), 1)).collect();
+        tables.push(table("important", 3));
+        let schemas = vec![schema("public", tables)];
+
+        let mut ctx = base_ctx(&schemas);
+        ctx.attached_tables = &[("public", "important")];
+        let prompt = build_system_prompt(&ctx);
+
+        // Full-detail rendering puts the table on its own line followed by
+        // one indented "name type" line per column; the compact form lists
+        // an unpinned table's columns inline after ": " with no data type.
+        assert!(prompt.contains("\npublic.important\n  col_0 text\n  col_1 text\n  col_2 text\n"));
+        assert!(prompt.contains("public.t0 (1 cols): col_0"));
+        assert!(!prompt.contains("public.t0\n  col_0 text"));
+    }
+
+    #[test]
+    fn cubby_and_attached_tables_are_both_pinned_to_full_detail() {
+        let mut tables: Vec<TableNode> =
+            (0..COMPACT_SCHEMA_TABLE_THRESHOLD + 1).map(|i| table(&format!("t{i}"), 1)).collect();
+        tables.push(table("cubby_table", 1));
+        tables.push(table("attached_table", 1));
+        let schemas = vec![schema("public", tables)];
+        let cubby_tables = vec![("public".to_string(), "cubby_table".to_string())];
+
+        let mut ctx = base_ctx(&schemas);
+        ctx.attached_tables = &[("public", "attached_table")];
+        ctx.cubby = Some(CubbyContext { name: "My Cubby", tables: &cubby_tables });
+        let prompt = build_system_prompt(&ctx);
+
+        assert!(prompt.contains("\npublic.cubby_table\n  col_0 text\n"));
+        assert!(prompt.contains("\npublic.attached_table\n  col_0 text\n"));
     }
 }

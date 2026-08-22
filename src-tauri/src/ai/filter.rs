@@ -159,11 +159,7 @@ pub fn build_filter_prompt(ctx: &FilterPromptContext) -> String {
     // is rendered exactly as the chat panel renders it, so a subquery has
     // something to aim at.
     out.push_str("## Database\n");
-    crate::ai::prompt::render_schema(
-        &mut out,
-        ctx.schema,
-        &[(schema_name.to_string(), table_name.to_string())],
-    );
+    crate::ai::prompt::render_schema(&mut out, ctx.schema, &[(schema_name, table_name)]);
 
     out
 }

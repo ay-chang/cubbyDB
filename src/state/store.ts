@@ -170,6 +170,11 @@ export interface ConnectionSlot {
    *  `tabs`/`schema`) rather than globally, so switching connections shows
    *  that database's own conversation. */
   aiMessages: AiMessage[];
+  /** Tables explicitly pinned as AI context via the panel's "+" button —
+   *  independent of whichever tab happens to be active. Scoped to the
+   *  current conversation, same lifecycle as `aiMessages` (cleared on
+   *  `newAiChat`), not persisted across a reload. */
+  aiAttachedTables: { schema: string; table: string }[];
   /** True while an `aiChat` call is in flight for this connection. */
   aiSending: boolean;
   /** A failed turn, shown as a retryable strip under the thread. Deliberately
@@ -1300,6 +1305,11 @@ interface AppStore {
   runAiTurn: (connectionId: string) => Promise<void>;
   /** Re-runs the last turn after a failure. */
   retryAiMessage: () => Promise<void>;
+  /** Pins a table as AI context for the active connection's current
+   *  conversation (see `ConnectionSlot.aiAttachedTables`) — no-op if it's
+   *  already attached. */
+  attachAiContextTable: (schema: string, table: string) => void;
+  removeAiContextTable: (schema: string, table: string) => void;
   /** Drops the last reply and asks the same question again. */
   regenerateAiMessage: () => Promise<void>;
   /** Abandons the in-flight turn and re-enables the input. */
@@ -2637,6 +2647,7 @@ export const useStore = create<AppStore>((set, get) => {
         navBack: [],
         navForward: [],
         aiMessages: [],
+        aiAttachedTables: [],
         aiSending: false,
         aiError: null,
         aiTurnToken: 0,
@@ -3897,6 +3908,7 @@ export const useStore = create<AppStore>((set, get) => {
       set((s) => ({
         connections: patchSlot(s.connections, connectionId, {
           aiMessages: [],
+          aiAttachedTables: [],
           aiChatId: null,
           aiError: null,
         }),
@@ -3912,6 +3924,7 @@ export const useStore = create<AppStore>((set, get) => {
         set((s) => ({
           connections: patchSlot(s.connections, connectionId, {
             aiMessages: thread.messages,
+            aiAttachedTables: [],
             aiChatId: thread.id,
             aiError: null,
           }),
@@ -3981,6 +3994,31 @@ export const useStore = create<AppStore>((set, get) => {
       const connectionId = get().activeConnectionId;
       if (!connectionId) return;
       await get().runAiTurn(connectionId);
+    },
+
+    attachAiContextTable(schema, table) {
+      const connectionId = get().activeConnectionId;
+      if (!connectionId) return;
+      set((s) => ({
+        connections: patchSlot(s.connections, connectionId, (slot) => {
+          if (slot.aiAttachedTables.some((t) => t.schema === schema && t.table === table)) {
+            return {};
+          }
+          return { aiAttachedTables: [...slot.aiAttachedTables, { schema, table }] };
+        }),
+      }));
+    },
+
+    removeAiContextTable(schema, table) {
+      const connectionId = get().activeConnectionId;
+      if (!connectionId) return;
+      set((s) => ({
+        connections: patchSlot(s.connections, connectionId, (slot) => ({
+          aiAttachedTables: slot.aiAttachedTables.filter(
+            (t) => !(t.schema === schema && t.table === table),
+          ),
+        })),
+      }));
     },
 
     /** Drops the last reply and asks again, leaving the user's question in
@@ -4078,6 +4116,7 @@ export const useStore = create<AppStore>((set, get) => {
           slot.sessionId,
           slot.schema,
           activeTable,
+          slot.aiAttachedTables,
           cubbyContext,
           slot.aiMessages,
         );
@@ -4814,6 +4853,7 @@ export const useStore = create<AppStore>((set, get) => {
 const EMPTY_TABS: QueryTab[] = [];
 const EMPTY_SCHEMA: SchemaNode[] = [];
 const EMPTY_AI_MESSAGES: AiMessage[] = [];
+const EMPTY_AI_ATTACHED_TABLES: { schema: string; table: string }[] = [];
 const EMPTY_AI_CHATS: AiChatSummary[] = [];
 const EMPTY_CUBBIES: Cubby[] = [];
 
@@ -4844,6 +4884,17 @@ export function useActiveAiMessages(): AiMessage[] {
     s.activeConnectionId
       ? s.connections[s.activeConnectionId]?.aiMessages ?? EMPTY_AI_MESSAGES
       : EMPTY_AI_MESSAGES,
+  );
+}
+
+/** Tables explicitly pinned as AI context for the active connection's
+ *  current conversation. Empty when nothing is connected or nothing's
+ *  attached. */
+export function useActiveAiAttachedTables(): { schema: string; table: string }[] {
+  return useStore((s) =>
+    s.activeConnectionId
+      ? s.connections[s.activeConnectionId]?.aiAttachedTables ?? EMPTY_AI_ATTACHED_TABLES
+      : EMPTY_AI_ATTACHED_TABLES,
   );
 }
 

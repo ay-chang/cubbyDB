@@ -307,7 +307,9 @@ function buildConnectionItems(
   return sortAndLimit(scored, query);
 }
 
-function buildTableAndColumnItems(
+/** Exported for reuse by `AiTablePicker`'s attach-a-table search — the same
+ *  fuzzy table/column matching the command palette itself uses. */
+export function buildTableAndColumnItems(
   slots: ConnectionSlot[],
   activeConnectionId: string | null,
   query: string,
