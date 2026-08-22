@@ -18,11 +18,13 @@ import { AiPanel } from "./AiPanel";
 import { CommandPalette } from "./CommandPalette";
 import { CubbyPanel } from "./CubbyPanel";
 import { EditorTabs } from "./EditorTabs";
+import { ErdPane } from "./ErdPane";
 import { FunctionDefinitionPane } from "./FunctionDefinitionPane";
 import { HistoryPanel } from "./HistoryPanel";
 import { ResultsPane } from "./ResultsPane";
 import { SaveQueryDialog } from "./SaveQueryDialog";
 import { SavedQueriesPanel } from "./SavedQueriesPanel";
+import { SchemaComparePane } from "./SchemaComparePane";
 import { SchemaTree } from "./SchemaTree";
 import { SequenceDetailsPane } from "./SequenceDetailsPane";
 import { SqlEditor } from "./SqlEditor";
@@ -175,6 +177,10 @@ export function Workspace() {
                 <SequenceDetailsPane key={activeTab.id} tab={activeTab} />
               ) : activeTab.kind === "whatsnew" ? (
                 <WhatsNewPane key={activeTab.id} />
+              ) : activeTab.kind === "schemaCompare" ? (
+                <SchemaComparePane key={activeTab.id} tab={activeTab} />
+              ) : activeTab.kind === "erDiagram" ? (
+                <ErdPane key={activeTab.id} tab={activeTab} />
               ) : (
                 <ResultsPane key={activeTab.id} tab={activeTab} />
               )}

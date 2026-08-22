@@ -853,6 +853,12 @@
      panel's active row already uses. */
   background: var(--conn-color-tint, var(--accent-tint));
 }
+/* Shared by the `ƒ`/`#` text markers (a `<span>`, styled by `font-size`
+   below) and the SVG icon markers (`TableTabIcon` & co. in EditorTabs.tsx,
+   which ignore `font-size` but pick up `color` via `currentColor`). Either
+   way it's a direct child of `.tab`'s flex row, so flexbox blockifies it and
+   sizes/centers it from its own intrinsic box — no line-height leftover
+   space for a font's glyph metrics to hide in. */
 .tab__marker {
   font-size: 11px;
   color: var(--text-ghost);
@@ -2116,6 +2122,19 @@
 .grid__cell--num,
 .grid__hcell.grid__cell--num {
   justify-content: flex-end;
+}
+/* `justify-content: flex-end` above only actually moves `.grid__hlabel` —
+   the header's label doesn't grow, so it collapses to its own width and
+   `justify-content` pushes that leftover space in front of it. A data
+   cell's `.grid__cell-text` is `flex: 1 1 auto` (needed so its own
+   `text-overflow: ellipsis` has a box to clip against), which fills the
+   cell completely and leaves `justify-content` no free space to push
+   against — so the number just sits at the text's own default left edge,
+   out of step with the right-aligned header above it. Same fix the
+   editing input two rules up already uses: align the text itself, not the
+   box it sits in. */
+.grid__cell--num .grid__cell-text {
+  text-align: right;
 }
 /* Numeric data cells run 1px smaller than the row's base size (matches the
    longstanding 12.5/11.5 ratio at the default size) and scale with it; the
@@ -3456,6 +3475,13 @@
 .structure__note--error {
   color: var(--error-text);
 }
+.structure__note--warning {
+  padding: 8px 12px;
+  border: 1px solid var(--amber-bg);
+  border-radius: var(--radius-control);
+  background: var(--amber-bg);
+  color: var(--amber-text);
+}
 .structure__section {
   margin-bottom: 26px;
 }
@@ -3635,6 +3661,125 @@
   color: var(--text-muted);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* --- Schema Compare pane --- */
+.schema-compare__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.schema-compare__crumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.schema-compare__arrow {
+  color: var(--text-ghost);
+}
+.schema-compare__actions {
+  display: flex;
+  gap: 8px;
+  flex: none;
+}
+.schema-compare__disclaimer {
+  padding: 8px 12px;
+  margin-bottom: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+.schema-compare__tables {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.schema-compare__table {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  overflow: hidden;
+}
+.schema-compare__table--added {
+  border-color: var(--success-border);
+}
+.schema-compare__table--removed {
+  border-color: var(--error-bg);
+}
+.schema-compare__table-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--surface-header);
+}
+.schema-compare__table-name {
+  font-size: 12.5px;
+  color: var(--text);
+}
+.schema-compare__items {
+  display: flex;
+  flex-direction: column;
+}
+.schema-compare__item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--text);
+  border-top: 1px solid var(--border-faint);
+}
+.schema-compare__item-detail {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.schema-compare__kind {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.schema-compare__kind--added {
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+.schema-compare__kind--removed {
+  background: var(--error-bg);
+  color: var(--error-text);
+}
+.schema-compare__kind--changed {
+  background: var(--amber-bg);
+  color: var(--amber-text);
+}
+.schema-compare__sql-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.schema-compare__sql {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
 }
 
 /* --- Workspace command palette (Cmd/Ctrl+K) --- */
@@ -3982,4 +4127,153 @@
 .ai-msg-action:hover {
   background: var(--border-faint);
   color: var(--text);
+}
+
+/* --- ER diagram pane --- */
+/* Not the `.structure__scroll` convention the other panes use — that's a
+   normal vertically-scrolling document flow, but a pan/zoom canvas needs a
+   fixed, non-scrolling viewport instead. */
+.erd {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+}
+.erd__topbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border-faint);
+}
+.erd__crumb {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.erd__note {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+.erd__relayout {
+  margin-left: auto;
+}
+.erd__canvas {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+/* React Flow's own documented theming variables — mapped onto CubbyDB's
+   existing tokens once, so the canvas follows whichever theme (light/dark/
+   paper/midnight/...) is active without any per-theme duplication here. Not
+   a pixel-perfect reskin, just close visual integration. */
+.erd__canvas .react-flow {
+  --xy-background-color: var(--surface);
+  --xy-background-pattern-color: var(--border);
+  --xy-edge-stroke: var(--text-faint);
+  --xy-edge-stroke-selected: var(--accent);
+  --xy-controls-button-background-color: var(--surface-raised);
+  --xy-controls-button-background-color-hover: var(--border-faint);
+  --xy-controls-button-color: var(--text-muted);
+  --xy-controls-button-color-hover: var(--text);
+  --xy-controls-button-border-color: var(--border);
+  --xy-handle-background-color: var(--text-faint);
+  --xy-handle-border-color: var(--surface);
+  --xy-selection-background-color: var(--accent-glow-soft);
+  --xy-selection-border: 1px solid var(--accent);
+}
+.erd__canvas .react-flow__edge-path {
+  stroke: var(--text-faint);
+}
+.erd__canvas .react-flow__attribution {
+  display: none;
+}
+
+.erd-node {
+  min-width: 220px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm, none);
+}
+.erd-node--center {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.erd-node--center .erd-node__header {
+  background: var(--accent-tint);
+  color: var(--accent-tint-text);
+}
+.erd-node__header {
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  background: var(--surface-header);
+  border-bottom: 1px solid var(--border-faint);
+}
+.erd-node__rows {
+  display: flex;
+  flex-direction: column;
+  /* Matches MAX_VISIBLE_ROWS * ROW_HEIGHT in erdGraph.ts (14 * 22px) — past
+     this many rows the card scrolls internally instead of growing without
+     bound, so an expanded 70-column table doesn't dominate the canvas. */
+  max-height: 308px;
+  overflow-y: auto;
+}
+.erd-node__toggle {
+  display: block;
+  width: 100%;
+  padding: 5px 10px;
+  border: none;
+  border-top: 1px solid var(--border-faint);
+  background: var(--surface-header);
+  color: var(--text-faint);
+  font-size: 10.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.erd-node__toggle:hover {
+  background: var(--border-faint);
+  color: var(--text);
+}
+.erd-node__row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  font-size: 11px;
+  border-top: 1px solid var(--border-faint);
+}
+.erd-node__row:first-child {
+  border-top: none;
+}
+.erd-node__badges {
+  display: flex;
+  gap: 2px;
+  flex: none;
+  min-width: 30px;
+}
+.erd-node__col-name {
+  color: var(--text);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.erd-node__col-type {
+  color: var(--text-faint);
+  font-size: 10px;
+  flex: none;
+}
+.erd-node__handle.erd-node__handle {
+  width: 6px;
+  height: 6px;
+  background: var(--text-faint);
+  border: 1px solid var(--surface-raised);
 }

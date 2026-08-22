@@ -19,8 +19,8 @@ export const PALETTE_SCOPES: Array<{
   placeholder: string;
 }> = [
   { id: "all", label: "All", placeholder: "Search CubbyDB…" },
-  { id: "cubbies", label: "Cubbies", placeholder: "Search cubbies…" },
   { id: "tables", label: "Tables", placeholder: "Search tables…" },
+  { id: "cubbies", label: "Cubbies", placeholder: "Search cubbies…" },
   { id: "columns", label: "Columns", placeholder: "Search columns…" },
   { id: "scripts", label: "Scripts", placeholder: "Search saved scripts…" },
 ];
@@ -163,9 +163,26 @@ function sortAndLimit<T extends PaletteItem>(
   scored: Array<{ item: T; score: number }>,
   query: string,
   limit = PER_GROUP_LIMIT,
+  tiebreak?: (a: T, b: T) => number,
 ): T[] {
-  if (query) scored.sort((a, b) => b.score - a.score);
+  if (query) {
+    scored.sort((a, b) => b.score - a.score || (tiebreak ? tiebreak(a.item, b.item) : 0));
+  }
   return scored.slice(0, limit).map(({ item }) => item);
+}
+
+/** Sorts items on the active connection ahead of equally-scored matches from
+ *  other connections, so e.g. searching "business" while on prod surfaces
+ *  prod's `business` table before uat's or staging's. */
+function activeConnectionFirst<T extends { sessionId: string }>(
+  activeConnectionId: string | null,
+): (a: T, b: T) => number {
+  return (a, b) => {
+    const aActive = a.sessionId === activeConnectionId;
+    const bActive = b.sessionId === activeConnectionId;
+    if (aActive === bActive) return 0;
+    return aActive ? -1 : 1;
+  };
 }
 
 function connectionMeta(slot: ConnectionSlot): { database: string | null; host: string | null } {
@@ -189,6 +206,10 @@ function tabKindLabel(kind: TabKind): string {
       return "Query";
     case "whatsnew":
       return "What's New";
+    case "schemaCompare":
+      return "Schema Compare";
+    case "erDiagram":
+      return "ER Diagram";
   }
 }
 
@@ -288,6 +309,7 @@ function buildConnectionItems(
 
 function buildTableAndColumnItems(
   slots: ConnectionSlot[],
+  activeConnectionId: string | null,
   query: string,
   includeTables: boolean,
   includeColumns: boolean,
@@ -347,9 +369,10 @@ function buildTableAndColumnItems(
       );
     });
   }
+  const activeFirst = activeConnectionFirst<PaletteItem & { sessionId: string }>(activeConnectionId);
   return {
-    tables: sortAndLimit(tables, query, query ? PER_GROUP_LIMIT : 40),
-    columns: sortAndLimit(columns, query),
+    tables: sortAndLimit(tables, query, query ? PER_GROUP_LIMIT : 40, activeFirst),
+    columns: sortAndLimit(columns, query, PER_GROUP_LIMIT, activeFirst),
   };
 }
 
@@ -445,7 +468,7 @@ export function buildPaletteGroups(input: {
     return group(
       "tables",
       "Tables and views",
-      buildTableAndColumnItems(slots, query, true, false).tables,
+      buildTableAndColumnItems(slots, input.activeConnectionId, query, true, false).tables,
     );
   }
   if (scope === "columns") {
@@ -453,7 +476,7 @@ export function buildPaletteGroups(input: {
       ? group(
           "columns",
           "Columns",
-          buildTableAndColumnItems(slots, query, false, true).columns,
+          buildTableAndColumnItems(slots, input.activeConnectionId, query, false, true).columns,
         )
       : [];
   }
@@ -469,11 +492,16 @@ export function buildPaletteGroups(input: {
   if (!query) {
     const recentItems = buildRecentObjectItems(input.recentObjects, slots);
     const recentIds = new Set(recentItems.map((item) => item.id.replace(/^recent:/, "table:")));
-    const allTables = buildTableAndColumnItems(slots, query, true, false).tables.filter(
-      (item) => !recentIds.has(item.id),
-    );
+    const allTables = buildTableAndColumnItems(
+      slots,
+      input.activeConnectionId,
+      query,
+      true,
+      false,
+    ).tables.filter((item) => !recentIds.has(item.id));
     return [
       ...group("recent", "Recent database objects", recentItems),
+      ...group("tables", "Tables and views", allTables),
       ...group("cubbies", "Cubbies", buildCubbyItems(input.cubbies, input.savedConnections, query)),
       ...group("actions", "Actions", buildActionItems(query)),
       ...group("tabs", "Open tabs", buildTabItems(slots, input.activeConnectionId, query)),
@@ -482,11 +510,10 @@ export function buildPaletteGroups(input: {
         "Connections",
         buildConnectionItems(slots, input.activeConnectionId, query),
       ),
-      ...group("tables", "Tables and views", allTables),
     ];
   }
 
-  const objects = buildTableAndColumnItems(slots, query, true, true);
+  const objects = buildTableAndColumnItems(slots, input.activeConnectionId, query, true, true);
   return [
     ...group("tables", "Tables and views", objects.tables),
     ...group("columns", "Columns", objects.columns),
@@ -516,5 +543,9 @@ export function tabIcon(kind: TabKind): string {
       return "◆";
     case "whatsnew":
       return "✦";
+    case "schemaCompare":
+      return "⇄";
+    case "erDiagram":
+      return "◫";
   }
 }

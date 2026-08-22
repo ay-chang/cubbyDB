@@ -16,6 +16,7 @@ mod db;
 mod history;
 mod keychain;
 mod saved_queries;
+mod ssh_known_hosts;
 mod state;
 
 use tauri::Manager;
@@ -46,8 +47,11 @@ pub fn run() {
             commands::save_cubby,
             commands::delete_cubby,
             commands::test_connection,
+            commands::probe_ssh_host_key,
+            commands::trust_ssh_host_key,
             commands::connect,
             commands::reconnect_session,
+            commands::set_session_read_only,
             commands::disconnect,
             commands::get_last_connection,
             commands::fetch_schema,
@@ -60,10 +64,12 @@ pub fn run() {
             commands::get_delete_impact,
             commands::delete_rows_cascade,
             commands::get_table_structure,
+            commands::compare_schemas,
             commands::get_function_definition,
             commands::get_sequence_details,
             commands::write_clipboard,
             commands::write_text_file,
+            commands::read_text_file,
             commands::run_readonly_query,
             commands::read_clipboard,
             commands::query_history,

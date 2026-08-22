@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import * as api from "../../api/backend";
 import { errorMessage } from "../../api/backend";
@@ -13,7 +13,13 @@ import {
   useStore,
 } from "../../state/store";
 import type { AccentColor, ConnectionColorStyle } from "../../state/store";
-import type { ConnectionParams, SavedConnection } from "../../types";
+import type {
+  ConnectionParams,
+  SavedConnection,
+  SshAuthMethod,
+  SshHostKeyProbe,
+  SshTunnelParams,
+} from "../../types";
 import { AppFrame } from "../common/AppFrame";
 import { Spinner } from "../common/Spinner";
 import { Toggle } from "../common/Toggle";
@@ -28,6 +34,19 @@ interface FormState {
   database: string;
   user: string;
   password: string;
+  readOnly: boolean;
+  sshEnabled: boolean;
+  sshBastionHost: string;
+  sshBastionPort: string;
+  sshBastionUser: string;
+  sshAuthMethod: SshAuthMethod["method"];
+  sshPassword: string;
+  /** The key's own contents, read off disk once by the "Browse…" button
+   *  (see `pickAndReadTextFile`) — `sshKeyFilename` alongside it is purely
+   *  cosmetic feedback, never sent to the backend. */
+  sshKeyContents: string;
+  sshKeyFilename: string;
+  sshKeyPassphrase: string;
 }
 
 const EMPTY_FORM: FormState = {
@@ -38,6 +57,16 @@ const EMPTY_FORM: FormState = {
   database: "",
   user: "",
   password: "",
+  readOnly: false,
+  sshEnabled: false,
+  sshBastionHost: "",
+  sshBastionPort: "22",
+  sshBastionUser: "",
+  sshAuthMethod: "password",
+  sshPassword: "",
+  sshKeyContents: "",
+  sshKeyFilename: "",
+  sshKeyPassphrase: "",
 };
 
 type TestState =
@@ -45,6 +74,33 @@ type TestState =
   | { kind: "testing" }
   | { kind: "ok"; label: string }
   | { kind: "error"; message: string };
+
+function authFromForm(form: FormState): SshAuthMethod {
+  switch (form.sshAuthMethod) {
+    case "privateKey":
+      return {
+        method: "privateKey",
+        keyContents: form.sshKeyContents || null,
+        passphrase: form.sshKeyPassphrase || null,
+      };
+    case "agent":
+      return { method: "agent" };
+    case "password":
+    default:
+      return { method: "password", password: form.sshPassword || null };
+  }
+}
+
+function sshFromForm(form: FormState): SshTunnelParams | null {
+  if (!form.sshEnabled) return null;
+  return {
+    enabled: true,
+    bastionHost: form.sshBastionHost.trim() || null,
+    bastionPort: form.sshBastionPort.trim() ? Number(form.sshBastionPort.trim()) : 22,
+    bastionUser: form.sshBastionUser.trim() || null,
+    auth: authFromForm(form),
+  };
+}
 
 function toParams(form: FormState): ConnectionParams {
   const trimmed = form.connectionString.trim();
@@ -55,10 +111,14 @@ function toParams(form: FormState): ConnectionParams {
     database: form.database.trim() || null,
     user: form.user.trim() || null,
     password: form.password ? form.password : null,
+    readOnly: form.readOnly,
+    ssh: sshFromForm(form),
   };
 }
 
 function paramsToForm(p: ConnectionParams, name = ""): FormState {
+  const ssh = p.ssh;
+  const auth = ssh?.auth;
   return {
     name,
     connectionString: p.connectionString ?? "",
@@ -67,6 +127,16 @@ function paramsToForm(p: ConnectionParams, name = ""): FormState {
     database: p.database ?? "",
     user: p.user ?? "",
     password: p.password ?? "",
+    readOnly: p.readOnly ?? false,
+    sshEnabled: ssh?.enabled ?? false,
+    sshBastionHost: ssh?.bastionHost ?? "",
+    sshBastionPort: ssh?.bastionPort != null ? String(ssh.bastionPort) : "22",
+    sshBastionUser: ssh?.bastionUser ?? "",
+    sshAuthMethod: auth?.method ?? "password",
+    sshPassword: (auth?.method === "password" && auth.password) || "",
+    sshKeyContents: (auth?.method === "privateKey" && auth.keyContents) || "",
+    sshKeyFilename: "",
+    sshKeyPassphrase: (auth?.method === "privateKey" && auth.passphrase) || "",
   };
 }
 
@@ -84,14 +154,33 @@ function deriveName(form: FormState): string {
 
 function savedSubtitle(conn: SavedConnection): string {
   const { params } = conn;
-  if (params.host) return `${params.host}:${params.port ?? 5432}`;
-  if (params.connectionString) {
-    return params.connectionString.replace(/:[^:@/]*@/, ":****@");
-  }
-  return "connection string";
+  const base = params.host
+    ? `${params.host}:${params.port ?? 5432}`
+    : params.connectionString
+      ? params.connectionString.replace(/:[^:@/]*@/, ":****@")
+      : "connection string";
+  const tags = [
+    params.readOnly ? "read-only" : null,
+    params.ssh?.enabled ? "via SSH" : null,
+  ].filter(Boolean);
+  return tags.length ? `${base} · ${tags.join(" · ")}` : base;
 }
 
-/** Params equality for dirty-tracking — undefined and null both mean "unset". */
+/** Normalizes `ssh` to exactly `null` when disabled — `sshFromForm` already
+ *  collapses a toggled-off tunnel this way, so a form with stale bastion
+ *  fields left over from a previous edit doesn't read as "dirty" against a
+ *  saved connection that's simply off. */
+function normalizedSsh(p: ConnectionParams): SshTunnelParams | null {
+  return p.ssh?.enabled ? p.ssh : null;
+}
+
+/** Params equality for dirty-tracking — undefined and null both mean "unset".
+ *  `ssh` is compared via `JSON.stringify` rather than field-by-field like
+ *  everything else here: it's a nested tagged union (auth method plus
+ *  whichever of password/key/passphrase that method uses), and a
+ *  hand-written comparison risks silently missing a field the next time the
+ *  shape changes — a stale "not dirty" from a forgotten field is a worse
+ *  failure mode here than the shortcut. */
 function paramsEqual(a: ConnectionParams, b: ConnectionParams): boolean {
   const norm = (p: ConnectionParams) => ({
     connectionString: p.connectionString ?? null,
@@ -100,6 +189,7 @@ function paramsEqual(a: ConnectionParams, b: ConnectionParams): boolean {
     database: p.database ?? null,
     user: p.user ?? null,
     password: p.password ?? null,
+    readOnly: p.readOnly ?? false,
   });
   const na = norm(a);
   const nb = norm(b);
@@ -109,7 +199,9 @@ function paramsEqual(a: ConnectionParams, b: ConnectionParams): boolean {
     na.port === nb.port &&
     na.database === nb.database &&
     na.user === nb.user &&
-    na.password === nb.password
+    na.password === nb.password &&
+    na.readOnly === nb.readOnly &&
+    JSON.stringify(normalizedSsh(a)) === JSON.stringify(normalizedSsh(b))
   );
 }
 
@@ -144,6 +236,7 @@ export function ConnectionScreen(props: {
   const reconnectError = useStore((s) => s.reconnectError);
   const renameLiveConnection = useStore((s) => s.renameLiveConnection);
   const setConnectionColor = useStore((s) => s.setConnectionColor);
+  const setConnectionReadOnly = useStore((s) => s.setConnectionReadOnly);
   // Only read once, at mount, to seed the form below — this component
   // doesn't need to react to the slot changing after that.
   const [editSlot] = useState(() =>
@@ -167,15 +260,84 @@ export function ConnectionScreen(props: {
   const [colorStyle, setColorStyle] = useState<ConnectionColorStyle>(
     editSlot?.colorStyle ?? DEFAULT_CONNECTION_COLOR_STYLE,
   );
-  const [formTab, setFormTab] = useState<"connection" | "color">("connection");
+  const [formTab, setFormTab] = useState<"connection" | "safety" | "ssh" | "color">("connection");
   const [test, setTest] = useState<TestState>({ kind: "idle" });
   const [connectError, setConnectError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
+
+  // Trust-on-first-use state for the SSH tab's bastion host key. Re-probed
+  // whenever the bastion host/port or auth method changes (see the effect
+  // below) — the probe itself never authenticates, so this is cheap and
+  // safe to re-run on every edit rather than gating it behind a button.
+  const [sshProbe, setSshProbe] = useState<SshHostKeyProbe | null>(null);
+  const [sshProbing, setSshProbing] = useState(false);
+  const [sshProbeError, setSshProbeError] = useState<string | null>(null);
+  const [sshTrusting, setSshTrusting] = useState(false);
 
   const params = useMemo(() => toParams(form), [form]);
 
   const hasInput =
     form.connectionString.trim() !== "" || form.host.trim() !== "";
+
+  // Re-probes the bastion's host key whenever there's enough to probe with —
+  // debounced, since this fires on every keystroke in the host field
+  // otherwise. The probe itself never authenticates (see
+  // `probe_ssh_host_key` on the backend), so re-running it on every edit
+  // costs nothing beyond the TCP round trip.
+  const sshBastionHost = form.sshBastionHost.trim();
+  const sshBastionPort = form.sshBastionPort.trim();
+  useEffect(() => {
+    if (!form.sshEnabled || !sshBastionHost) {
+      setSshProbe(null);
+      setSshProbeError(null);
+      return;
+    }
+    const port = sshBastionPort ? Number(sshBastionPort) : 22;
+    if (!Number.isFinite(port) || port <= 0) return;
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setSshProbing(true);
+      setSshProbeError(null);
+      api
+        .probeSshHostKey(sshBastionHost, port)
+        .then((probe) => {
+          if (!cancelled) setSshProbe(probe);
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            setSshProbe(null);
+            setSshProbeError(errorMessage(err));
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setSshProbing(false);
+        });
+    }, 500);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [form.sshEnabled, sshBastionHost, sshBastionPort]);
+
+  const trustSshHostKey = () => {
+    if (!sshProbe || !sshBastionHost) return;
+    const port = sshBastionPort ? Number(sshBastionPort) : 22;
+    setSshTrusting(true);
+    api
+      .trustSshHostKey(sshBastionHost, port, sshProbe.fingerprint)
+      .then(() => setSshProbe((p) => (p ? { ...p, status: { status: "trusted" } } : p)))
+      .catch((err) => setSshProbeError(errorMessage(err)))
+      .finally(() => setSshTrusting(false));
+  };
+
+  const browseForPrivateKey = () => {
+    void api.pickAndReadTextFile().then((picked) => {
+      if (!picked) return;
+      const filename = picked.path.split(/[/\\]/).pop() ?? picked.path;
+      setForm((f) => ({ ...f, sshKeyContents: picked.contents, sshKeyFilename: filename }));
+    });
+  };
 
   const selected = selectedId
     ? savedConnections.find((c) => c.id === selectedId) ?? null
@@ -309,15 +471,19 @@ export function ConnectionScreen(props: {
       // connection's session), reflect the rename in the switcher right
       // away rather than only after reconnecting.
       if (mode === "update") renameLiveConnection(saved.id, saved.name);
-      // Likewise for color/style — Update alone (unlike Connect/Reconnect)
-      // doesn't otherwise touch the live slot, so a color-only edit to an
-      // already-saved, already-live connection wouldn't show up until a
-      // separate reconnect.
+      // Likewise for color/style and read-only — Update alone (unlike
+      // Connect/Reconnect) doesn't otherwise touch the live slot, so an edit
+      // to an already-saved, already-live connection wouldn't show up until
+      // a separate reconnect. Read-only specifically can't wait for that:
+      // it's a safety switch, and a reconnect-shaped delay between "I turned
+      // this on" and it actually taking effect is exactly the gap a safety
+      // switch shouldn't have.
       const liveEntry = Object.entries(useStore.getState().connections).find(
         ([, slot]) => slot.current.connectionId === saved.id,
       );
       if (mode === "update" && liveEntry) {
         await setConnectionColor(liveEntry[0], color, colorStyle);
+        await setConnectionReadOnly(liveEntry[0], form.readOnly);
       }
 
       // First save of a live but never-saved (ad-hoc) session — e.g. the AI
@@ -393,6 +559,20 @@ export function ConnectionScreen(props: {
                 onClick={() => setFormTab("connection")}
               >
                 Connection
+              </button>
+              <button
+                type="button"
+                className={"settings-subtab" + (formTab === "safety" ? " settings-subtab--active" : "")}
+                onClick={() => setFormTab("safety")}
+              >
+                Safety
+              </button>
+              <button
+                type="button"
+                className={"settings-subtab" + (formTab === "ssh" ? " settings-subtab--active" : "")}
+                onClick={() => setFormTab("ssh")}
+              >
+                SSH Tunnel
               </button>
               <button
                 type="button"
@@ -475,6 +655,159 @@ export function ConnectionScreen(props: {
                   onChange={(v) => update("password", v)}
                   placeholder="••••••••••"
                 />
+              </div>
+
+              <div
+                className={"conn-form-tabpage" + (formTab === "safety" ? "" : " conn-form-tabpage--hidden")}
+              >
+                <div className="conn-field">
+                  <div className="conn-color-style">
+                    <span>Read-only connection</span>
+                    <Toggle
+                      on={form.readOnly}
+                      onToggle={() => {
+                        setForm((f) => ({ ...f, readOnly: !f.readOnly }));
+                        setTest({ kind: "idle" });
+                        setConnectError(null);
+                      }}
+                    />
+                  </div>
+                  <p className="conn-readonly-hint">
+                    Blocks every insert, update, and delete on this connection —
+                    enforced by CubbyDB itself, not just the database role's own
+                    grants. Independent of whatever the database role itself
+                    allows — this protects a connection you <i>can</i> write to
+                    but want to guard against your own mistakes on, like a
+                    shared staging or production database.
+                  </p>
+                </div>
+              </div>
+
+              <div
+                className={"conn-form-tabpage" + (formTab === "ssh" ? "" : " conn-form-tabpage--hidden")}
+              >
+                <div className="conn-field">
+                  <div className="conn-color-style">
+                    <span>Connect through an SSH bastion</span>
+                    <Toggle
+                      on={form.sshEnabled}
+                      onToggle={() => {
+                        setForm((f) => ({ ...f, sshEnabled: !f.sshEnabled }));
+                        setTest({ kind: "idle" });
+                        setConnectError(null);
+                      }}
+                    />
+                  </div>
+                  <p className="conn-readonly-hint">
+                    For a database that isn't reachable directly — CubbyDB opens an
+                    SSH connection to the bastion first, then routes the Postgres
+                    connection through it. Host/Port on the Connection tab are the
+                    real database, as reachable <i>from</i> the bastion.
+                  </p>
+                </div>
+
+                {form.sshEnabled && (
+                  <>
+                    <div className="conn-row conn-row--host">
+                      <Field
+                        label="Bastion host"
+                        value={form.sshBastionHost}
+                        onChange={(v) => update("sshBastionHost", v)}
+                        placeholder="bastion.example.com"
+                      />
+                      <Field
+                        label="Bastion port"
+                        value={form.sshBastionPort}
+                        onChange={(v) => update("sshBastionPort", v)}
+                        placeholder="22"
+                      />
+                    </div>
+
+                    <Field
+                      label="Bastion user"
+                      value={form.sshBastionUser}
+                      onChange={(v) => update("sshBastionUser", v)}
+                      placeholder="ubuntu"
+                    />
+
+                    <label className="conn-field">
+                      <span className="caption">Authentication</span>
+                      <select
+                        className="conn-input"
+                        value={form.sshAuthMethod}
+                        onChange={(e) =>
+                          setForm((f) => ({
+                            ...f,
+                            sshAuthMethod: e.target.value as FormState["sshAuthMethod"],
+                          }))
+                        }
+                      >
+                        <option value="password">Password</option>
+                        <option value="privateKey">Private key</option>
+                        <option value="agent">SSH agent</option>
+                      </select>
+                    </label>
+
+                    {form.sshAuthMethod === "password" && (
+                      <Field
+                        label="Bastion password"
+                        type="password"
+                        value={form.sshPassword}
+                        onChange={(v) => update("sshPassword", v)}
+                        placeholder="••••••••••"
+                      />
+                    )}
+
+                    {form.sshAuthMethod === "privateKey" && (
+                      <>
+                        <label className="conn-field">
+                          <span className="caption">Private key</span>
+                          <div className="conn-key-row">
+                            <button
+                              type="button"
+                              className="conn-key-browse"
+                              onClick={browseForPrivateKey}
+                            >
+                              Browse…
+                            </button>
+                            <span className="conn-key-filename">
+                              {form.sshKeyFilename ||
+                                (form.sshKeyContents ? "Key loaded" : "No file selected")}
+                            </span>
+                          </div>
+                        </label>
+                        <Field
+                          label="Key passphrase (if any)"
+                          type="password"
+                          value={form.sshKeyPassphrase}
+                          onChange={(v) => update("sshKeyPassphrase", v)}
+                          placeholder="••••••••••"
+                        />
+                        <p className="conn-readonly-hint">
+                          Stored in plaintext alongside your other saved connection
+                          details, same as a password — a leaked key's reach extends
+                          beyond just this database, so treat this connection's
+                          storage accordingly.
+                        </p>
+                      </>
+                    )}
+
+                    {form.sshAuthMethod === "agent" && (
+                      <p className="conn-readonly-hint">
+                        SSH agent authentication isn't supported yet — use a
+                        password or private key for now.
+                      </p>
+                    )}
+
+                    <SshHostKeyStatusPanel
+                      probing={sshProbing}
+                      probe={sshProbe}
+                      error={sshProbeError}
+                      trusting={sshTrusting}
+                      onTrust={trustSshHostKey}
+                    />
+                  </>
+                )}
               </div>
 
               <div
@@ -732,5 +1065,85 @@ function Field(props: {
         autoCorrect="off"
       />
     </label>
+  );
+}
+
+/**
+ * Trust-on-first-use status for the SSH tab's bastion host key. `probe` is
+ * `null` while there's nothing to show yet (no bastion host typed, or a
+ * probe still in flight) — `probing`/`error` cover those two cases
+ * separately since "still checking" and "couldn't check" read very
+ * differently to the user.
+ */
+function SshHostKeyStatusPanel({
+  probing,
+  probe,
+  error,
+  trusting,
+  onTrust,
+}: {
+  probing: boolean;
+  probe: SshHostKeyProbe | null;
+  error: string | null;
+  trusting: boolean;
+  onTrust: () => void;
+}) {
+  if (probing && !probe) {
+    return (
+      <div className="conn-ssh-hostkey conn-ssh-hostkey--pending">
+        <Spinner /> Checking the bastion&rsquo;s host key…
+      </div>
+    );
+  }
+  if (error) {
+    return <div className="conn-ssh-hostkey conn-ssh-hostkey--error">{error}</div>;
+  }
+  if (!probe) return null;
+
+  if (probe.status.status === "trusted") {
+    return (
+      <div className="conn-ssh-hostkey conn-ssh-hostkey--trusted">
+        ✓ Host key verified ({probe.keyType} {probe.fingerprint})
+      </div>
+    );
+  }
+
+  if (probe.status.status === "changed") {
+    return (
+      <div className="conn-ssh-hostkey conn-ssh-hostkey--danger">
+        <p>
+          <b>The bastion&rsquo;s host key has changed.</b> It was previously trusted as{" "}
+          <code>{probe.status.previousFingerprint}</code>, but is now presenting{" "}
+          <code>{probe.fingerprint}</code> ({probe.keyType}). This could mean the
+          bastion was reconfigured — or that something is impersonating it.
+        </p>
+        <button
+          type="button"
+          className="conn-ssh-hostkey__trust conn-ssh-hostkey__trust--danger"
+          onClick={onTrust}
+          disabled={trusting}
+        >
+          {trusting ? "Trusting…" : "I've verified this — trust the new key"}
+        </button>
+      </div>
+    );
+  }
+
+  // "unknown" — never seen this bastion before.
+  return (
+    <div className="conn-ssh-hostkey conn-ssh-hostkey--unknown">
+      <p>
+        New bastion. <b>{probe.keyType}</b> host key fingerprint:{" "}
+        <code>{probe.fingerprint}</code>
+      </p>
+      <button
+        type="button"
+        className="conn-ssh-hostkey__trust"
+        onClick={onTrust}
+        disabled={trusting}
+      >
+        {trusting ? "Trusting…" : "Trust and continue"}
+      </button>
+    </div>
   );
 }

@@ -17,6 +17,7 @@ use crate::cubbies::CubbyStore;
 use crate::db::{ConnectionParams, DbSession, Engine, QueryCanceller};
 use crate::history::HistoryStore;
 use crate::saved_queries::SavedQueryStore;
+use crate::ssh_known_hosts::SshKnownHostsStore;
 
 /// One open connection.
 pub struct ActiveSession {
@@ -60,6 +61,10 @@ impl AppState {
 
     pub fn history_store(&self) -> HistoryStore {
         HistoryStore::new(&self.data_dir)
+    }
+
+    pub fn ssh_known_hosts_store(&self) -> SshKnownHostsStore {
+        SshKnownHostsStore::new(&self.data_dir)
     }
 
     pub fn last_connection_store(&self) -> LastConnectionStore {

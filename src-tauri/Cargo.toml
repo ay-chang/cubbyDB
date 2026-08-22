@@ -6,7 +6,9 @@ authors = ["CubbyDB contributors"]
 license = "MIT"
 repository = ""
 edition = "2021"
-rust-version = "1.77"
+# Bumped from 1.77 for the `russh` SSH-tunnel dependency, which needs it.
+# No downstream consumers depend on this app's own MSRV.
+rust-version = "1.85"
 
 # The library target holds all app logic so it can be unit-tested independently
 # of the Tauri binary entry point.
@@ -65,6 +67,12 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 arboard = "3"
 
 thiserror = "2"
+
+# SSH tunneling, so a connection whose Postgres isn't directly reachable can
+# go through a bastion host. Pure Rust and tokio-native — no C library
+# dependency, matching the fully-async architecture everywhere else here —
+# rather than shelling out to the system `ssh` binary or binding libssh2.
+russh = "0.63.0"
 
 [features]
 # This feature is used by Tauri's mobile tooling; kept for forward-compat.

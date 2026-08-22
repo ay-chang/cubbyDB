@@ -15,9 +15,9 @@ use crate::ai::{ActiveTableRef, AiChatResult, ChatMessage, ModelInfo, ReasoningE
 use crate::connections::{LastConnection, SavedConnection};
 use crate::cubbies::Cubby;
 use crate::db::{
-    driver_for, ColumnValue, ConnectionInfo, ConnectionParams, DbError, DbErrorKind, DeleteImpact,
-    Engine, FunctionDefinition, QueryResult, SchemaNode, SequenceDetails, TableStructure,
-    PAGE_SIZE,
+    driver_for, schema_diff, ColumnValue, ConnectionInfo, ConnectionParams, DbError, DbErrorKind,
+    DeleteImpact, Engine, FunctionDefinition, QueryResult, SchemaCompareResult, SchemaNode,
+    SchemaSnapshot, SequenceDetails, TableStructure, PAGE_SIZE,
 };
 use crate::history::{now_millis, HistoryEntry};
 use crate::saved_queries::SavedQuery;
@@ -122,11 +122,81 @@ pub async fn delete_cubby(state: State<'_, AppState>, id: String) -> Result<(), 
 
 #[tauri::command]
 pub async fn test_connection(
+    state: State<'_, AppState>,
     params: ConnectionParams,
     engine: Option<Engine>,
 ) -> Result<ConnectionInfo, DbError> {
     let driver = driver_for(engine.unwrap_or_default());
-    driver.test_connection(&params).await
+    driver.test_connection(&params, state.data_dir()).await
+}
+
+/// Whether an SSH bastion's host key is safe to proceed with, from the
+/// trust-on-first-use store.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase", tag = "status")]
+pub enum SshHostKeyStatus {
+    /// Never seen before — the frontend should show the fingerprint and ask
+    /// for confirmation before this bastion is used for a real tunnel.
+    Unknown,
+    /// Matches what was previously confirmed; safe to proceed silently.
+    Trusted,
+    /// Seen before, but the key is now different — the frontend should
+    /// treat this as a hard stop (a reconfigured bastion, or a possible
+    /// man-in-the-middle) rather than a routine reprompt.
+    Changed { previous_fingerprint: String },
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshHostKeyProbe {
+    pub fingerprint: String,
+    pub key_type: String,
+    pub status: SshHostKeyStatus,
+}
+
+/// Reads an SSH bastion's host key without authenticating, and reports
+/// whether it's already trusted — the SSH tunnel form calls this as the
+/// user fills in the bastion host/port, so trust can be confirmed (or a
+/// changed key caught) before a real `connect`/`test_connection` attempt
+/// ever opens a tunnel.
+#[tauri::command]
+pub async fn probe_ssh_host_key(
+    state: State<'_, AppState>,
+    bastion_host: String,
+    bastion_port: u16,
+) -> Result<SshHostKeyProbe, DbError> {
+    let probed = crate::db::ssh_tunnel::probe_host_key(&bastion_host, bastion_port).await?;
+    let trusted = state
+        .ssh_known_hosts_store()
+        .lookup(&bastion_host, bastion_port)?;
+    let status = match trusted {
+        None => SshHostKeyStatus::Unknown,
+        Some(t) if t.key_fingerprint == probed.fingerprint => SshHostKeyStatus::Trusted,
+        Some(t) => SshHostKeyStatus::Changed {
+            previous_fingerprint: t.key_fingerprint,
+        },
+    };
+    Ok(SshHostKeyProbe {
+        fingerprint: probed.fingerprint,
+        key_type: probed.key_type,
+        status,
+    })
+}
+
+/// Records `fingerprint` as trusted for this bastion — called only after
+/// the frontend's own confirmation UI, never automatically. The actual
+/// tunnel-opening path (`ssh_tunnel::open_tunnel`'s `TofuHandler`) only ever
+/// *reads* this store, so a key can't become trusted any other way.
+#[tauri::command]
+pub async fn trust_ssh_host_key(
+    state: State<'_, AppState>,
+    bastion_host: String,
+    bastion_port: u16,
+    fingerprint: String,
+) -> Result<(), DbError> {
+    state
+        .ssh_known_hosts_store()
+        .trust(&bastion_host, bastion_port, &fingerprint)
 }
 
 /// Open a new session and add it to the pool — never overwrites an existing
@@ -148,7 +218,7 @@ pub async fn connect(
 ) -> Result<ActiveConnectionInfo, DbError> {
     let engine = engine.unwrap_or_default();
     let driver = driver_for(engine);
-    let session = driver.connect(&params).await?;
+    let session = driver.connect(&params, state.data_dir()).await?;
     let info = session.info().clone();
 
     if remember_as_last.unwrap_or(true) {
@@ -212,7 +282,7 @@ pub async fn reconnect_session(
 
     let engine = engine.unwrap_or_default();
     let driver = driver_for(engine);
-    let session = driver.connect(&params).await?;
+    let session = driver.connect(&params, state.data_dir()).await?;
     let info = session.info().clone();
 
     if let Err(e) = state.last_connection_store().set(&LastConnection {
@@ -263,7 +333,7 @@ async fn reconnect_in_place(
     let name = old.name.clone();
     let connection_id = old.connection_id.clone();
 
-    let session = driver_for(engine).connect(&params).await?;
+    let session = driver_for(engine).connect(&params, state.data_dir()).await?;
     state
         .canceller
         .lock()
@@ -279,6 +349,68 @@ async fn reconnect_in_place(
             engine,
         },
     );
+    Ok(())
+}
+
+/// `schema_snapshot`, with the same try-once/reconnect-once-on-`Connection`-
+/// error shape every other session command uses — factored out here (rather
+/// than inlined like `get_table_structure`'s single-session version) because
+/// `compare_schemas` needs it twice, against two independent session ids.
+async fn snapshot_with_retry(
+    active: &mut HashMap<String, ActiveSession>,
+    session_id: &str,
+    schema: &str,
+    state: &AppState,
+) -> Result<SchemaSnapshot, DbError> {
+    {
+        let session = active.get(session_id).ok_or_else(DbError::not_connected)?;
+        match session.session.schema_snapshot(schema).await {
+            Err(e) if e.kind == DbErrorKind::Connection => { /* retry below */ }
+            other => return other,
+        }
+    }
+    reconnect_in_place(active, session_id, state).await?;
+    active
+        .get(session_id)
+        .ok_or_else(DbError::not_connected)?
+        .session
+        .schema_snapshot(schema)
+        .await
+}
+
+/// Refuses a mutation outright on a connection marked read-only
+/// (`ConnectionParams::read_only`), before it ever reaches the database.
+/// Unlike `run_query`'s read-only path — which still runs a SELECT inside a
+/// rolled-back transaction, since the statement might be one — these
+/// commands each build a specific INSERT/UPDATE/DELETE themselves, so
+/// there's no ambiguity to preserve: always reject.
+fn ensure_writable(session: &ActiveSession) -> Result<(), DbError> {
+    if session.params.read_only {
+        return Err(DbError::internal(
+            "This connection is read-only — writes are disabled.",
+        ));
+    }
+    Ok(())
+}
+
+/// Flips the read-only guard on an already-connected session in place — no
+/// reconnect, no new database round trip. Unlike a host/port/credential
+/// change (which genuinely needs a fresh connection to take effect),
+/// read-only is purely a policy this app enforces on top of an existing
+/// connection, so there's nothing to re-establish; only `params.read_only`,
+/// read by `ensure_writable` and `run_query`'s read-only branch, needs to
+/// change. Mirrors `setConnectionColor`'s "applies immediately on Update,
+/// no separate Reconnect" precedent on the frontend — see
+/// `ConnectionScreen.tsx`'s `handleSave`.
+#[tauri::command]
+pub async fn set_session_read_only(
+    state: State<'_, AppState>,
+    session_id: String,
+    read_only: bool,
+) -> Result<(), DbError> {
+    let mut active = state.active.lock().await;
+    let session = active.get_mut(&session_id).ok_or_else(DbError::not_connected)?;
+    session.params.read_only = read_only;
     Ok(())
 }
 
@@ -360,19 +492,24 @@ pub async fn run_query(
         .ok_or_else(DbError::not_connected)?
         .name
         .clone();
+    let read_only = active
+        .get(&session_id)
+        .ok_or_else(DbError::not_connected)?
+        .params
+        .read_only;
 
     let mut result = active
         .get(&session_id)
         .ok_or_else(DbError::not_connected)?
         .session
-        .run_query(&sql, page)
+        .run_query(&sql, page, read_only)
         .await;
 
     // If the connection had silently dropped, reconnect once and retry.
     if matches!(&result, Err(e) if e.kind == DbErrorKind::Connection) {
         if let Ok(()) = reconnect_in_place(&mut active, &session_id, &state).await {
             if let Some(session) = active.get(&session_id) {
-                result = session.session.run_query(&sql, page).await;
+                result = session.session.run_query(&sql, page, read_only).await;
             }
         }
     }
@@ -447,6 +584,7 @@ pub async fn update_row(
     let mut active = state.active.lock().await;
     {
         let session = active.get(&session_id).ok_or_else(DbError::not_connected)?;
+        ensure_writable(session)?;
         match session
             .session
             .update_row(&schema, &table, &primary_key, &changes)
@@ -477,6 +615,7 @@ pub async fn insert_row(
     let mut active = state.active.lock().await;
     {
         let session = active.get(&session_id).ok_or_else(DbError::not_connected)?;
+        ensure_writable(session)?;
         match session.session.insert_row(&schema, &table, &values).await {
             Err(e) if e.kind == DbErrorKind::Connection => { /* retry below */ }
             other => return other,
@@ -503,6 +642,7 @@ pub async fn delete_row(
     let mut active = state.active.lock().await;
     {
         let session = active.get(&session_id).ok_or_else(DbError::not_connected)?;
+        ensure_writable(session)?;
         match session
             .session
             .delete_row(&schema, &table, &primary_key)
@@ -567,6 +707,7 @@ pub async fn delete_rows_cascade(
     let mut active = state.active.lock().await;
     {
         let session = active.get(&session_id).ok_or_else(DbError::not_connected)?;
+        ensure_writable(session)?;
         match session
             .session
             .delete_row_cascade(&schema, &table, &primary_keys)
@@ -609,6 +750,35 @@ pub async fn get_table_structure(
         .session
         .table_structure(&schema, &table)
         .await
+}
+
+/// Diffs one schema against another — possibly on a different open
+/// connection entirely — and generates a best-effort migration script.
+/// Read-only: this only ever reads catalog metadata and never executes
+/// anything itself; see `schema_diff::generate_migration_sql`'s doc comment
+/// for why the generated SQL's statement ordering is best-effort, not
+/// guaranteed-valid SQL. The two snapshot lookups run sequentially against
+/// the same lock guard (never concurrently), which also makes comparing two
+/// schemas on the *same* connection (`source_session_id == target_session_id`)
+/// work with no double-borrow issue.
+#[tauri::command]
+pub async fn compare_schemas(
+    state: State<'_, AppState>,
+    source_session_id: String,
+    source_schema: String,
+    target_session_id: String,
+    target_schema: String,
+) -> Result<SchemaCompareResult, DbError> {
+    let mut active = state.active.lock().await;
+    let source =
+        snapshot_with_retry(&mut active, &source_session_id, &source_schema, &state).await?;
+    let target =
+        snapshot_with_retry(&mut active, &target_session_id, &target_schema, &state).await?;
+    drop(active);
+
+    let diff = schema_diff::diff_snapshots(&source, &target);
+    let migration = schema_diff::generate_migration_sql(&source_schema, &target_schema, &diff);
+    Ok(SchemaCompareResult { diff, migration })
 }
 
 /// A function/procedure's full body, by oid — the schema tree's "View
@@ -675,6 +845,18 @@ pub async fn get_sequence_details(
 pub async fn write_text_file(path: String, contents: String) -> Result<(), DbError> {
     std::fs::write(&path, contents)
         .map_err(|e| DbError::new(DbErrorKind::Internal, format!("Could not save {path}: {e}")))
+}
+
+/// Reads a file's contents as text — the counterpart to `write_text_file`,
+/// used by the SSH tunnel form's "Browse…" private-key picker. The picked
+/// *contents* end up in the saved connection, not this path (see
+/// `SshAuthMethod::PrivateKey`'s own doc comment for why); this command's
+/// only job is getting them off disk once, right after the user picks the
+/// file.
+#[tauri::command]
+pub async fn read_text_file(path: String) -> Result<String, DbError> {
+    std::fs::read_to_string(&path)
+        .map_err(|e| DbError::new(DbErrorKind::Internal, format!("Could not read {path}: {e}")))
 }
 
 #[tauri::command]

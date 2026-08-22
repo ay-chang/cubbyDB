@@ -11,9 +11,17 @@
 mod error;
 mod read_only;
 pub mod postgres;
+pub mod schema_diff;
+pub mod ssh_tunnel;
 
 pub use error::{DbError, DbErrorKind};
 pub(crate) use read_only::validate_read_only_statement;
+pub use schema_diff::{
+    ColumnSnapshot, ForeignKeySnapshot, NamedKeySnapshot, SchemaCompareResult, SchemaSnapshot,
+    TableSnapshot,
+};
+
+use std::path::Path;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -49,6 +57,81 @@ pub struct ConnectionParams {
     pub user: Option<String>,
     #[serde(default)]
     pub password: Option<String>,
+    /// When set, every mutation on this connection is refused before it
+    /// reaches the database, and `run_query` runs inside a rolled-back
+    /// `READ ONLY` transaction restricted to a single SELECT-family
+    /// statement — the same enforcement `run_read_only_query` already uses
+    /// for AI-generated SQL, just also available to hand-typed SQL. A
+    /// safety net independent of the database role's own grants: it
+    /// protects a connection you *can* write to but don't want to, by
+    /// accident, from this app.
+    #[serde(default)]
+    pub read_only: bool,
+    /// When set and `enabled`, the database isn't dialed directly — an SSH
+    /// connection to `bastion_host` is opened first, and the Postgres
+    /// connection is routed through a `direct-tcpip` channel to
+    /// `host`/`port` (above) as reachable *from that bastion*. See
+    /// `ssh_tunnel::open_tunnel`.
+    #[serde(default)]
+    pub ssh: Option<SshTunnelParams>,
+}
+
+/// An SSH bastion to tunnel the Postgres connection through, and how to
+/// authenticate to it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshTunnelParams {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub bastion_host: Option<String>,
+    #[serde(default = "default_ssh_port")]
+    pub bastion_port: u16,
+    #[serde(default)]
+    pub bastion_user: Option<String>,
+    #[serde(default)]
+    pub auth: SshAuthMethod,
+}
+
+fn default_ssh_port() -> u16 {
+    22
+}
+
+/// How to authenticate to the bastion. A tagged union (not three optional
+/// fields on `SshTunnelParams`) so the form's auth-method selector maps onto
+/// exactly one variant, with no way to e.g. have a password *and* a private
+/// key both set at once.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "method")]
+pub enum SshAuthMethod {
+    Password {
+        #[serde(default)]
+        password: Option<String>,
+    },
+    PrivateKey {
+        /// The key's own contents, not a path to it on disk — matching how
+        /// `ConnectionParams::password` is already handled (the full secret
+        /// stored inline, not a reference), and the only choice that keeps a
+        /// saved connection portable: a path to `~/.ssh/id_ed25519` has no
+        /// guarantee of existing on another machine this file might be
+        /// copied to.
+        #[serde(default)]
+        key_contents: Option<String>,
+        #[serde(default)]
+        passphrase: Option<String>,
+    },
+    /// Not implemented yet — `ssh_tunnel::open_tunnel` refuses this with a
+    /// clear error rather than silently falling back to something else.
+    /// Kept as a real variant (rather than left out entirely) so the data
+    /// model and the form's auth-method selector don't need to change again
+    /// once it is.
+    Agent,
+}
+
+impl Default for SshAuthMethod {
+    fn default() -> Self {
+        SshAuthMethod::Password { password: None }
+    }
 }
 
 /// Result of a successful connect/test: what server we reached and how long it
@@ -225,6 +308,13 @@ pub struct TableStructure {
     pub columns: Vec<StructureColumn>,
     pub indexes: Vec<IndexDetail>,
     pub check_constraints: Vec<CheckConstraintDetail>,
+    pub triggers: Vec<TriggerDetail>,
+    /// Whether Row-Level Security is turned on for this table at all,
+    /// independent of whether any policies exist — `true` with an empty
+    /// `rls_policies` means every role but the table owner is denied by
+    /// default, a state easy to miss without this flag.
+    pub rls_enabled: bool,
+    pub rls_policies: Vec<RlsPolicyDetail>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -253,6 +343,27 @@ pub struct CheckConstraintDetail {
     pub name: String,
     /// The constraint's own `CHECK (...)` text (`pg_get_constraintdef`).
     pub definition: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TriggerDetail {
+    pub name: String,
+    /// The trigger's own `CREATE TRIGGER ...` statement (`pg_get_triggerdef`).
+    pub definition: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RlsPolicyDetail {
+    pub name: String,
+    /// `"PERMISSIVE"` or `"RESTRICTIVE"`, verbatim from `pg_policies`.
+    pub permissive: String,
+    /// `"ALL"`, `"SELECT"`, `"INSERT"`, `"UPDATE"`, or `"DELETE"`.
+    pub command: String,
+    pub roles: Vec<String>,
+    pub using_expr: Option<String>,
+    pub check_expr: Option<String>,
 }
 
 /// A single column/value pair used to describe a row edit: which column, and
@@ -336,12 +447,23 @@ pub struct QueryResult {
 pub trait DatabaseDriver: Send + Sync {
     /// Connect, read the server version, and drop the connection. Used by the
     /// "Test connection" action before saving.
-    async fn test_connection(&self, params: &ConnectionParams) -> Result<ConnectionInfo, DbError>;
+    ///
+    /// `data_dir` is only actually read when `params.ssh` is set — it's
+    /// where the SSH known-hosts trust store lives (see
+    /// `ssh_tunnel::open_tunnel`). Threaded through here rather than looked
+    /// up independently so this trait stays the single place a driver
+    /// learns where the app keeps its files.
+    async fn test_connection(
+        &self,
+        params: &ConnectionParams,
+        data_dir: &Path,
+    ) -> Result<ConnectionInfo, DbError>;
 
     /// Open a live session. In v1 only one session is held open at a time.
     async fn connect(
         &self,
         params: &ConnectionParams,
+        data_dir: &Path,
     ) -> Result<Box<dyn DbSession>, DbError>;
 }
 
@@ -360,7 +482,15 @@ pub trait DbSession: Send + Sync {
     /// way the table browser does — the frontend never rewrites SQL. A
     /// statement carrying its own LIMIT is run untouched and reported as
     /// capped rather than paged.
-    async fn run_query(&self, sql: &str, page: u32) -> Result<QueryResult, DbError>;
+    ///
+    /// `read_only` is the connection-level guard (`ConnectionParams::read_only`),
+    /// not a per-call option: when set, the driver must apply the same
+    /// allowlist `run_read_only_query` uses and run inside a rolled-back
+    /// `READ ONLY` transaction, while still paging exactly as the
+    /// non-read-only path does — unlike `run_read_only_query`, which always
+    /// reads from the start, this still has to honor `page` since it backs
+    /// the editor's Next/Prev, not a one-shot export.
+    async fn run_query(&self, sql: &str, page: u32, read_only: bool) -> Result<QueryResult, DbError>;
 
     /// Run a single SELECT-family statement read-only — used by the AI
     /// assistant for model-generated SQL. The driver must enforce both a
@@ -458,6 +588,12 @@ pub trait DbSession: Send + Sync {
     /// Column, index, and check-constraint details for one table — the "View
     /// structure" panel.
     async fn table_structure(&self, schema: &str, table: &str) -> Result<TableStructure, DbError>;
+
+    /// One schema's ordinary base tables, with named PK/unique/FK
+    /// constraints (the per-column-bool/unnamed FK data in `fetch_schema`
+    /// isn't enough to generate DDL from) plus indexes and check
+    /// constraints. Used only by Schema Compare — see [`schema_diff`].
+    async fn schema_snapshot(&self, schema: &str) -> Result<SchemaSnapshot, DbError>;
 
     /// A function/procedure's full body, identified by its `pg_proc.oid`
     /// (disambiguates overloads — see [`FunctionNode::oid`]).

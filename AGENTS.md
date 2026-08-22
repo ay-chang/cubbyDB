@@ -77,8 +77,19 @@ src-tauri/src/
                     (Postgres returns canonical text for every type, so no
                     per-type conversion is needed). Also: default-LIMIT logic,
                     select-top/filter SQL generation, error mapping.
+    ssh_tunnel.rs   SSH bastion connection + direct-tcpip channel (via
+                    `russh`), consumed by `postgres.rs::establish` as a plain
+                    async stream when a connection has SSH tunneling on.
+    schema_diff.rs  Schema Compare: pure, DB-free diff + best-effort migration
+                    SQL generation over `SchemaSnapshot`s. `postgres.rs`
+                    builds the snapshot (`schema_snapshot`, whole-schema-
+                    scoped queries alongside the "View structure" ones);
+                    nothing here talks to Postgres, so it's unit-tested
+                    without a live database. Never executes its own output.
     error.rs        DbError { message, code, hint, position, kind }
   connections.rs    saved connections + "last connection" (JSON, 0600 on unix)
+  ssh_known_hosts.rs  trust-on-first-use store for SSH bastion host keys
+                      (JSON, 0600 on unix) — same shape as connections.rs
   history.rs        query history log (JSONL, size-capped)
   state.rs          Tauri-managed AppState (ONE active session at a time)
   commands.rs       the #[tauri::command] surface; also the auto-reconnect retry
@@ -214,6 +225,19 @@ clearly and get sign-off before breaking it.
   Explicit Disconnect clears the last connection (opts out).
 - **TLS**: native-tls with sslmode=prefer — TLS when the server offers it,
   plaintext otherwise. No extra system deps.
+- **SSH tunneling**: `russh` (pure Rust, tokio-native — chosen to match the
+  fully-async architecture elsewhere here rather than binding libssh2 or
+  shelling out). `db/postgres.rs::establish` branches on `params.ssh`; the
+  non-tunneled path is untouched. The bastion's host key is
+  trust-on-first-use — `ssh_tunnel::TofuHandler` only ever *checks* the
+  fingerprint against `ssh_known_hosts.rs`, it never writes to it, so
+  trusting a key only ever happens through the explicit
+  `trust_ssh_host_key` command after the frontend's own confirmation UI.
+  SSH-agent auth (`SshAuthMethod::Agent`) is a real data-model variant but
+  not implemented yet — `open_tunnel` refuses it with a clear error rather
+  than a half-working `Signer` adapter (`AgentClient` doesn't implement
+  `russh`'s `Signer` itself, so agent auth needs a small hand-written
+  bridge that wasn't verified against a live agent).
 - **Passwords are stored in plaintext** in `connections.json` /
   `last_connection.json` (0600), by deliberate, permanent design — not a gap
   to fix. An earlier version stored them in the OS keychain instead; every OS
@@ -233,6 +257,7 @@ clearly and get sign-off before breaking it.
 - `connections.json` — saved connections
 - `last_connection.json` — last connection, for auto-reconnect
 - `history.jsonl` — query history (capped to ~1000 recent entries)
+- `ssh_known_hosts.json` — trusted SSH bastion host-key fingerprints
 
 Query results, schema, and table row counts are **not** persisted — always read
 live from Postgres.

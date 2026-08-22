@@ -13,6 +13,7 @@ import { copyToClipboard, errorMessage, readClipboard } from "../../api/backend"
 import { parseCsv, saveCsv } from "../../lib/csv";
 import { bestMatch } from "../../lib/fuzzyMatch";
 import { matchesKeybinding, useKeybindingStore } from "../../lib/keybindings";
+import { isUuidCapableType } from "../../lib/sqlTypes";
 import type { Delimiter, QueryTab } from "../../state/store";
 import { useActiveSchema, useStore } from "../../state/store";
 import {
@@ -75,13 +76,27 @@ export function ResultsPane({ tab }: { tab: QueryTab }) {
     });
   }, [result, schemaTable]);
 
+  // The connection this session was (re)connected with — `params.readOnly`
+  // is the backend's own enforcement flag (see `commands::ensure_writable`
+  // and `run_query`'s read-only path), not just a UI preference, so this
+  // check is a courtesy: it keeps the grid from offering an action the
+  // backend would refuse anyway, it isn't what makes the connection safe.
+  const connectionReadOnly = useStore((s) => {
+    const id = s.activeConnectionId;
+    return id ? (s.connections[id]?.params.readOnly ?? false) : false;
+  });
+
   // Cells are editable only for table tabs backed by a real table (not a
-  // view) with at least one detected primary key — otherwise show why not.
+  // view) with at least one detected primary key, on a connection that
+  // isn't marked read-only — otherwise show why not.
   const editability = useMemo(() => {
     if (!schemaTable) return null;
     const pkNames = new Set(
       schemaTable.columns.filter((c) => c.isPrimaryKey).map((c) => c.name),
     );
+    if (connectionReadOnly) {
+      return { editable: false, reason: "This connection is marked read-only", pkNames };
+    }
     if (schemaTable.kind === "view") {
       return { editable: false, reason: "View — read-only", pkNames };
     }
@@ -93,7 +108,7 @@ export function ResultsPane({ tab }: { tab: QueryTab }) {
       };
     }
     return { editable: true, reason: null, pkNames };
-  }, [schemaTable]);
+  }, [schemaTable, connectionReadOnly]);
 
   const pkColIndices = useMemo(() => {
     if (!result || !editability) return new Set<number>();
@@ -118,20 +133,20 @@ export function ResultsPane({ tab }: { tab: QueryTab }) {
     );
   }, [result, schemaTable]);
 
-  // Which result columns are actually `uuid`-typed (for the "Generate random
-  // UUID" action) — unlike "Set to NULL", this deliberately isn't excluded
-  // for a primary key: a uuid PK you're about to insert or want to
-  // regenerate is exactly the common case.
+  // Which result columns can hold a freshly generated UUID (for the
+  // "Generate random UUID" action) — the native `uuid` type, plus text-like
+  // types (`text`, `varchar`, `char`, ...), since it's common to store a
+  // UUID as a string column instead (see `isUuidCapableType`). Unlike "Set
+  // to NULL", this deliberately isn't excluded for a primary key: a uuid PK
+  // you're about to insert or want to regenerate is exactly the common case.
   const uuidColIndices = useMemo(() => {
     if (!result || !schemaTable) return new Set<number>();
-    const uuidNames = new Set(
-      schemaTable.columns
-        .filter((c) => c.dataType.toLowerCase() === "uuid")
-        .map((c) => c.name),
+    const uuidCapableNames = new Set(
+      schemaTable.columns.filter((c) => isUuidCapableType(c.dataType)).map((c) => c.name),
     );
     return new Set(
       result.columns
-        .map((c, i) => (uuidNames.has(c.name) ? i : -1))
+        .map((c, i) => (uuidCapableNames.has(c.name) ? i : -1))
         .filter((i) => i >= 0),
     );
   }, [result, schemaTable]);
@@ -844,6 +859,17 @@ function ResultsGrid({
   // change rather than per cell.
   const rangeRowSet = useMemo(() => (range ? new Set(range.rows) : null), [range]);
   const rangeColSet = useMemo(() => (range ? new Set(range.cols) : null), [range]);
+  // Nullable, non-PK columns the active range actually spans — what "Set to
+  // NULL" (below) can touch. A range is rectangular and can cover several
+  // columns (Shift-click extends it across both rows and columns), so the
+  // action has to mean every qualifying column the block spans, not just
+  // whichever cell happened to be right-clicked.
+  const rangeNullableColSet = useMemo(() => {
+    if (!rangeColSet) return null;
+    return new Set(
+      Array.from(rangeColSet).filter((c) => nullableColIndices.has(c) && !pkColIndices.has(c)),
+    );
+  }, [rangeColSet, nullableColIndices, pkColIndices]);
   // The block's outer edges, in row/column *indices* — `range.rows`/`.cols`
   // are stored in display order, so first/last are literally the top, bottom,
   // left and right of the rectangle. Each range cell draws only the border
@@ -1073,10 +1099,14 @@ function ResultsGrid({
       // those available; otherwise it's a plain single-cell right-click
       // exactly as before, range and all.
       const nav = navByColumn?.[col];
+      // The NULL branch checks the whole range, not just this column — see
+      // `rangeNullableColSet` — so right-clicking any cell in a block that
+      // spans at least one nullable column keeps the range alive, even a
+      // cell in a PK/NOT NULL column that has no null action of its own.
       const hasRangeAction =
         (!!nav && (nav.references.length > 0 || nav.referencedBy.length > 0)) ||
         uuidColIndices.has(col) ||
-        (editable && !pkColIndices.has(col) && nullableColIndices.has(col));
+        (editable && (rangeNullableColSet?.size ?? 0) > 0);
       const isMultiColRange =
         hasRangeAction &&
         (rangeColSet?.has(col) ?? false) &&
@@ -1088,7 +1118,7 @@ function ResultsGrid({
       cellAnchorRef.current = { r, col };
       setRange(null);
     },
-    [navByColumn, rangeColSet, rangeRowSet, uuidColIndices, editable, pkColIndices, nullableColIndices],
+    [navByColumn, rangeColSet, rangeRowSet, rangeNullableColSet, uuidColIndices, editable],
   );
   const onNewCellClick = useCallback((ni: number, col: number, currentValue: string | null) => {
     setEditing({ r: ni, col, draft: currentValue ?? "", isNew: true });
@@ -2504,13 +2534,23 @@ function ResultsGrid({
             !pkColIndices.has(col) &&
             nullableColIndices.has(col) &&
             value !== null;
-          const canSetNullRange =
-            editable && inMultiRange && !pkColIndices.has(col) && nullableColIndices.has(col);
+          // Every nullable, non-PK cell the range spans — not just this
+          // column's — since a range can cover several columns at once.
+          const canSetNullRange = editable && inMultiRange && (rangeNullableColSet?.size ?? 0) > 0;
           const canGenerateUuid = editable && !inMultiRange && uuidColIndices.has(col);
           // Range-scoped counterpart: a *fresh* uuid per row, not one value
           // broadcast to all of them (that's what Cmd/Ctrl+V paste-fill is
           // for, and would collide immediately on anything unique).
           const canGenerateUuidRange = editable && inMultiRange && uuidColIndices.has(col);
+          // A range was kept alive (see `onCellContextMenu`'s `hasRangeAction`
+          // check) on the strength of some OTHER cell in it — a different
+          // column with an FK, or a nullable column, while the specific cell
+          // that got right-clicked has none of that itself (common on a
+          // read-only connection, where every write-shaped range action
+          // above is already forced false regardless of column). Without
+          // this, that combination rendered a menu with nothing in it: an
+          // empty, near-zero-height styled box and no way to tell why.
+          const rangeHasAction = hasFk || canGenerateUuidRange || canSetNullRange;
 
           const item = (ref: ForeignKeyRef, key: string, globalIndex: number) => (
             <button
@@ -2552,9 +2592,14 @@ function ResultsGrid({
               }}
               onClick={(e) => e.stopPropagation()}
             >
-              {/* Doesn't apply to a multi-row selection — there's no single
-                  cell left to expand once several rows are in play. */}
-              {!inMultiRange && (
+              {/* Hidden for a multi-row selection that actually has a
+                  range-scoped action to offer — "Expand cell" reads as if it
+                  applied to the whole selection there, and the range-scoped
+                  items below take its place. Falls back in in *any* other
+                  case, including a range kept alive by some other cell in it
+                  that turned out to have nothing to offer at this one —
+                  the alternative is a right-click that shows nothing. */}
+              {(!inMultiRange || !rangeHasAction) && (
                 <>
                   <button
                     className="context-menu__item"
@@ -2688,11 +2733,16 @@ function ResultsGrid({
                     onClick={() => {
                       setFkMenu(null);
                       for (const ri of rangeRowSet!) {
-                        setCellEdit(tab.id, ri, col, null);
+                        for (const ci of rangeNullableColSet!) {
+                          setCellEdit(tab.id, ri, ci, null);
+                        }
                       }
                     }}
                   >
-                    Set to <span className="mono">NULL</span> for {rangeRowSet!.size} rows
+                    Set to <span className="mono">NULL</span> for{" "}
+                    {rangeNullableColSet!.size > 1
+                      ? `${rangeNullableColSet!.size} columns × ${rangeRowSet!.size} rows`
+                      : `${rangeRowSet!.size} rows`}
                   </button>
                 </>
               )}

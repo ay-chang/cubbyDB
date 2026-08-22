@@ -198,6 +198,59 @@ export function TableStructurePane({ tab }: { tab: QueryTab }) {
                 </div>
               )}
             </section>
+
+            <section className="structure__section">
+              <div className="structure__section-title caption">
+                Triggers · {state.structure.triggers.length}
+              </div>
+              {state.structure.triggers.length === 0 ? (
+                <div className="structure__note">No triggers.</div>
+              ) : (
+                <div className="structure-list">
+                  {state.structure.triggers.map((t) => (
+                    <div key={t.name} className="structure-list__item">
+                      <span className="structure-list__name mono">{t.name}</span>
+                      <code className="structure-list__def">{t.definition}</code>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section className="structure__section">
+              <div className="structure__section-title caption">
+                Row-level security
+              </div>
+              {!state.structure.rlsEnabled ? (
+                <div className="structure__note">Row-level security is not enabled on this table.</div>
+              ) : state.structure.rlsPolicies.length === 0 ? (
+                <div className="structure__note structure__note--warning">
+                  Row-level security is enabled with no policies — every role except the table
+                  owner is denied by default.
+                </div>
+              ) : (
+                <div className="structure-list">
+                  {state.structure.rlsPolicies.map((p) => (
+                    <div key={p.name} className="structure-list__item">
+                      <span className="structure-list__name mono">
+                        {p.name}
+                        <span className="structure-table__default">
+                          {" "}
+                          · {p.permissive} · {p.command} · {p.roles.join(", ")}
+                        </span>
+                      </span>
+                      {(p.usingExpr || p.checkExpr) && (
+                        <code className="structure-list__def">
+                          {p.usingExpr && `USING (${p.usingExpr})`}
+                          {p.usingExpr && p.checkExpr && "\n"}
+                          {p.checkExpr && `WITH CHECK (${p.checkExpr})`}
+                        </code>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
           </>
         )}
       </div>

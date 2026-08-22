@@ -42,7 +42,15 @@ import { errorMessage, isDbError } from "../api/backend";
  * function or sequence) — the latter three all opened via the schema tree's
  * context menu.
  */
-export type TabKind = "query" | "table" | "structure" | "function" | "sequence" | "whatsnew";
+export type TabKind =
+  | "query"
+  | "table"
+  | "structure"
+  | "function"
+  | "sequence"
+  | "whatsnew"
+  | "schemaCompare"
+  | "erDiagram";
 
 /** One open tab and its most recent execution. */
 export interface QueryTab {
@@ -92,6 +100,23 @@ export interface QueryTab {
    */
   sortColumn?: string | null;
   sortDesc?: boolean;
+  /**
+   * For `schemaCompare` tabs: the schema being compared (in *this* tab's own
+   * connection — the "source") against a schema on another open connection
+   * (the "target"). Never persisted (see `persistTabs`) — `targetSessionId`
+   * is an ephemeral per-connect id that can't be resolved after an app
+   * restart, unlike the schema/table *names* other tab kinds persist.
+   */
+  compare?: { sourceSchema: string; targetSessionId: string; targetSchema: string };
+  /** For `erDiagram` tabs: the *center* table the diagram is built around —
+   *  the diagram shows this table plus its directly-connected tables (one
+   *  hop via foreign keys), not the whole schema, so it stays small
+   *  regardless of how many tables the schema has. Double-clicking a
+   *  connected table in the canvas opens (or focuses) *its* diagram tab —
+   *  see `openErDiagram`. Unlike `compare`, this persists normally: it's
+   *  just a schema/table name plus this tab's own connection, all of which
+   *  already survive a restart fine for every other tab kind. */
+  erd?: { schema: string; table: string };
 }
 
 /** How many rows one page shows, in both the table browser and the SQL
@@ -1091,6 +1116,13 @@ interface AppStore {
     color: AccentColor | null,
     colorStyle: ConnectionColorStyle,
   ) => Promise<void>;
+  /** Flips the read-only guard on a live session immediately — same
+   *  "applies on Update, no separate Reconnect" treatment as
+   *  `setConnectionColor`, except read-only is backend-enforced
+   *  (`ConnectionParams.readOnly`, checked by `ensure_writable`/`run_query`),
+   *  so this also calls `setSessionReadOnly` to update the actual
+   *  `ActiveSession` in Rust, not just this store's own copy of `params`. */
+  setConnectionReadOnly: (sessionId: string, readOnly: boolean) => Promise<void>;
   /** Re-establish an already-open session with edited params/name — for
    *  "edit the connection I'm on," not opening an additional one. Keeps the
    *  same slot (tabs stay put); its schema is cleared since it may now point
@@ -1165,6 +1197,27 @@ interface AppStore {
    *  tab itself (there's only ever one, showing the same fixed history for
    *  everyone). */
   openWhatsNewTab: () => Promise<void>;
+  /** Open (or focus) a "schema compare" tab in the *current* connection,
+   *  diffing `sourceSchema` (here) against `targetSchema` on the connection
+   *  identified by `targetSessionId`. `SchemaComparePane` fetches the diff
+   *  itself once the tab is open. */
+  openSchemaCompare: (
+    sourceSchema: string,
+    targetSessionId: string,
+    targetSchema: string,
+  ) => Promise<void>;
+  /** Flip a schema-compare tab's source/target and re-open it — since the
+   *  new source is the old target's connection, this may switch the visible
+   *  connection to host the flipped tab. */
+  swapSchemaCompare: (tabId: string) => Promise<void>;
+  /** Open (or focus) a read-only ER diagram tab centered on one table —
+   *  shows that table plus its directly-connected tables (one hop via
+   *  foreign keys), not the whole schema, so it stays small regardless of
+   *  schema size. `ErdPane` builds the graph itself from schema data
+   *  already in the store, no fetch of its own. Also used to navigate:
+   *  double-clicking a connected table in the canvas calls this again for
+   *  that table. */
+  openErDiagram: (schema: string, table: string) => Promise<void>;
   setTableFilter: (id: string, filter: string) => Promise<void>;
   /** Filter-bar AI mode: turn `prompt` into a WHERE predicate for this tab's
    *  table and apply it. Resolves with the AI's own result so the bar can
@@ -1335,6 +1388,8 @@ function makeTab(opts?: {
   filter?: string;
   page?: number;
   savedQueryId?: string;
+  compare?: QueryTab["compare"];
+  erd?: QueryTab["erd"];
 }): QueryTab {
   return {
     id: nextTabId(),
@@ -1350,6 +1405,8 @@ function makeTab(opts?: {
     filter: opts?.filter,
     page: opts?.page,
     savedQueryId: opts?.savedQueryId,
+    compare: opts?.compare,
+    erd: opts?.erd,
   };
 }
 
@@ -1993,6 +2050,17 @@ export function tabCubbyEntry(tab: QueryTab): CubbyEntry | null {
       // Nothing to save — it's the same fixed content for everyone, not a
       // database object or a query someone wrote.
       return null;
+    case "schemaCompare":
+      // Spans two connections by session id, which a cubby entry (scoped to
+      // one saved connection) has no way to address — see `compare`'s own
+      // never-persisted note on `QueryTab`.
+      return null;
+    case "erDiagram":
+      // Not treated as equivalent to a `table`/`structure` entry even
+      // though it's now centered on one table — a cubby entry for it would
+      // reopen just that table's neighborhood, not the exact one the user
+      // was looking at, which could be misleading. Out of scope for now.
+      return null;
   }
 }
 
@@ -2074,6 +2142,10 @@ function removeRowsFromTab(t: QueryTab, rowIndices: number[]): QueryTab {
 }
 
 /** Persist just enough to restore the open tabs (not their results). */
+/** Only the fields listed here survive a reload — `schemaCompare` tabs are
+ *  deliberately excluded by omission: `compare.targetSessionId` is an
+ *  ephemeral per-connect id that can't be resolved after a restart, unlike
+ *  the schema/table *names* every other tab kind persists. */
 function persistTabs(tabs: QueryTab[], activeTabId: string | null) {
   try {
     const activeIndex = Math.max(
@@ -2091,6 +2163,7 @@ function persistTabs(tabs: QueryTab[], activeTabId: string | null) {
         filter: t.filter,
         page: t.page,
         savedQueryId: t.savedQueryId,
+        erd: t.erd,
       })),
     };
     localStorage.setItem(TABS_KEY, JSON.stringify(payload));
@@ -2116,6 +2189,7 @@ function loadPersistedTabs(): { tabs: QueryTab[]; activeTabId: string } | null {
         filter: t.filter,
         page: t.page,
         savedQueryId: t.savedQueryId,
+        erd: t.erd,
       }),
     );
     const active = tabs[payload.activeIndex] ?? tabs[0];
@@ -2654,6 +2728,37 @@ export const useStore = create<AppStore>((set, get) => {
       }
     },
 
+    async setConnectionReadOnly(sessionId, readOnly) {
+      const slot = get().connections[sessionId];
+      if (!slot) return;
+      // Applied to this store's own copy of `params` first — this is what
+      // `ResultsPane`'s `connectionReadOnly` check (and the grid's
+      // editability) actually reads, so the UI reflects it the instant the
+      // toggle flips, before the backend round trip below even resolves.
+      set((s) => ({
+        connections: patchSlot(s.connections, sessionId, (slot) => ({
+          params: { ...slot.params, readOnly },
+        })),
+      }));
+
+      try {
+        await api.setSessionReadOnly(sessionId, readOnly);
+      } catch (err) {
+        console.error("failed to update session read-only flag:", errorMessage(err));
+      }
+
+      const savedConnectionId = slot.current.connectionId;
+      if (!savedConnectionId) return; // ad-hoc — nothing on disk to update
+      const saved = get().savedConnections.find((c) => c.id === savedConnectionId);
+      if (!saved) return;
+      try {
+        await api.saveConnection({ ...saved, params: { ...saved.params, readOnly } });
+        await get().loadSavedConnections();
+      } catch (err) {
+        console.error("failed to persist connection read-only flag:", errorMessage(err));
+      }
+    },
+
     async reconnectSession(sessionId, connection) {
       if (!get().connections[sessionId]) return;
       const info = await api.reconnectSession(
@@ -3103,6 +3208,76 @@ export const useStore = create<AppStore>((set, get) => {
       }
 
       const tab = makeTab({ kind: "whatsnew", title: "What's New" });
+      set((s) => ({ connections: mapSlotTabs(s.connections, connectionId, (tabs) => [...tabs, tab]) }));
+      const switched = await switchActiveTab(connectionId, tab.id);
+      if (!switched) {
+        set((s) => ({
+          connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+            tabs.filter((t) => t.id !== tab.id),
+          ),
+        }));
+      }
+    },
+
+    async openSchemaCompare(sourceSchema, targetSessionId, targetSchema) {
+      const connectionId = get().activeConnectionId;
+      if (!connectionId) return;
+      const slot = get().connections[connectionId];
+      if (!slot) return;
+
+      const existing = slot.tabs.find(
+        (t) =>
+          t.kind === "schemaCompare" &&
+          t.compare?.sourceSchema === sourceSchema &&
+          t.compare?.targetSessionId === targetSessionId &&
+          t.compare?.targetSchema === targetSchema,
+      );
+      if (existing) {
+        await switchActiveTab(connectionId, existing.id);
+        return;
+      }
+
+      const targetName = get().connections[targetSessionId]?.current.name ?? targetSessionId;
+      const tab = makeTab({
+        kind: "schemaCompare",
+        title: `${sourceSchema} ⇄ ${targetName}.${targetSchema}`,
+        compare: { sourceSchema, targetSessionId, targetSchema },
+      });
+      set((s) => ({ connections: mapSlotTabs(s.connections, connectionId, (tabs) => [...tabs, tab]) }));
+      const switched = await switchActiveTab(connectionId, tab.id);
+      if (!switched) {
+        set((s) => ({
+          connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+            tabs.filter((t) => t.id !== tab.id),
+          ),
+        }));
+      }
+    },
+
+    async swapSchemaCompare(tabId) {
+      const owner = findTabOwner(get().connections, tabId);
+      if (!owner?.tab.compare) return;
+      const { sourceSchema, targetSessionId, targetSchema } = owner.tab.compare;
+      if (!get().connections[targetSessionId]) return; // target connection no longer open
+      get().switchConnection(targetSessionId);
+      await get().openSchemaCompare(targetSchema, owner.connectionId, sourceSchema);
+    },
+
+    async openErDiagram(schema, table) {
+      const connectionId = get().activeConnectionId;
+      if (!connectionId) return;
+      const slot = get().connections[connectionId];
+      if (!slot) return;
+
+      const existing = slot.tabs.find(
+        (t) => t.kind === "erDiagram" && t.erd?.schema === schema && t.erd?.table === table,
+      );
+      if (existing) {
+        await switchActiveTab(connectionId, existing.id);
+        return;
+      }
+
+      const tab = makeTab({ kind: "erDiagram", title: `${table} diagram`, erd: { schema, table } });
       set((s) => ({ connections: mapSlotTabs(s.connections, connectionId, (tabs) => [...tabs, tab]) }));
       const switched = await switchActiveTab(connectionId, tab.id);
       if (!switched) {

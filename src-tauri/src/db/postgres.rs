@@ -5,18 +5,23 @@
 //! representation, so we never need per-type conversion code in the grid path.
 
 use std::collections::{HashMap, VecDeque};
+use std::path::Path;
 use std::time::Instant;
 
 use async_trait::async_trait;
 use tokio_postgres::error::ErrorPosition;
 use tokio_postgres::{Client, Config, SimpleQueryMessage};
 
+use super::schema_diff::fk_action_from_char;
+use super::ssh_tunnel::SshTunnelHandle;
 use super::{
-    CheckConstraintDetail, ColumnNode, ColumnValue, ConnectionInfo, ConnectionParams,
-    DatabaseDriver, DbError, DbErrorKind, DbSession, DeleteImpact, DependentRowsPreview, Engine,
-    ForeignKeyRef, FunctionDefinition, FunctionKind, FunctionNode, IndexDetail, QueryCanceller,
-    QueryResult, ResultColumn, SchemaNode, SequenceDetails, SequenceNode, SequenceOwner,
-    StructureColumn, TableKind, TableNode, TableStructure, TypeNode,
+    ssh_tunnel, CheckConstraintDetail, ColumnNode, ColumnSnapshot, ColumnValue, ConnectionInfo,
+    ConnectionParams, DatabaseDriver, DbError, DbErrorKind, DbSession, DeleteImpact,
+    DependentRowsPreview, Engine, ForeignKeyRef, ForeignKeySnapshot, FunctionDefinition,
+    FunctionKind, FunctionNode, IndexDetail, NamedKeySnapshot, QueryCanceller, QueryResult,
+    ResultColumn, RlsPolicyDetail, SchemaNode, SchemaSnapshot, SequenceDetails, SequenceNode,
+    SequenceOwner, StructureColumn, TableKind, TableNode, TableSnapshot, TableStructure,
+    TriggerDetail, TypeNode,
 };
 
 /// Stateless factory for Postgres sessions.
@@ -30,15 +35,30 @@ impl PostgresDriver {
 
 #[async_trait]
 impl DatabaseDriver for PostgresDriver {
-    async fn test_connection(&self, params: &ConnectionParams) -> Result<ConnectionInfo, DbError> {
+    async fn test_connection(
+        &self,
+        params: &ConnectionParams,
+        data_dir: &Path,
+    ) -> Result<ConnectionInfo, DbError> {
         // Establish and immediately drop; we only want the version + timing.
-        let (_client, info) = establish(params).await?;
+        // Dropping `_tunnel` here (rather than binding and holding it) closes
+        // the bastion connection right away — there's nothing further to do
+        // with it once the version check above has run.
+        let (_client, info, _tunnel) = establish(params, data_dir).await?;
         Ok(info)
     }
 
-    async fn connect(&self, params: &ConnectionParams) -> Result<Box<dyn DbSession>, DbError> {
-        let (client, info) = establish(params).await?;
-        Ok(Box::new(PostgresSession { client, info }))
+    async fn connect(
+        &self,
+        params: &ConnectionParams,
+        data_dir: &Path,
+    ) -> Result<Box<dyn DbSession>, DbError> {
+        let (client, info, tunnel) = establish(params, data_dir).await?;
+        Ok(Box::new(PostgresSession {
+            client,
+            info,
+            _tunnel: tunnel,
+        }))
     }
 }
 
@@ -46,6 +66,11 @@ impl DatabaseDriver for PostgresDriver {
 struct PostgresSession {
     client: tokio_postgres::Client,
     info: ConnectionInfo,
+    /// Keeps the SSH bastion connection alive for exactly as long as this
+    /// session does, when one was used — `None` for a direct connection.
+    /// Never read again after `establish` builds it; its only job is to be
+    /// dropped (closing the tunnel) when this session is.
+    _tunnel: Option<SshTunnelHandle>,
 }
 
 #[async_trait]
@@ -234,21 +259,43 @@ impl DbSession for PostgresSession {
         Ok(schemas)
     }
 
-    async fn run_query(&self, sql: &str, page: u32) -> Result<QueryResult, DbError> {
+    async fn run_query(&self, sql: &str, page: u32, read_only: bool) -> Result<QueryResult, DbError> {
         let (final_sql, bounding) = apply_paging(
             sql,
             Some(super::PAGE_SIZE),
             page * super::PAGE_SIZE,
         );
 
-        let start = Instant::now();
-        let messages = self
-            .client
-            .simple_query(&final_sql)
+        if !read_only {
+            let start = Instant::now();
+            let messages = self
+                .client
+                .simple_query(&final_sql)
+                .await
+                .map_err(map_query_err)?;
+            let elapsed_ms = start.elapsed().as_millis() as u64;
+            return Ok(simple_query_messages_to_result(sql, messages, elapsed_ms, bounding));
+        }
+
+        // Read-only connection: same allowlist + rolled-back transaction
+        // `run_read_only_query` enforces below, but keeping this path's own
+        // paging (`page * PAGE_SIZE`, not always-offset-0) since this still
+        // backs the editor's Next/Prev through a large result.
+        super::validate_read_only_statement(sql)?;
+        self.client
+            .batch_execute("BEGIN READ ONLY")
             .await
             .map_err(map_query_err)?;
+
+        let start = Instant::now();
+        let result = self.client.simple_query(&final_sql).await;
         let elapsed_ms = start.elapsed().as_millis() as u64;
 
+        // Always rolled back, even on success — see `run_read_only_query`
+        // below for why this is best-effort and doesn't itself get `?`'d.
+        let _ = self.client.batch_execute("ROLLBACK").await;
+
+        let messages = result.map_err(map_query_err)?;
         Ok(simple_query_messages_to_result(sql, messages, elapsed_ms, bounding))
     }
 
@@ -587,7 +634,166 @@ impl DbSession for PostgresSession {
             })
             .collect();
 
-        Ok(TableStructure { columns, indexes, check_constraints })
+        let trigger_rows = self
+            .client
+            .query(STRUCTURE_TRIGGERS_SQL, &[&schema, &table])
+            .await
+            .map_err(map_query_err)?;
+        let triggers = trigger_rows
+            .iter()
+            .map(|r| TriggerDetail {
+                name: r.get(0),
+                definition: r.get(1),
+            })
+            .collect();
+
+        let rls_status_rows = self
+            .client
+            .query(STRUCTURE_RLS_STATUS_SQL, &[&schema, &table])
+            .await
+            .map_err(map_query_err)?;
+        let rls_enabled = rls_status_rows.first().map(|r| r.get::<_, bool>(0)).unwrap_or(false);
+
+        let policy_rows = self
+            .client
+            .query(STRUCTURE_RLS_POLICIES_SQL, &[&schema, &table])
+            .await
+            .map_err(map_query_err)?;
+        let rls_policies = policy_rows
+            .iter()
+            .map(|r| RlsPolicyDetail {
+                name: r.get(0),
+                permissive: r.get(1),
+                command: r.get(2),
+                roles: r.get(3),
+                using_expr: r.get(4),
+                check_expr: r.get(5),
+            })
+            .collect();
+
+        Ok(TableStructure {
+            columns,
+            indexes,
+            check_constraints,
+            triggers,
+            rls_enabled,
+            rls_policies,
+        })
+    }
+
+    async fn schema_snapshot(&self, schema: &str) -> Result<SchemaSnapshot, DbError> {
+        let table_rows = self
+            .client
+            .query(COMPARE_TABLES_SQL, &[&schema])
+            .await
+            .map_err(map_query_err)?;
+        let mut tables: Vec<TableSnapshot> = table_rows
+            .iter()
+            .map(|r| TableSnapshot {
+                name: r.get(0),
+                columns: Vec::new(),
+                primary_key: None,
+                unique_constraints: Vec::new(),
+                foreign_keys: Vec::new(),
+                indexes: Vec::new(),
+                check_constraints: Vec::new(),
+            })
+            .collect();
+        let index_of: HashMap<String, usize> =
+            tables.iter().enumerate().map(|(i, t)| (t.name.clone(), i)).collect();
+
+        let col_rows = self
+            .client
+            .query(COMPARE_COLUMNS_SQL, &[&schema])
+            .await
+            .map_err(map_query_err)?;
+        for r in &col_rows {
+            let table_name: String = r.get(0);
+            if let Some(&i) = index_of.get(&table_name) {
+                tables[i].columns.push(ColumnSnapshot {
+                    name: r.get(1),
+                    data_type: r.get(2),
+                    nullable: r.get(3),
+                    default_expr: r.get(4),
+                });
+            }
+        }
+
+        let pk_rows = self
+            .client
+            .query(COMPARE_PRIMARY_KEYS_SQL, &[&schema])
+            .await
+            .map_err(map_query_err)?;
+        for r in &pk_rows {
+            let table_name: String = r.get(0);
+            if let Some(&i) = index_of.get(&table_name) {
+                tables[i].primary_key = Some(NamedKeySnapshot { name: r.get(1), columns: r.get(2) });
+            }
+        }
+
+        let uq_rows = self
+            .client
+            .query(COMPARE_UNIQUE_CONSTRAINTS_SQL, &[&schema])
+            .await
+            .map_err(map_query_err)?;
+        for r in &uq_rows {
+            let table_name: String = r.get(0);
+            if let Some(&i) = index_of.get(&table_name) {
+                tables[i]
+                    .unique_constraints
+                    .push(NamedKeySnapshot { name: r.get(1), columns: r.get(2) });
+            }
+        }
+
+        let fk_rows = self
+            .client
+            .query(COMPARE_FOREIGN_KEYS_SQL, &[&schema])
+            .await
+            .map_err(map_query_err)?;
+        for r in &fk_rows {
+            let table_name: String = r.get(0);
+            if let Some(&i) = index_of.get(&table_name) {
+                let on_update: String = r.get(6);
+                let on_delete: String = r.get(7);
+                tables[i].foreign_keys.push(ForeignKeySnapshot {
+                    name: r.get(1),
+                    columns: r.get(2),
+                    ref_schema: r.get(3),
+                    ref_table: r.get(4),
+                    ref_columns: r.get(5),
+                    on_update: fk_action_from_char(&on_update),
+                    on_delete: fk_action_from_char(&on_delete),
+                });
+            }
+        }
+
+        let idx_rows = self
+            .client
+            .query(COMPARE_INDEXES_SQL, &[&schema])
+            .await
+            .map_err(map_query_err)?;
+        for r in &idx_rows {
+            let table_name: String = r.get(0);
+            if let Some(&i) = index_of.get(&table_name) {
+                tables[i].indexes.push(IndexDetail { name: r.get(1), definition: r.get(2) });
+            }
+        }
+
+        let chk_rows = self
+            .client
+            .query(COMPARE_CHECK_CONSTRAINTS_SQL, &[&schema])
+            .await
+            .map_err(map_query_err)?;
+        for r in &chk_rows {
+            let table_name: String = r.get(0);
+            if let Some(&i) = index_of.get(&table_name) {
+                tables[i]
+                    .check_constraints
+                    .push(CheckConstraintDetail { name: r.get(1), definition: r.get(2) });
+            }
+        }
+
+        Ok(SchemaSnapshot { schema: schema.to_string(), tables })
     }
 
     async fn function_definition(&self, oid: i64) -> Result<FunctionDefinition, DbError> {
@@ -645,32 +851,88 @@ impl QueryCanceller for PostgresCanceller {
 /// opens, including the out-of-band connection a `CancelToken` needs. Cheap
 /// and purely local — no I/O — so callers can build a fresh one whenever
 /// needed rather than having to thread one through.
-fn tls_connector() -> Result<postgres_native_tls::MakeTlsConnector, DbError> {
+fn native_tls_connector() -> Result<native_tls::TlsConnector, DbError> {
     // native-tls uses the OS trust store; combined with sslmode=prefer this
     // negotiates TLS when the server offers it and falls back to plaintext.
-    let tls = native_tls::TlsConnector::builder()
+    native_tls::TlsConnector::builder()
         .build()
-        .map_err(|e| DbError::new(DbErrorKind::Connection, format!("TLS setup failed: {e}")))?;
-    Ok(postgres_native_tls::MakeTlsConnector::new(tls))
+        .map_err(|e| DbError::new(DbErrorKind::Connection, format!("TLS setup failed: {e}")))
+}
+
+fn tls_connector() -> Result<postgres_native_tls::MakeTlsConnector, DbError> {
+    Ok(postgres_native_tls::MakeTlsConnector::new(native_tls_connector()?))
 }
 
 /// Connect, spawn the connection driver task, and read the server version.
-async fn establish(params: &ConnectionParams) -> Result<(tokio_postgres::Client, ConnectionInfo), DbError> {
+/// Returns the SSH tunnel handle alongside the client when `params.ssh` is
+/// set — `None` for a direct connection — since it has to outlive the
+/// session for the tunneled channel to stay usable (see `PostgresSession`).
+async fn establish(
+    params: &ConnectionParams,
+    data_dir: &Path,
+) -> Result<(tokio_postgres::Client, ConnectionInfo, Option<SshTunnelHandle>), DbError> {
     let config = build_config(params)?;
-    let connector = tls_connector()?;
-
     let start = Instant::now();
-    let (client, connection) = config.connect(connector).await.map_err(map_conn_err)?;
-    let elapsed_ms = start.elapsed().as_millis() as u64;
 
-    // The connection object must be driven for the client to make progress.
-    // No secrets are logged if it later errors out.
-    tauri::async_runtime::spawn(async move {
-        if let Err(e) = connection.await {
-            eprintln!("[cubbydb] postgres connection closed: {e}");
+    let (client, tunnel) = match params.ssh.as_ref().filter(|s| s.enabled) {
+        None => {
+            // --- Unchanged from before SSH tunneling existed. ---
+            let connector = tls_connector()?;
+            let (client, connection) = config.connect(connector).await.map_err(map_conn_err)?;
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = connection.await {
+                    eprintln!("[cubbydb] postgres connection closed: {e}");
+                }
+            });
+            (client, None)
         }
-    });
+        Some(ssh) => {
+            // The real target is the *resolved* config's host/port, not
+            // `params.host`/`params.port` directly — this has to work
+            // whether the user configured the database via discrete fields
+            // or a connection string.
+            use tokio_postgres::config::Host;
+            let target_host = match config.get_hosts().first() {
+                Some(Host::Tcp(h)) => h.clone(),
+                _ => {
+                    return Err(DbError::new(
+                        DbErrorKind::Connection,
+                        "SSH tunneling needs a TCP host — a Unix socket can't be tunneled.",
+                    ))
+                }
+            };
+            let target_port = config.get_ports().first().copied().unwrap_or(5432);
 
+            let (stream, tunnel) =
+                ssh_tunnel::open_tunnel(ssh, &target_host, target_port, data_dir).await?;
+
+            // TLS is negotiated with the actual Postgres server end-to-end
+            // through the tunnel — the bastion only ever forwards raw bytes,
+            // it never terminates or even sees the TLS — so the certificate
+            // is checked against `target_host`, not the bastion. Built
+            // directly as a concrete `TlsConnector` (rather than through
+            // `MakeTlsConnect`, as the direct-connect path below does) since
+            // `MakeTlsConnect::make_tls_connect`'s only parameter is the
+            // domain string — nothing in that call pins which stream type
+            // `S` the trait is being used for, so the compiler has no way to
+            // infer it without an explicit (and uglier) turbofish.
+            let connector =
+                postgres_native_tls::TlsConnector::new(native_tls_connector()?, &target_host);
+
+            let (client, connection) = config
+                .connect_raw(stream, connector)
+                .await
+                .map_err(map_conn_err)?;
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = connection.await {
+                    eprintln!("[cubbydb] postgres connection closed: {e}");
+                }
+            });
+            (client, Some(tunnel))
+        }
+    };
+
+    let elapsed_ms = start.elapsed().as_millis() as u64;
     let version_row = client
         .query_one("SHOW server_version", &[])
         .await
@@ -684,6 +946,7 @@ async fn establish(params: &ConnectionParams) -> Result<(tokio_postgres::Client,
             server_version,
             elapsed_ms,
         },
+        tunnel,
     ))
 }
 
@@ -868,7 +1131,7 @@ fn simple_query_messages_to_result(
 }
 
 /// Double-quote an identifier, escaping embedded quotes.
-fn quote_ident(name: &str) -> String {
+pub(crate) fn quote_ident(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
@@ -1549,6 +1812,141 @@ const SEQUENCE_DETAILS_SQL: &str = "
     WHERE schemaname = $1 AND sequencename = $2
 ";
 
+// --- Schema Compare queries, each scoped to one whole schema via $1 and
+// restricted to ordinary base tables (`relkind = 'r'`) — no views, matviews,
+// partitioned/foreign tables. See `schema_diff::SchemaSnapshot`. ----------
+
+/// Every base table's bare name — the authoritative table list, so a table
+/// with zero user columns still shows up (a columns-only fold would miss it).
+const COMPARE_TABLES_SQL: &str = "
+    SELECT c.relname
+    FROM pg_catalog.pg_class c
+    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = $1 AND c.relkind = 'r'
+    ORDER BY c.relname
+";
+
+/// Columns for every base table in the schema, with default expression —
+/// same shape as `STRUCTURE_COLUMNS_SQL` but schema-wide instead of
+/// single-table, since Schema Compare needs every table at once.
+const COMPARE_COLUMNS_SQL: &str = "
+    SELECT
+        c.relname                              AS table_name,
+        a.attname                              AS column_name,
+        format_type(a.atttypid, a.atttypmod)   AS data_type,
+        NOT a.attnotnull                       AS nullable,
+        pg_get_expr(ad.adbin, ad.adrelid)      AS default_expr
+    FROM pg_catalog.pg_class c
+    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    JOIN pg_catalog.pg_attribute a
+        ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+    LEFT JOIN pg_catalog.pg_attrdef ad
+        ON ad.adrelid = c.oid AND ad.adnum = a.attnum
+    WHERE n.nspname = $1 AND c.relkind = 'r'
+    ORDER BY c.relname, a.attnum
+";
+
+/// Named `PRIMARY KEY` constraints, one row per table, with columns in key
+/// order via `unnest(...) WITH ORDINALITY` — the same composite-safe
+/// pattern `CONSTRAINTS_REFERENCING_SQL` already uses below.
+const COMPARE_PRIMARY_KEYS_SQL: &str = "
+    SELECT
+        cl.relname                            AS table_name,
+        con.conname                           AS constraint_name,
+        array_agg(att.attname ORDER BY k.ord) AS columns
+    FROM pg_catalog.pg_constraint con
+    JOIN pg_catalog.pg_class cl ON cl.oid = con.conrelid
+    JOIN pg_catalog.pg_namespace n ON n.oid = cl.relnamespace
+    JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord) ON true
+    JOIN pg_catalog.pg_attribute att
+        ON att.attrelid = con.conrelid AND att.attnum = k.attnum
+    WHERE con.contype = 'p' AND n.nspname = $1 AND cl.relkind = 'r'
+    GROUP BY cl.relname, con.conname
+    ORDER BY cl.relname
+";
+
+/// Named `UNIQUE` constraints — same shape as the primary-key query, but a
+/// table can have several, so there's no one-per-table assumption.
+const COMPARE_UNIQUE_CONSTRAINTS_SQL: &str = "
+    SELECT
+        cl.relname                            AS table_name,
+        con.conname                           AS constraint_name,
+        array_agg(att.attname ORDER BY k.ord) AS columns
+    FROM pg_catalog.pg_constraint con
+    JOIN pg_catalog.pg_class cl ON cl.oid = con.conrelid
+    JOIN pg_catalog.pg_namespace n ON n.oid = cl.relnamespace
+    JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord) ON true
+    JOIN pg_catalog.pg_attribute att
+        ON att.attrelid = con.conrelid AND att.attnum = k.attnum
+    WHERE con.contype = 'u' AND n.nspname = $1 AND cl.relkind = 'r'
+    GROUP BY cl.relname, con.conname
+    ORDER BY cl.relname, con.conname
+";
+
+/// Named `FOREIGN KEY` constraints owned by tables in this schema, grouped
+/// by constraint (not unnested per-column like `FOREIGN_KEYS_SQL`) so
+/// composite keys stay associated as a unit — directly adapts
+/// `CONSTRAINTS_REFERENCING_SQL`'s pattern, filtered by the *owning*
+/// schema instead of the *referenced* table. `confupdtype`/`confdeltype`
+/// are cast to `text` for the same reason `SCHEMA_COLUMNS_SQL` casts
+/// `relkind` — no built-in `tokio-postgres` mapping for the raw `"char"`
+/// type — and decoded by `schema_diff::fk_action_from_char`.
+const COMPARE_FOREIGN_KEYS_SQL: &str = "
+    SELECT
+        cl.relname                                   AS table_name,
+        con.conname                                  AS constraint_name,
+        array_agg(att.attname ORDER BY k.ord)        AS columns,
+        fns.nspname                                  AS ref_schema,
+        fcl.relname                                  AS ref_table,
+        array_agg(fatt.attname ORDER BY k.ord)       AS ref_columns,
+        con.confupdtype::text                        AS on_update,
+        con.confdeltype::text                        AS on_delete
+    FROM pg_catalog.pg_constraint con
+    JOIN pg_catalog.pg_class cl ON cl.oid = con.conrelid
+    JOIN pg_catalog.pg_namespace ns ON ns.oid = cl.relnamespace
+    JOIN pg_catalog.pg_class fcl ON fcl.oid = con.confrelid
+    JOIN pg_catalog.pg_namespace fns ON fns.oid = fcl.relnamespace
+    JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS k(attnum, fattnum, ord)
+        ON true
+    JOIN pg_catalog.pg_attribute att
+        ON att.attrelid = con.conrelid AND att.attnum = k.attnum
+    JOIN pg_catalog.pg_attribute fatt
+        ON fatt.attrelid = con.confrelid AND fatt.attnum = k.fattnum
+    WHERE con.contype = 'f' AND ns.nspname = $1 AND cl.relkind = 'r'
+    GROUP BY cl.relname, con.conname, fns.nspname, fcl.relname, con.confupdtype, con.confdeltype
+    ORDER BY cl.relname, con.conname
+";
+
+/// Indexes for every base table in the schema, excluding indexes that back
+/// a named `PRIMARY KEY`/`UNIQUE` constraint (those are already covered by
+/// the two queries above, and showing them again as a separate 'index'
+/// would represent the same physical object twice) — matched by the
+/// index's own oid (`conindid`), not by name, since a backing index's name
+/// isn't guaranteed to equal its constraint's name if either was renamed
+/// independently.
+const COMPARE_INDEXES_SQL: &str = "
+    SELECT ix.tablename, ix.indexname, ix.indexdef
+    FROM pg_catalog.pg_indexes ix
+    JOIN pg_catalog.pg_namespace n ON n.nspname = ix.schemaname
+    JOIN pg_catalog.pg_class idx_cl ON idx_cl.relname = ix.indexname AND idx_cl.relnamespace = n.oid
+    JOIN pg_catalog.pg_class tbl_cl ON tbl_cl.relname = ix.tablename AND tbl_cl.relnamespace = n.oid
+    LEFT JOIN pg_catalog.pg_constraint con
+        ON con.conindid = idx_cl.oid AND con.contype IN ('p', 'u')
+    WHERE ix.schemaname = $1 AND tbl_cl.relkind = 'r' AND con.oid IS NULL
+    ORDER BY ix.tablename, ix.indexname
+";
+
+/// CHECK constraints for every base table in the schema — same rendering as
+/// `STRUCTURE_CHECK_CONSTRAINTS_SQL`, schema-wide instead of single-table.
+const COMPARE_CHECK_CONSTRAINTS_SQL: &str = "
+    SELECT cl.relname AS table_name, con.conname, pg_get_constraintdef(con.oid)
+    FROM pg_catalog.pg_constraint con
+    JOIN pg_catalog.pg_class cl ON cl.oid = con.conrelid
+    JOIN pg_catalog.pg_namespace n ON n.oid = cl.relnamespace
+    WHERE n.nspname = $1 AND cl.relkind = 'r' AND con.contype = 'c'
+    ORDER BY cl.relname, con.conname
+";
+
 // --- "View structure" queries, each scoped to one table via $1 (schema) and
 // $2 (table) ------------------------------------------------------------
 
@@ -1601,6 +1999,41 @@ const STRUCTURE_CHECK_CONSTRAINTS_SQL: &str = "
     JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = $1 AND c.relname = $2 AND con.contype = 'c'
     ORDER BY con.conname
+";
+
+/// User-created triggers for one table — `NOT tgisinternal` excludes the
+/// triggers Postgres auto-creates to enforce FK constraints, which aren't
+/// something a user wrote and would just be noise here. Full text comes
+/// from `pg_get_triggerdef`, Postgres's own renderer, same principle as the
+/// index/check-constraint queries above.
+const STRUCTURE_TRIGGERS_SQL: &str = "
+    SELECT t.tgname, pg_get_triggerdef(t.oid)
+    FROM pg_catalog.pg_trigger t
+    JOIN pg_catalog.pg_class c ON c.oid = t.tgrelid
+    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = $1 AND c.relname = $2 AND NOT t.tgisinternal
+    ORDER BY t.tgname
+";
+
+/// Row-Level Security policies for one table, via the builtin
+/// `pg_policies` view — reusing Postgres's own view rather than hand-joining
+/// `pg_policy`, same principle `pg_indexes` follows above.
+const STRUCTURE_RLS_POLICIES_SQL: &str = "
+    SELECT policyname, permissive, cmd, roles, qual, with_check
+    FROM pg_catalog.pg_policies
+    WHERE schemaname = $1 AND tablename = $2
+    ORDER BY policyname
+";
+
+/// Whether RLS is turned on for this table at all, independent of whether
+/// any policies exist — enabled-with-zero-policies is the gotcha this
+/// feature exists to surface (it means every role but the table owner is
+/// denied by default).
+const STRUCTURE_RLS_STATUS_SQL: &str = "
+    SELECT c.relrowsecurity
+    FROM pg_catalog.pg_class c
+    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = $1 AND c.relname = $2
 ";
 
 #[cfg(test)]
@@ -1753,12 +2186,12 @@ mod tests {
         };
 
         // test_connection returns a server version.
-        let info = driver.test_connection(&params).await.expect("test_connection");
+        let info = driver.test_connection(&params, &std::env::temp_dir()).await.expect("test_connection");
         assert!(!info.server_version.is_empty());
         eprintln!("connected to Postgres {}", info.server_version);
 
         // A live session can read the schema and run queries.
-        let session = driver.connect(&params).await.expect("connect");
+        let session = driver.connect(&params, &std::env::temp_dir()).await.expect("connect");
         let schema = session.fetch_schema().await.expect("fetch_schema");
         assert!(!schema.is_empty(), "expected at least one user schema");
         eprintln!(
@@ -1766,14 +2199,23 @@ mod tests {
             schema.iter().map(|s| &s.name).collect::<Vec<_>>()
         );
 
+        // Schema Compare's snapshot query doesn't error against a real
+        // schema, and returns at least the tables `information_schema`-style
+        // introspection above already found.
+        let snapshot = session.schema_snapshot("public").await.expect("schema_snapshot");
+        eprintln!(
+            "schema_snapshot(public) tables: {:?}",
+            snapshot.tables.iter().map(|t| &t.name).collect::<Vec<_>>()
+        );
+
         // Unbounded SELECT gets bounded to one page.
-        let result = session.run_query("SELECT 1 AS n", 0).await.expect("run_query");
+        let result = session.run_query("SELECT 1 AS n", 0, false).await.expect("run_query");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][0].as_deref(), Some("1"));
 
         // A bad query surfaces a structured error with a SQLSTATE.
         let err = session
-            .run_query("SELECT nope FROM does_not_exist", 0)
+            .run_query("SELECT nope FROM does_not_exist", 0, false)
             .await
             .expect_err("expected query error");
         assert!(err.code.is_some(), "expected a SQLSTATE code");
@@ -1783,7 +2225,7 @@ mod tests {
         // sends the column list before any row data, so this must not regress
         // to looking like a non-row-returning statement (a real prior bug).
         let empty = session
-            .run_query("SELECT 1 AS n WHERE false", 0)
+            .run_query("SELECT 1 AS n WHERE false", 0, false)
             .await
             .expect("run_query on zero-row select");
         assert_eq!(empty.rows.len(), 0);
@@ -1803,15 +2245,15 @@ mod tests {
         // int4), a value containing a single quote (the classic
         // injection/escaping footgun), and the zero-match error path.
         session
-            .run_query("DROP TABLE IF EXISTS cubbydb_edit_test", 0)
+            .run_query("DROP TABLE IF EXISTS cubbydb_edit_test", 0, false)
             .await
             .expect("drop any leftover scratch table");
         session
-            .run_query("CREATE TABLE cubbydb_edit_test (id int PRIMARY KEY, note text)", 0)
+            .run_query("CREATE TABLE cubbydb_edit_test (id int PRIMARY KEY, note text)", 0, false)
             .await
             .expect("create scratch table");
         session
-            .run_query("INSERT INTO cubbydb_edit_test (id, note) VALUES (1, 'original')", 0)
+            .run_query("INSERT INTO cubbydb_edit_test (id, note) VALUES (1, 'original')", 0, false)
             .await
             .expect("seed row");
 
@@ -1834,7 +2276,7 @@ mod tests {
             .expect("update_row with a numeric PK and a quote in the value");
 
         let check = session
-            .run_query("SELECT note FROM cubbydb_edit_test WHERE id = 1", 0)
+            .run_query("SELECT note FROM cubbydb_edit_test WHERE id = 1", 0, false)
             .await
             .expect("read back");
         assert_eq!(check.rows[0][0].as_deref(), Some("O'Brien's edit"));
@@ -1855,7 +2297,7 @@ mod tests {
             .await
             .expect("update_row setting a column to NULL");
         let nulled = session
-            .run_query("SELECT note, note IS NULL AS is_null FROM cubbydb_edit_test WHERE id = 1", 0)
+            .run_query("SELECT note, note IS NULL AS is_null FROM cubbydb_edit_test WHERE id = 1", 0, false)
             .await
             .expect("read back nulled column");
         assert_eq!(nulled.rows[0][0], None, "expected an actual SQL NULL");
@@ -1900,12 +2342,12 @@ mod tests {
 
         // If the seeded `widgets` table (1200 rows) is present, page through it.
         if let Ok(page0) = session
-            .run_query(&session.select_top_sql("public", "widgets", None, 500, 0, None), 0)
+            .run_query(&session.select_top_sql("public", "widgets", None, 500, 0, None), 0, false)
             .await
         {
             assert_eq!(page0.rows.len(), 500, "first page should be full");
             let page2 = session
-                .run_query(&session.select_top_sql("public", "widgets", None, 500, 1000, None), 0)
+                .run_query(&session.select_top_sql("public", "widgets", None, 500, 1000, None), 0, false)
                 .await
                 .expect("third page");
             assert_eq!(page2.rows.len(), 200, "last page should hold the remainder");
@@ -1918,13 +2360,14 @@ mod tests {
 
         // --- insert_row / delete_row ---
         session
-            .run_query("DROP TABLE IF EXISTS cubbydb_rowops_test", 0)
+            .run_query("DROP TABLE IF EXISTS cubbydb_rowops_test", 0, false)
             .await
             .expect("drop leftover rowops table");
         session
             .run_query(
                 "CREATE TABLE cubbydb_rowops_test (id serial PRIMARY KEY, note text, qty int DEFAULT 7)",
                 0,
+                false,
             )
             .await
             .expect("create rowops table");
@@ -1947,7 +2390,7 @@ mod tests {
             .await
             .expect("insert explicit row");
         let after_insert = session
-            .run_query("SELECT id, note, qty FROM cubbydb_rowops_test ORDER BY id", 0)
+            .run_query("SELECT id, note, qty FROM cubbydb_rowops_test ORDER BY id", 0, false)
             .await
             .expect("read inserted rows");
         assert_eq!(after_insert.rows.len(), 2);
@@ -1970,7 +2413,7 @@ mod tests {
             .await
             .expect("delete_row");
         let after_delete = session
-            .run_query("SELECT count(*) FROM cubbydb_rowops_test", 0)
+            .run_query("SELECT count(*) FROM cubbydb_rowops_test", 0, false)
             .await
             .expect("count after delete");
         assert_eq!(after_delete.rows[0][0].as_deref(), Some("1"));
@@ -1987,12 +2430,12 @@ mod tests {
         eprintln!("delete_row ok; missing-row error path: {}", del_err.message);
 
         session
-            .run_query("DROP TABLE cubbydb_rowops_test", 0)
+            .run_query("DROP TABLE cubbydb_rowops_test", 0, false)
             .await
             .expect("clean up rowops table");
 
         session
-            .run_query("DROP TABLE cubbydb_edit_test", 0)
+            .run_query("DROP TABLE cubbydb_edit_test", 0, false)
             .await
             .expect("clean up scratch table");
     }
@@ -2026,14 +2469,14 @@ mod tests {
             ..Default::default()
         };
         let session: Arc<Box<dyn super::super::DbSession>> =
-            Arc::new(driver.connect(&params).await.expect("connect"));
+            Arc::new(driver.connect(&params, &std::env::temp_dir()).await.expect("connect"));
 
         let canceller = session.canceller();
 
         let query_session = session.clone();
         let query_task = tokio::spawn(async move {
             let start = Instant::now();
-            let result = query_session.run_query("SELECT pg_sleep(15)", 0).await;
+            let result = query_session.run_query("SELECT pg_sleep(15)", 0, false).await;
             (result, start.elapsed())
         });
 
@@ -2067,7 +2510,7 @@ mod tests {
         // The session must still be usable afterward — cancelling one query
         // shouldn't poison the connection for the next one.
         let after = session
-            .run_query("SELECT 1 AS n", 0)
+            .run_query("SELECT 1 AS n", 0, false)
             .await
             .expect("session should still work after a cancelled query");
         assert_eq!(after.rows[0][0].as_deref(), Some("1"));
@@ -2095,10 +2538,10 @@ mod tests {
             connection_string: Some(dsn),
             ..Default::default()
         };
-        let session = driver.connect(&params).await.expect("connect");
+        let session = driver.connect(&params, &std::env::temp_dir()).await.expect("connect");
 
         session
-            .run_query("DROP TABLE IF EXISTS cubbydb_structure_test", 0)
+            .run_query("DROP TABLE IF EXISTS cubbydb_structure_test", 0, false)
             .await
             .expect("drop leftover structure table");
         session
@@ -2110,11 +2553,12 @@ mod tests {
                     note text
                 )",
                 0,
+                false,
             )
             .await
             .expect("create structure table");
         session
-            .run_query("CREATE INDEX cubbydb_structure_test_name_idx ON cubbydb_structure_test (name)", 0)
+            .run_query("CREATE INDEX cubbydb_structure_test_name_idx ON cubbydb_structure_test (name)", 0, false)
             .await
             .expect("create secondary index");
 
@@ -2171,7 +2615,7 @@ mod tests {
         assert!(structure.check_constraints[0].definition.contains(">="));
 
         session
-            .run_query("DROP TABLE cubbydb_structure_test", 0)
+            .run_query("DROP TABLE cubbydb_structure_test", 0, false)
             .await
             .expect("clean up structure table");
     }
@@ -2195,17 +2639,17 @@ mod tests {
             connection_string: Some(dsn),
             ..Default::default()
         };
-        let session = driver.connect(&params).await.expect("connect");
+        let session = driver.connect(&params, &std::env::temp_dir()).await.expect("connect");
 
         for stmt in [
             "DROP TABLE IF EXISTS cubbydb_cascade_items",
             "DROP TABLE IF EXISTS cubbydb_cascade_orders",
             "DROP TABLE IF EXISTS cubbydb_cascade_customers",
         ] {
-            session.run_query(stmt, 0).await.expect("drop leftover cascade tables");
+            session.run_query(stmt, 0, false).await.expect("drop leftover cascade tables");
         }
         session
-            .run_query("CREATE TABLE cubbydb_cascade_customers (id serial PRIMARY KEY, name text)", 0)
+            .run_query("CREATE TABLE cubbydb_cascade_customers (id serial PRIMARY KEY, name text)", 0, false)
             .await
             .expect("create customers");
         session
@@ -2215,6 +2659,7 @@ mod tests {
                     customer_id int NOT NULL REFERENCES cubbydb_cascade_customers(id)
                 )",
                 0,
+                false,
             )
             .await
             .expect("create orders");
@@ -2225,22 +2670,24 @@ mod tests {
                     order_id int NOT NULL REFERENCES cubbydb_cascade_orders(id)
                 )",
                 0,
+                false,
             )
             .await
             .expect("create order_items");
 
         session
-            .run_query("INSERT INTO cubbydb_cascade_customers (id, name) VALUES (1, 'Alice')", 0)
+            .run_query("INSERT INTO cubbydb_cascade_customers (id, name) VALUES (1, 'Alice')", 0, false)
             .await
             .expect("insert customer");
         session
-            .run_query("INSERT INTO cubbydb_cascade_orders (id, customer_id) VALUES (10, 1), (11, 1)", 0)
+            .run_query("INSERT INTO cubbydb_cascade_orders (id, customer_id) VALUES (10, 1), (11, 1)", 0, false)
             .await
             .expect("insert orders");
         session
             .run_query(
                 "INSERT INTO cubbydb_cascade_items (id, order_id) VALUES (100, 10), (101, 10), (102, 11)",
                 0,
+                false,
             )
             .await
             .expect("insert items");
@@ -2281,7 +2728,7 @@ mod tests {
         assert_eq!(deleted, 1 + 2 + 3, "1 customer + 2 orders + 3 items");
 
         let remaining = session
-            .run_query("SELECT count(*) FROM cubbydb_cascade_items", 0)
+            .run_query("SELECT count(*) FROM cubbydb_cascade_items", 0, false)
             .await
             .expect("count remaining items");
         assert_eq!(remaining.rows[0][0].as_deref(), Some("0"));
@@ -2291,7 +2738,80 @@ mod tests {
             "DROP TABLE cubbydb_cascade_orders",
             "DROP TABLE cubbydb_cascade_customers",
         ] {
-            session.run_query(stmt, 0).await.expect("clean up cascade tables");
+            session.run_query(stmt, 0, false).await.expect("clean up cascade tables");
         }
+    }
+
+    /// Live test for `run_query`'s `read_only` path: a plain SELECT still
+    /// works and still pages, a write is rejected by the same allowlist
+    /// `run_read_only_query` uses (never even reaching the READ ONLY
+    /// transaction), and — crucially — nothing it ran left a mark, since a
+    /// non-`ignores_*` bug here (the transaction not actually being rolled
+    /// back) wouldn't otherwise be caught by the allowlist's own unit tests
+    /// in `db::read_only`, which never touch a real database. Ignored by
+    /// default; same setup as `live_smoke`.
+    #[tokio::test]
+    #[ignore = "requires a running Postgres (set CUBBYDB_TEST_DSN)"]
+    async fn live_read_only_query() {
+        use super::super::{ConnectionParams, DatabaseDriver};
+
+        let Ok(dsn) = std::env::var("CUBBYDB_TEST_DSN") else {
+            eprintln!("CUBBYDB_TEST_DSN not set; skipping");
+            return;
+        };
+
+        let driver = PostgresDriver::new();
+        let params = ConnectionParams {
+            connection_string: Some(dsn),
+            ..Default::default()
+        };
+        let session = driver.connect(&params, &std::env::temp_dir()).await.expect("connect");
+
+        session
+            .run_query("DROP TABLE IF EXISTS cubbydb_readonly_test", 0, false)
+            .await
+            .expect("drop leftover readonly table");
+        session
+            .run_query("CREATE TABLE cubbydb_readonly_test (id int PRIMARY KEY, note text)", 0, false)
+            .await
+            .expect("create readonly table");
+        session
+            .run_query("INSERT INTO cubbydb_readonly_test (id, note) VALUES (1, 'a'), (2, 'b')", 0, false)
+            .await
+            .expect("seed readonly table");
+
+        // A read still works, and still pages — this is the reason the
+        // read-only path can't just delegate to `run_read_only_query`
+        // (which always reads from offset 0).
+        let page0 = session
+            .run_query("SELECT id FROM cubbydb_readonly_test ORDER BY id", 0, true)
+            .await
+            .expect("read-only page 0");
+        assert_eq!(page0.rows.len(), 2);
+
+        // An `INSERT` never reaches the database at all: the allowlist
+        // rejects it before `BEGIN READ ONLY` is even sent.
+        let write = session
+            .run_query(
+                "INSERT INTO cubbydb_readonly_test (id, note) VALUES (3, 'c')",
+                0,
+                true,
+            )
+            .await;
+        assert!(write.is_err(), "a write must be rejected on a read-only run");
+
+        // Belt-and-suspenders: even if the allowlist were ever loosened, the
+        // rolled-back READ ONLY transaction is the real enforcement. Confirm
+        // the table genuinely still has only the two seeded rows.
+        let after = session
+            .run_query("SELECT count(*) FROM cubbydb_readonly_test", 0, false)
+            .await
+            .expect("count after read-only attempt");
+        assert_eq!(after.rows[0][0].as_deref(), Some("2"));
+
+        session
+            .run_query("DROP TABLE cubbydb_readonly_test", 0, false)
+            .await
+            .expect("clean up readonly table");
     }
 }

@@ -12,6 +12,55 @@ export interface ConnectionParams {
   database?: string | null;
   user?: string | null;
   password?: string | null;
+  /** When true, every mutation on this connection is refused before it
+   *  reaches the database, and running SQL is restricted to a single
+   *  SELECT-family statement inside a rolled-back READ ONLY transaction —
+   *  a safety net independent of whatever the database role itself
+   *  actually grants. */
+  readOnly?: boolean;
+  /** SSH bastion to tunnel the Postgres connection through — `host`/`port`
+   *  above are the *real* database, as reachable from that bastion, not
+   *  necessarily from this machine directly. `null`/absent means no
+   *  tunnel, same as `enabled: false`. */
+  ssh?: SshTunnelParams | null;
+}
+
+/** How to authenticate to an SSH bastion. A tagged union (not three
+ *  optional fields) so the form's auth-method selector always maps onto
+ *  exactly one of these, with no way to have e.g. a password and a private
+ *  key both set at once. */
+export type SshAuthMethod =
+  | { method: "password"; password?: string | null }
+  | {
+      method: "privateKey";
+      /** The key's own contents, not a path to it on disk — see
+       *  `pickAndReadTextFile` in `api/backend.ts` for why: this has to
+       *  survive the saved connection being opened on a different machine,
+       *  which a path can't promise. */
+      keyContents?: string | null;
+      passphrase?: string | null;
+    }
+  | { method: "agent" };
+
+export interface SshTunnelParams {
+  enabled: boolean;
+  bastionHost?: string | null;
+  bastionPort: number;
+  bastionUser?: string | null;
+  auth: SshAuthMethod;
+}
+
+/** What `probeSshHostKey` reports about a bastion's host key, for the SSH
+ *  tunnel form's trust-on-first-use confirmation UI. */
+export type SshHostKeyStatus =
+  | { status: "unknown" }
+  | { status: "trusted" }
+  | { status: "changed"; previousFingerprint: string };
+
+export interface SshHostKeyProbe {
+  fingerprint: string;
+  keyType: string;
+  status: SshHostKeyStatus;
 }
 
 export interface ConnectionInfo {
@@ -225,6 +274,13 @@ export interface TableStructure {
   columns: StructureColumn[];
   indexes: IndexDetail[];
   checkConstraints: CheckConstraintDetail[];
+  triggers: TriggerDetail[];
+  /** Whether Row-Level Security is turned on for this table at all,
+   *  independent of whether any policies exist — `true` with an empty
+   *  `rlsPolicies` means every role but the table owner is denied by
+   *  default. */
+  rlsEnabled: boolean;
+  rlsPolicies: RlsPolicyDetail[];
 }
 
 export interface StructureColumn {
@@ -247,6 +303,138 @@ export interface CheckConstraintDetail {
   name: string;
   /** The constraint's own `CHECK (...)` text. */
   definition: string;
+}
+
+export interface TriggerDetail {
+  name: string;
+  /** The trigger's own `CREATE TRIGGER ...` statement. */
+  definition: string;
+}
+
+export interface RlsPolicyDetail {
+  name: string;
+  /** `"PERMISSIVE"` or `"RESTRICTIVE"`, verbatim from Postgres. */
+  permissive: string;
+  /** `"ALL"`, `"SELECT"`, `"INSERT"`, `"UPDATE"`, or `"DELETE"`. */
+  command: string;
+  roles: string[];
+  usingExpr: string | null;
+  checkExpr: string | null;
+}
+
+// --- Schema Compare ---------------------------------------------------
+
+/** One schema's ordinary base tables, with named PK/unique/FK constraints —
+ *  richer than `TableStructure`, needed to generate DDL from. Used only by
+ *  Schema Compare. */
+export interface SchemaSnapshot {
+  schema: string;
+  tables: TableSnapshot[];
+}
+
+export interface TableSnapshot {
+  name: string;
+  columns: ColumnSnapshot[];
+  primaryKey: NamedKeySnapshot | null;
+  uniqueConstraints: NamedKeySnapshot[];
+  foreignKeys: ForeignKeySnapshot[];
+  indexes: IndexDetail[];
+  checkConstraints: CheckConstraintDetail[];
+}
+
+export interface ColumnSnapshot {
+  name: string;
+  dataType: string;
+  nullable: boolean;
+  defaultExpr: string | null;
+}
+
+/** A named `PRIMARY KEY` or `UNIQUE` constraint and the columns it covers. */
+export interface NamedKeySnapshot {
+  name: string;
+  columns: string[];
+}
+
+export type FkAction = "noAction" | "restrict" | "cascade" | "setNull" | "setDefault";
+
+export interface ForeignKeySnapshot {
+  name: string;
+  columns: string[];
+  refSchema: string;
+  refTable: string;
+  refColumns: string[];
+  onUpdate: FkAction;
+  onDelete: FkAction;
+}
+
+export type ChangeKind = "added" | "removed" | "changed";
+
+export interface ColumnDiff {
+  name: string;
+  kind: ChangeKind;
+  before: ColumnSnapshot | null;
+  after: ColumnSnapshot | null;
+}
+
+export interface PrimaryKeyDiff {
+  kind: ChangeKind;
+  before: NamedKeySnapshot | null;
+  after: NamedKeySnapshot | null;
+}
+
+export interface UniqueConstraintDiff {
+  name: string;
+  kind: ChangeKind;
+  before: NamedKeySnapshot | null;
+  after: NamedKeySnapshot | null;
+}
+
+export interface ForeignKeyDiff {
+  name: string;
+  kind: ChangeKind;
+  before: ForeignKeySnapshot | null;
+  after: ForeignKeySnapshot | null;
+}
+
+export interface IndexDiff {
+  name: string;
+  kind: ChangeKind;
+  before: IndexDetail | null;
+  after: IndexDetail | null;
+}
+
+export interface CheckConstraintDiff {
+  name: string;
+  kind: ChangeKind;
+  before: CheckConstraintDetail | null;
+  after: CheckConstraintDetail | null;
+}
+
+export interface TableDiff {
+  name: string;
+  kind: ChangeKind;
+  columns: ColumnDiff[];
+  primaryKey: PrimaryKeyDiff | null;
+  uniqueConstraints: UniqueConstraintDiff[];
+  foreignKeys: ForeignKeyDiff[];
+  indexes: IndexDiff[];
+  checkConstraints: CheckConstraintDiff[];
+}
+
+/** Only tables with at least one change — two identical schemas produce an
+ *  empty `tables` list. */
+export interface SchemaDiff {
+  tables: TableDiff[];
+}
+
+export interface MigrationScript {
+  sql: string;
+  statementCount: number;
+}
+
+export interface SchemaCompareResult {
+  diff: SchemaDiff;
+  migration: MigrationScript;
 }
 
 /** A user-saved, named SQL query — distinct from `HistoryEntry` (automatic,

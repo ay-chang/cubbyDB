@@ -11,11 +11,13 @@ import {
   useStore,
 } from "../../state/store";
 import type { SchemaNode, TableNode } from "../../types";
+import { SchemaComparePicker } from "./SchemaComparePicker";
 
 type Menu =
   | { kind: "table"; x: number; y: number; schema: string; table: string }
   | { kind: "function"; x: number; y: number; schema: string; oid: number; name: string }
-  | { kind: "sequence"; x: number; y: number; schema: string; name: string };
+  | { kind: "sequence"; x: number; y: number; schema: string; name: string }
+  | { kind: "schema"; x: number; y: number; schema: string };
 
 export function SchemaTree({ onClose }: { onClose: () => void }) {
   const schema = useActiveSchema();
@@ -25,6 +27,7 @@ export function SchemaTree({ onClose }: { onClose: () => void }) {
   const openTableStructure = useStore((s) => s.openTableStructure);
   const openFunctionDefinition = useStore((s) => s.openFunctionDefinition);
   const openSequenceDetails = useStore((s) => s.openSequenceDetails);
+  const openErDiagram = useStore((s) => s.openErDiagram);
   const toggleCommandPalette = useStore((s) => s.toggleCommandPalette);
   const activeCubby = useActiveCubby();
   const addEntryToCubby = useStore((s) => s.addEntryToCubby);
@@ -51,6 +54,8 @@ export function SchemaTree({ onClose }: { onClose: () => void }) {
   const [pinnedCollapsed, setPinnedCollapsed] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
+  const [comparePicker, setComparePicker] = useState<{ schema: string } | null>(null);
+  const activeConnectionId = useStore((s) => s.activeConnectionId);
 
   // Expand the first schema by default once the tree loads.
   useEffect(() => {
@@ -239,6 +244,10 @@ export function SchemaTree({ onClose }: { onClose: () => void }) {
               <div
                 className="tree__row tree__row--schema"
                 onClick={() => toggleSchema(s.name)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setMenu({ kind: "schema", x: e.clientX, y: e.clientY, schema: s.name });
+                }}
               >
                 <span className="tree__chevron">{schemaOpen ? "▼" : "▶"}</span>
                 <span className="tree__icon">▤</span>
@@ -533,6 +542,15 @@ export function SchemaTree({ onClose }: { onClose: () => void }) {
           >
             View structure
           </button>
+          <button
+            className="context-menu__item"
+            onClick={() => {
+              setMenu(null);
+              void openErDiagram(menu.schema, menu.table);
+            }}
+          >
+            View ER diagram
+          </button>
           {activeCubby && (
             <button
               className="context-menu__item"
@@ -618,6 +636,31 @@ export function SchemaTree({ onClose }: { onClose: () => void }) {
         </div>
       )}
 
+      {menu?.kind === "schema" && (
+        <div
+          className="context-menu"
+          style={{ left: menu.x, top: menu.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            className="context-menu__item"
+            onClick={() => {
+              setComparePicker({ schema: menu.schema });
+              setMenu(null);
+            }}
+          >
+            Compare schema…
+          </button>
+        </div>
+      )}
+
+      {comparePicker && activeConnectionId && (
+        <SchemaComparePicker
+          sourceSessionId={activeConnectionId}
+          sourceSchema={comparePicker.schema}
+          onClose={() => setComparePicker(null)}
+        />
+      )}
     </div>
   );
 }

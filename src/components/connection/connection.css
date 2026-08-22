@@ -70,6 +70,12 @@
   font-size: 12.5px;
   color: var(--text-muted);
 }
+.conn-readonly-hint {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-faint);
+}
 
 .conn-input {
   height: var(--h-input);
@@ -289,4 +295,95 @@
 .conn-editing-note strong {
   color: var(--text-muted);
   font-weight: 600;
+}
+
+/* --- SSH tunnel tab ------------------------------------------------- */
+.conn-key-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.conn-key-browse {
+  height: var(--h-input);
+  padding: 0 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-input);
+  background: var(--surface);
+  font-size: 13px;
+  color: var(--text);
+  flex: none;
+}
+.conn-key-browse:hover {
+  border-color: var(--accent);
+}
+.conn-key-filename {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: var(--text-faint);
+}
+
+.conn-ssh-hostkey {
+  margin-top: 4px;
+  padding: 10px 12px;
+  border-radius: var(--radius-input);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.conn-ssh-hostkey p {
+  margin: 0 0 8px;
+}
+.conn-ssh-hostkey p:last-child {
+  margin-bottom: 0;
+}
+.conn-ssh-hostkey code {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+  word-break: break-all;
+}
+.conn-ssh-hostkey--pending {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-faint);
+}
+.conn-ssh-hostkey--error {
+  background: var(--error-bg);
+  color: var(--error-text);
+}
+.conn-ssh-hostkey--trusted {
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+.conn-ssh-hostkey--unknown {
+  background: var(--accent-tint);
+  color: var(--accent-tint-text);
+}
+.conn-ssh-hostkey--danger {
+  background: var(--error-bg);
+  color: var(--error-text);
+  border: 1px solid var(--error-border);
+}
+.conn-ssh-hostkey__trust {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: var(--radius-control);
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+}
+.conn-ssh-hostkey__trust:hover {
+  background: var(--accent-hover);
+}
+.conn-ssh-hostkey__trust:disabled {
+  opacity: 0.6;
+}
+.conn-ssh-hostkey__trust--danger {
+  background: var(--error);
+}
+.conn-ssh-hostkey__trust--danger:hover {
+  background: var(--error-text);
 }

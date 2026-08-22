@@ -68,6 +68,36 @@ code comments or AGENTS.md's architecture section.
   last-used) connection is read, its password is pulled out of the keychain
   into this file and the keychain entry is deleted, so it's never touched
   again after that
+- **Read-only connection** toggle on the form: when on, every insert, update,
+  and delete on that connection is refused outright, and running SQL is
+  restricted to a single SELECT-family statement inside a rolled-back
+  `READ ONLY` transaction — enforced by CubbyDB's backend, not just hidden
+  UI, so it protects a connection you *can* write to but want to guard
+  against your own mistakes on (a shared staging/prod database, say). It's
+  independent of whatever the database role itself grants — a role with no
+  write privileges is already safe with any client, this is for the
+  opposite case. The results grid reflects it too: Add row, cell editing,
+  Delete, Import CSV, and the UUID/NULL context-menu actions all disappear
+  and the header shows a "Read-only" badge, the same badge already shown for
+  a view or a table with no detected primary key
+- **SSH tunneling**: a "SSH Tunnel" tab on the connection form for a database
+  that isn't reachable directly — CubbyDB opens an SSH connection to a
+  bastion host first, then routes the Postgres connection through it, rather
+  than dialing the database's host/port from this machine. Host/Port on the
+  Connection tab are the real database, as reachable *from* the bastion, not
+  necessarily from here. Authenticate to the bastion with a password or a
+  private key (browsed from disk — its contents, not the path, are stored,
+  so a saved connection stays portable to another machine); SSH-agent
+  authentication is a planned auth-method option not implemented yet. The
+  bastion's host key is checked trust-on-first-use: the form probes it as
+  you type the bastion host/port (without ever authenticating) and shows the
+  fingerprint for confirmation before it's trusted; a bastion whose key
+  later changes is a hard stop with an explicit warning, never a silent
+  reprompt — this is the one thing that can't be bypassed by retrying, since
+  the actual tunnel-opening path only ever checks the trust store, it never
+  writes to it. TLS, when the target database uses it, is still negotiated
+  end-to-end with the real Postgres server through the tunnel — the bastion
+  only ever forwards raw bytes, so its own certificate is never in play
 
 ## Schema browser
 
@@ -350,6 +380,64 @@ code comments or AGENTS.md's architecture section.
   params, partitioning, and generated/identity columns make a faithful
   reconstruction genuinely complex; the structured columns/indexes/constraints
   view covers the common "what does this table look like" need instead
+- Also shows **triggers** (full `CREATE TRIGGER` text, straight from
+  `pg_get_triggerdef` — internal triggers backing FK constraints are
+  filtered out) and **row-level security**: whether RLS is enabled at all,
+  and if so, every policy's permissive/restrictive mode, command, roles, and
+  `USING`/`WITH CHECK` expressions. RLS enabled with zero policies (which
+  means every role but the table owner is denied by default — an easy state
+  to land in by accident) gets a distinct warning callout rather than
+  looking identical to "disabled"
+- Read-only, same as the rest of this panel — no enable/disable or
+  create/edit UI for triggers or policies
+
+## Schema Compare
+
+- Right-click a schema in the tree → "Compare schema…" picks another
+  **already-open** connection and one of its schemas, then opens a
+  git-diff-style change list (tables/columns/primary key/unique constraints/
+  foreign keys/indexes/check constraints — ordinary base tables only, no
+  views, triggers, or RLS) plus a generated migration SQL script
+- **CubbyDB never runs the generated SQL** — Copy and Export (to a `.sql`
+  file) are the only ways it leaves the pane, so it's safe to use alongside
+  Prisma or any other migration tool that already owns the schema
+- Statement ordering (`CREATE TABLE` → columns → primary key → unique →
+  indexes → foreign keys → check constraints → `DROP TABLE` last) is
+  best-effort, not a guaranteed-valid general schema differ — the script's
+  own header comment says so, and complex cases (circular foreign keys,
+  objects outside the compared schema) may need manual reordering
+- "Swap direction" flips source/target (and switches to the target
+  connection, since the tab lives on whichever connection it was opened
+  from); "Refresh" re-runs the diff against live state
+- Compare tabs aren't restored across an app restart — the target
+  connection's session id doesn't survive one, unlike the schema/table
+  *names* every other tab kind persists
+
+## ER / relationship diagram
+
+- Right-click a table in the tree → "View ER diagram" opens a pannable,
+  zoomable canvas centered on that table plus its **directly connected**
+  tables (one hop via foreign keys, either direction) — not the whole
+  schema, so it stays small and fast no matter how many tables the schema
+  has. Built entirely from schema data already loaded, no extra fetch
+- The center table gets a highlighted border; double-clicking any connected
+  table opens (or focuses) *its* diagram — exploring a large schema means
+  hopping from one small neighborhood to the next rather than ever
+  rendering everything at once
+- Every card starts collapsed to just its primary-key and foreign-key
+  columns — the ones an edge can actually connect to — with a "+N more
+  columns" toggle per card to see everything. A table with dozens of plain
+  data columns no longer dominates the canvas by default; an expanded card
+  scrolls internally past ~14 rows instead of growing without bound
+- Edges connect specific columns, not just table boxes, so the diagram reads
+  as real column-to-column relationships; auto-arranged on open via a
+  one-shot layout pass, and tables can be dragged around freely afterward
+- "Re-layout" resets to the auto-arranged positions; the built-in zoom/fit-
+  view controls are always available in the corner
+- Same scope cut as Schema Compare: ordinary base tables only (no views),
+  and only same-schema foreign keys are drawn — a reference to another
+  schema is counted in a small note on the center table rather than shown
+- Read-only — no editing columns or relationships from the diagram
 
 ## Inline cell editing
 
@@ -359,14 +447,18 @@ code comments or AGENTS.md's architecture section.
 - Update commits one row at a time as a backend-generated, primary-key-scoped
   `UPDATE`; editing requires the table to have a detected primary key
 - Right-click a nullable cell to set it to `NULL`
-  - With a multi-row range selected on that column (see **Drag-select a
-    range** below), the menu instead offers **Set to NULL for N rows** —
-    every cell the range spans on that column, in one click, rather than
-    needing N separate right-clicks
-- Right-click a `uuid`-typed cell for **Generate random UUID** — fills it
-  with a fresh `crypto.randomUUID()` value as a pending edit. Shown for
-  primary-key cells too (unlike "Set to NULL"), since replacing or seeding a
-  uuid primary key before insert is the common case
+  - With a multi-row range selected (see **Drag-select a range** below), the
+    menu instead offers **Set to NULL** for every nullable, non-primary-key
+    cell the range spans — every column it covers, not just the one that was
+    right-clicked, so a block spanning several nullable columns clears all
+    of them in one click rather than one column at a time
+- Right-click a cell whose column can hold a UUID for **Generate random
+  UUID** — fills it with a fresh `crypto.randomUUID()` value as a pending
+  edit. Offered for the native `uuid` type and for text-like columns (`text`,
+  `varchar`, `char`, ...), since it's common to store a UUID as a string
+  column instead. Shown for primary-key cells too (unlike "Set to NULL"),
+  since replacing or seeding a uuid primary key before insert is the common
+  case
   - With a multi-row range selected on that same column, the menu instead
     offers **Generate random UUIDs for N rows** — a *distinct* fresh uuid per
     row, not one value broadcast to every cell (that's what Cmd/Ctrl+V

@@ -7,7 +7,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
-import { save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 
 import type {
   ActiveConnectionInfo,
@@ -32,8 +32,10 @@ import type {
   QueryResult,
   SavedConnection,
   SavedQuery,
+  SchemaCompareResult,
   SchemaNode,
   SequenceDetails,
+  SshHostKeyProbe,
   TableStructure,
 } from "../types";
 
@@ -55,6 +57,29 @@ export function testConnection(
   params: ConnectionParams,
 ): Promise<ConnectionInfo> {
   return invoke("test_connection", { params });
+}
+
+/** Reads an SSH bastion's host key without authenticating, and reports
+ *  whether it's already trusted (or has changed since it was) — the SSH
+ *  tunnel form calls this as the user fills in the bastion host/port, ahead
+ *  of any real `connect`/`testConnection`, so trust-on-first-use can be
+ *  confirmed (or a changed key caught) before a tunnel actually opens. */
+export function probeSshHostKey(
+  bastionHost: string,
+  bastionPort: number,
+): Promise<SshHostKeyProbe> {
+  return invoke("probe_ssh_host_key", { bastionHost, bastionPort });
+}
+
+/** Records `fingerprint` as trusted for this bastion — call only after the
+ *  user has explicitly confirmed it (see `SshHostKeyProbe`'s `status`),
+ *  never automatically. */
+export function trustSshHostKey(
+  bastionHost: string,
+  bastionPort: number,
+  fingerprint: string,
+): Promise<void> {
+  return invoke("trust_ssh_host_key", { bastionHost, bastionPort, fingerprint });
 }
 
 /** Opens a new session and adds it to the backend's pool — never replaces an
@@ -82,6 +107,17 @@ export function connect(
 
 export function disconnect(sessionId: string): Promise<void> {
   return invoke("disconnect", { sessionId });
+}
+
+/** Flips the read-only guard on an already-connected session in place — no
+ *  reconnect, no new database round trip. Read-only is purely a policy this
+ *  app enforces on top of an existing connection, unlike a host/port/
+ *  credential change, which genuinely needs a fresh connection. */
+export function setSessionReadOnly(
+  sessionId: string,
+  readOnly: boolean,
+): Promise<void> {
+  return invoke("set_session_read_only", { sessionId, readOnly });
 }
 
 /** Re-establishes an *existing* session with edited params/name, keeping the
@@ -210,6 +246,25 @@ export function getTableStructure(
   table: string,
 ): Promise<TableStructure> {
   return invoke("get_table_structure", { sessionId, schema, table });
+}
+
+/**
+ * Diffs one schema against another — possibly on a different open
+ * connection — and generates a best-effort migration SQL script. Read-only;
+ * CubbyDB never executes the returned script itself.
+ */
+export function compareSchemas(
+  sourceSessionId: string,
+  sourceSchema: string,
+  targetSessionId: string,
+  targetSchema: string,
+): Promise<SchemaCompareResult> {
+  return invoke("compare_schemas", {
+    sourceSessionId,
+    sourceSchema,
+    targetSessionId,
+    targetSchema,
+  });
 }
 
 /** A function/procedure's full body, by oid. */
@@ -546,4 +601,22 @@ export async function saveTextFile(
   if (!path) return null;
   await invoke("write_text_file", { path, contents });
   return path;
+}
+
+/**
+ * Ask the user to pick a file, then read it back as text — the SSH tunnel
+ * form's private-key "Browse…" button. `path` is only for showing the
+ * picked filename as feedback; the private key itself is stored by its
+ * *contents* (see `SshAuthMethod`'s doc comment in `types.ts`), so nothing
+ * beyond this one read keeps the path around.
+ *
+ * Resolves to `null` if the dialog was dismissed.
+ */
+export async function pickAndReadTextFile(
+  filters?: { name: string; extensions: string[] }[],
+): Promise<{ path: string; contents: string } | null> {
+  const path = await open({ multiple: false, filters });
+  if (!path || Array.isArray(path)) return null;
+  const contents = await invoke<string>("read_text_file", { path });
+  return { path, contents };
 }
