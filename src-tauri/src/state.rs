@@ -44,6 +44,18 @@ pub struct AppState {
     /// entry is refreshed on every connect/reconnect and removed on
     /// disconnect.
     pub canceller: Mutex<HashMap<String, Box<dyn QueryCanceller>>>,
+    /// One end of a `watch` channel per in-flight `ai_chat` turn, keyed by
+    /// session id — the same shape as `canceller` above, and for the same
+    /// reason: a separate lock so `ai_cancel_chat` isn't stuck queuing
+    /// behind the very turn it's trying to stop. `ai_chat` inserts an entry
+    /// for the duration of its call and removes it when done; `ai_cancel_chat`
+    /// sends `true` on it if still present. Cancelling races the whole
+    /// provider call with the channel via `tokio::select!`, so it works
+    /// uniformly across all four AI backends without any of them knowing
+    /// cancellation exists — the losing future is simply dropped, which is
+    /// what actually aborts an in-flight HTTP request or (with
+    /// `kill_on_drop`, see `claude_code.rs`) kills a bridged CLI process.
+    pub ai_cancellers: Mutex<HashMap<String, tokio::sync::watch::Sender<bool>>>,
 }
 
 impl AppState {
@@ -52,6 +64,7 @@ impl AppState {
             data_dir,
             active: Mutex::new(HashMap::new()),
             canceller: Mutex::new(HashMap::new()),
+            ai_cancellers: Mutex::new(HashMap::new()),
         }
     }
 
@@ -85,6 +98,10 @@ impl AppState {
 
     pub fn ai_chat_store(&self) -> AiChatStore {
         AiChatStore::new(&self.data_dir)
+    }
+
+    pub fn ai_audit_store(&self) -> crate::ai::audit::AiAuditStore {
+        crate::ai::audit::AiAuditStore::new(&self.data_dir)
     }
 
     pub fn data_dir(&self) -> &std::path::Path {

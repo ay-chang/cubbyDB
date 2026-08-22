@@ -8,6 +8,7 @@
 //! "build the prompt" and "run the loop": the plain-text message shape the
 //! frontend speaks, the row-truncation rule, and the iteration cap.
 
+pub mod audit;
 pub mod chats;
 pub mod claude_code;
 pub mod codex;
@@ -176,4 +177,137 @@ pub fn summarize_for_model(result: &QueryResult) -> String {
         ));
     }
     out
+}
+
+/// How long a single request to a provider is allowed to sit open. Generous:
+/// the response only arrives after the model finishes generating (neither
+/// direct-API path streams), so this has to cover worst-case generation
+/// time, not just network latency. A hung connection previously blocked the
+/// panel forever — `codex.rs`/`claude_code.rs` already bound their own calls
+/// this way, this brings the two direct-HTTP providers in line with them.
+const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// A `reqwest::Client` with `HTTP_TIMEOUT` applied. Shared by `provider.rs`
+/// and `openai.rs` — the two providers that talk to their API over HTTP
+/// directly, rather than through a CLI's own app-server (which manages its
+/// own timeouts).
+pub(crate) fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(HTTP_TIMEOUT)
+        .build()
+        // `build()` only fails on TLS backend initialization — already
+        // proven to work elsewhere in this process (the Postgres driver's
+        // own TLS), so this is unreachable in practice. Fall back to an
+        // unbounded client rather than panic if it somehow ever isn't.
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
+/// Attempts before giving up on a transient failure.
+const MAX_SEND_ATTEMPTS: u32 = 3;
+
+/// Sends a request, retrying with backoff on the failures worth retrying:
+/// rate limiting, transient server-side overload, and connection-level
+/// hiccups. Anything else — a 400, a 401, a malformed request — is a real
+/// problem retrying won't fix, so it's returned immediately on the first
+/// attempt. `build` is called fresh on every attempt rather than the
+/// request being cloned, since rebuilding a small JSON POST is cheap and
+/// sidesteps needing the body to be cloneable.
+pub(crate) async fn send_with_retry<F>(build: F) -> Result<reqwest::Response, reqwest::Error>
+where
+    F: Fn() -> reqwest::RequestBuilder,
+{
+    let mut attempt = 0u32;
+    loop {
+        attempt += 1;
+        match build().send().await {
+            Ok(resp) if attempt < MAX_SEND_ATTEMPTS && is_retryable_status(resp.status().as_u16()) => {
+                eprintln!(
+                    "[cubbydb][ai] {} on attempt {attempt}, retrying",
+                    resp.status()
+                );
+                tokio::time::sleep(backoff_delay(attempt)).await;
+            }
+            Ok(resp) => return Ok(resp),
+            Err(e) if attempt < MAX_SEND_ATTEMPTS && (e.is_timeout() || e.is_connect()) => {
+                eprintln!("[cubbydb][ai] transport error on attempt {attempt}: {e}, retrying");
+                tokio::time::sleep(backoff_delay(attempt)).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+fn is_retryable_status(status: u16) -> bool {
+    // 429 rate limiting; 500/502/503 generic server-side trouble; 529 is
+    // Anthropic's own "overloaded" code.
+    matches!(status, 429 | 500 | 502 | 503 | 529)
+}
+
+fn backoff_delay(attempt: u32) -> std::time::Duration {
+    let secs = 2u64.saturating_pow(attempt.saturating_sub(1)).min(8);
+    std::time::Duration::from_secs(secs)
+}
+
+/// Safety cap on how many of a conversation's messages are replayed into a
+/// fresh provider request. `chats.rs` still persists the full transcript —
+/// this only bounds what gets sent out, so an extremely long conversation
+/// degrades (older middle turns dropped) instead of eventually failing
+/// outright once it's grown large enough to blow the context window.
+///
+/// The first message is always kept even when it falls outside the tail:
+/// it's what `PromptContext::conversation_seed` ranks the schema against for
+/// the whole conversation (see `prompt.rs`), and losing it would silently
+/// change that ranking — and the cached system prompt's relevant-tables
+/// list — partway through a chat.
+pub const MAX_HISTORY_MESSAGES: usize = 40;
+
+/// Applies `MAX_HISTORY_MESSAGES`: the first message, plus the most recent
+/// messages up to the cap.
+pub fn cap_history(messages: &[ChatMessage]) -> Vec<ChatMessage> {
+    if messages.len() <= MAX_HISTORY_MESSAGES {
+        return messages.to_vec();
+    }
+    let mut capped = Vec::with_capacity(MAX_HISTORY_MESSAGES);
+    capped.push(messages[0].clone());
+    capped.extend_from_slice(&messages[messages.len() - (MAX_HISTORY_MESSAGES - 1)..]);
+    capped
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn msg(content: &str) -> ChatMessage {
+        ChatMessage { role: "user".to_string(), content: content.to_string(), trace: None }
+    }
+
+    #[test]
+    fn cap_history_is_a_no_op_under_the_limit() {
+        let messages: Vec<ChatMessage> = (0..5).map(|i| msg(&i.to_string())).collect();
+        let capped = cap_history(&messages);
+        assert_eq!(capped.len(), 5);
+    }
+
+    #[test]
+    fn cap_history_keeps_the_first_message_and_the_recent_tail() {
+        let messages: Vec<ChatMessage> =
+            (0..MAX_HISTORY_MESSAGES + 10).map(|i| msg(&i.to_string())).collect();
+        let capped = cap_history(&messages);
+        assert_eq!(capped.len(), MAX_HISTORY_MESSAGES);
+        assert_eq!(capped[0].content, "0");
+        // The most recent message is still present.
+        assert_eq!(capped.last().unwrap().content, (messages.len() - 1).to_string());
+        // Something from the dropped middle is genuinely gone.
+        assert!(!capped.iter().any(|m| m.content == "5"));
+    }
+
+    #[test]
+    fn retryable_statuses_are_exactly_rate_limit_and_server_trouble() {
+        for status in [429, 500, 502, 503, 529] {
+            assert!(is_retryable_status(status), "{status} should be retryable");
+        }
+        for status in [200, 400, 401, 404] {
+            assert!(!is_retryable_status(status), "{status} should not be retryable");
+        }
+    }
 }

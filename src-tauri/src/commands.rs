@@ -1258,12 +1258,148 @@ pub async fn ai_chat(
         conversation_seed,
     });
 
+    // Bounds what gets replayed into the provider, not what's persisted —
+    // `chats.rs` still saves the caller's full, uncapped `messages`.
+    let capped_messages = crate::ai::cap_history(&messages);
+
     // A plain `&AppState` (trivially `Copy`, unlike `State` itself) so the
     // tool runner can be called on every loop iteration without needing
     // `state` to implement anything beyond what a shared reference gives us.
     let app_state: &AppState = state.inner();
-    let run_tool = tool_runner(app_state, session_id, &schema);
-    run_provider_turn(app_state, system_prompt, messages, run_tool).await
+
+    // Audit logging is opt-in (`AiConfig::audit_log_enabled`, off by
+    // default — see `audit.rs`). `provider`/`model` are captured here for
+    // the record even though `run_provider_turn` re-resolves them itself;
+    // it doesn't hand them back, and this is one more cheap config read.
+    let ai_config = app_state.ai_config_store().get()?;
+    let audit_enabled = ai_config.audit_log_enabled;
+    let audit_provider = match ai_config.provider() {
+        AiProvider::Anthropic => "anthropic",
+        AiProvider::Openai => "openai",
+        AiProvider::Codex => "codex",
+        AiProvider::ClaudeCode => "claudeCode",
+    }
+    .to_string();
+    let audit_model = ai_config.model().to_string();
+    let audit_system_prompt = audit_enabled.then(|| system_prompt.clone());
+    let audit_user_message = messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .map(|m| m.content.clone())
+        .unwrap_or_default();
+
+    // Wraps `tool_runner`'s closure to also record each call's full
+    // input/output for the audit log (see `AuditToolCall::record` for what
+    // gets redacted), independent of the summarized `ToolTrace` the same
+    // call already returns for the chat panel. Cheap enough to leave
+    // wrapped unconditionally rather than branch on `audit_enabled` — an
+    // `Arc<Mutex<Vec<_>>>` push per tool call — so the entry is simply
+    // discarded below when logging is off.
+    let audit_calls: std::sync::Arc<tokio::sync::Mutex<Vec<crate::ai::audit::AuditToolCall>>> =
+        std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    let run_tool = {
+        let inner = tool_runner(app_state, session_id.clone(), &schema);
+        let audit_calls = audit_calls.clone();
+        move |name: String, input: serde_json::Value| {
+            let audit_calls = audit_calls.clone();
+            let name_for_record = name.clone();
+            let input_for_record = input.clone();
+            let fut = inner(name, input);
+            async move {
+                let started = std::time::Instant::now();
+                let outcome = fut.await;
+                let elapsed_ms = started.elapsed().as_millis() as u64;
+                audit_calls.lock().await.push(crate::ai::audit::AuditToolCall::record(
+                    name_for_record,
+                    input_for_record,
+                    &outcome,
+                    elapsed_ms,
+                ));
+                outcome
+            }
+        }
+    };
+
+    // `ai_cancel_chat` stops this turn by sending on this channel; the turn
+    // itself never checks it. Racing the whole provider call against
+    // `changed()` means the losing future — the provider call — is simply
+    // dropped, which is what actually aborts an in-flight HTTP request
+    // (Anthropic/OpenAI) or kills a bridged CLI's child process (Codex/Claude
+    // Code — see `kill_on_drop` in `claude_code.rs`), uniformly across all
+    // four backends without any of them needing to know cancellation exists.
+    let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
+    app_state.ai_cancellers.lock().await.insert(session_id.clone(), cancel_tx);
+
+    let turn_started = std::time::Instant::now();
+    let result = tokio::select! {
+        _ = cancel_rx.changed() => Err(DbError::new(
+            DbErrorKind::Internal,
+            "Stopped by user.",
+        )),
+        r = run_provider_turn(app_state, system_prompt, capped_messages, run_tool) => r,
+    };
+
+    if let Some(system_prompt) = audit_system_prompt {
+        let entry = crate::ai::audit::AuditEntry {
+            started_at: crate::history::now_millis(),
+            connection_name,
+            provider: audit_provider,
+            model: audit_model,
+            system_prompt,
+            user_message: audit_user_message,
+            tool_calls: audit_calls.lock().await.clone(),
+            reply: result.as_ref().map(|r| r.reply.clone()).unwrap_or_default(),
+            error: result.as_ref().err().map(|e| e.message.clone()),
+            elapsed_ms: turn_started.elapsed().as_millis() as u64,
+        };
+        if let Err(log_err) = app_state.ai_audit_store().append(&entry) {
+            eprintln!("[cubbydb] failed to write AI audit log: {log_err}");
+        }
+    }
+
+    app_state.ai_cancellers.lock().await.remove(&session_id);
+    result
+}
+
+/// Stops an in-flight `ai_chat` turn for this session, if one is still
+/// running. A no-op (not an error) when there's nothing to cancel — the
+/// turn may have already finished by the time this arrives, same
+/// not-an-error treatment `cancel_query` gives that race.
+#[tauri::command]
+pub async fn ai_cancel_chat(state: State<'_, AppState>, session_id: String) -> Result<(), DbError> {
+    match state.ai_cancellers.lock().await.get(&session_id) {
+        Some(cancel_tx) => {
+            let _ = cancel_tx.send(true);
+            Ok(())
+        }
+        None => Ok(()),
+    }
+}
+
+/// The most recent AI audit entries, newest first — see `audit.rs`. Empty
+/// whenever logging has never been on, same as `query_history` returns
+/// empty rather than erroring when nothing's been logged yet.
+#[tauri::command]
+pub async fn ai_audit_log(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<crate::ai::audit::AuditEntry>, DbError> {
+    state.ai_audit_store().recent(limit.unwrap_or(200))
+}
+
+#[tauri::command]
+pub async fn clear_ai_audit_log(state: State<'_, AppState>) -> Result<(), DbError> {
+    state.ai_audit_store().clear()
+}
+
+#[tauri::command]
+pub async fn save_ai_audit_log_enabled(
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<AiConfigStatus, DbError> {
+    let config = state.ai_config_store().set_audit_log_enabled(enabled)?;
+    Ok(ai_config_status(state.inner(), &config).await)
 }
 
 /// Natural language -> a WHERE predicate for the table browser's filter bar.

@@ -13,6 +13,7 @@ import { create } from "zustand";
 import * as api from "../api/backend";
 import type {
   ActiveConnectionInfo,
+  AiAuditEntry,
   AiChatSummary,
   AiConfigStatus,
   AiFilterResult,
@@ -183,8 +184,10 @@ export interface ConnectionSlot {
    *  supposedly said. Cleared when the turn is retried or a new one starts. */
   aiError: string | null;
   /** Identifies the in-flight turn. Stopping (or starting another) bumps it,
-   *  and a reply whose token no longer matches is discarded — see
-   *  `stopAiMessage` for why the request itself can't be aborted. */
+   *  and a reply whose token no longer matches is discarded. This is a
+   *  client-side safety net independent of `stopAiMessage`'s own backend
+   *  cancellation — it also covers the case where a reply lands just after
+   *  the user already moved on to a new question. */
   aiTurnToken: number;
   /** Which saved chat (see `ai_chats.rs`) the current `aiMessages` is, once
    *  it has one — `null` until the first message of a fresh conversation is
@@ -936,6 +939,13 @@ interface AppStore {
 
   history: HistoryEntry[];
   historyOpen: boolean;
+  /** Which of the two tabs the History panel is showing — query history, or
+   *  the AI audit log (see `AiAuditEntry`). Global rather than per-connection:
+   *  the panel itself is a single UI surface, not workspace state. */
+  historyTab: "queries" | "ai";
+  /** Empty until `refreshAiAuditLog` has run at least once, or forever if
+   *  `AiConfigStatus.auditLogEnabled` has never been turned on. */
+  aiAuditEntries: AiAuditEntry[];
 
   /** Most-recently-used relations across all currently open connections. */
   recentDatabaseObjects: RecentDatabaseObject[];
@@ -1292,6 +1302,10 @@ interface AppStore {
   refreshHistory: () => Promise<void>;
   clearHistory: () => Promise<void>;
   rerunFromHistory: (sql: string) => void;
+  setHistoryTab: (tab: "queries" | "ai") => void;
+  refreshAiAuditLog: () => Promise<void>;
+  clearAiAuditLog: () => Promise<void>;
+  saveAiAuditLogEnabled: (enabled: boolean) => Promise<void>;
 
   // --- command palette ---
   toggleCommandPalette: () => void;
@@ -2514,6 +2528,8 @@ export const useStore = create<AppStore>((set, get) => {
     activeConnectionId: null,
     history: [],
     historyOpen: false,
+    historyTab: "queries",
+    aiAuditEntries: [],
     recentDatabaseObjects: [],
     aiPanelOpen: false,
     aiConfig: null,
@@ -3857,7 +3873,10 @@ export const useStore = create<AppStore>((set, get) => {
           ? { historyOpen: true, savedQueriesOpen: false, aiPanelOpen: false, cubbiesOpen: false }
           : { historyOpen: false },
       );
-      if (next) void get().refreshHistory();
+      if (next) {
+        void get().refreshHistory();
+        void get().refreshAiAuditLog();
+      }
     },
 
     toggleCommandPalette() {
@@ -4062,21 +4081,29 @@ export const useStore = create<AppStore>((set, get) => {
       await get().runAiTurn(connectionId);
     },
 
-    /** Abandons the in-flight turn. The provider request itself keeps running
-     *  — a Tauri command can't be aborted partway, and the agent loop has no
-     *  cancellation channel — so this bumps the turn token, which makes the
-     *  eventual reply get dropped, and hands the panel straight back to the
-     *  user. Tokens for that turn are still spent. */
+    /** Abandons the in-flight turn: hands the panel straight back to the user
+     *  immediately (bumping the turn token, so a reply that was already on
+     *  its way back gets dropped instead of appearing after the fact), and
+     *  asks the backend to actually stop the provider call — dropping an
+     *  in-flight HTTP request or killing a bridged CLI process, see
+     *  `ai_cancel_chat`. Fire-and-forget: the panel doesn't wait on it, since
+     *  the user-visible "stopped" state is the token bump above. */
     stopAiMessage() {
       const connectionId = get().activeConnectionId;
       if (!connectionId) return;
+      const slot = get().connections[connectionId];
       set((s) => ({
-        connections: patchSlot(s.connections, connectionId, (slot) => ({
-          aiTurnToken: slot.aiTurnToken + 1,
+        connections: patchSlot(s.connections, connectionId, (current) => ({
+          aiTurnToken: current.aiTurnToken + 1,
           aiSending: false,
           aiError: null,
         })),
       }));
+      if (slot) {
+        void api.cancelAiChat(slot.sessionId).catch((err) => {
+          console.error("failed to cancel AI turn:", errorMessage(err));
+        });
+      }
     },
 
     async runAiTurn(connectionId) {
@@ -4159,6 +4186,9 @@ export const useStore = create<AppStore>((set, get) => {
           })),
         }));
         void persist([...slot.aiMessages, assistantMessage]);
+        // Same freshness touch `runQuery` gives the query-history tab when
+        // it's the one open — see the `historyOpen` check near line 3061.
+        if (get().historyOpen && get().historyTab === "ai") void get().refreshAiAuditLog();
       } catch (err) {
         if (!stillCurrent()) return;
         // Held beside the thread, not appended to it: `aiMessages` is both
@@ -4276,6 +4306,37 @@ export const useStore = create<AppStore>((set, get) => {
       } catch (err) {
         console.error("failed to clear history:", errorMessage(err));
       }
+    },
+
+    setHistoryTab(tab) {
+      set({ historyTab: tab });
+      if (tab === "ai") {
+        if (!get().aiConfig) void get().loadAiConfig();
+        void get().refreshAiAuditLog();
+      }
+    },
+
+    async refreshAiAuditLog() {
+      try {
+        const aiAuditEntries = await api.aiAuditLog();
+        set({ aiAuditEntries });
+      } catch (err) {
+        console.error("failed to load AI audit log:", errorMessage(err));
+      }
+    },
+
+    async clearAiAuditLog() {
+      try {
+        await api.clearAiAuditLog();
+        set({ aiAuditEntries: [] });
+      } catch (err) {
+        console.error("failed to clear AI audit log:", errorMessage(err));
+      }
+    },
+
+    async saveAiAuditLogEnabled(enabled) {
+      const aiConfig = await api.saveAiAuditLogEnabled(enabled);
+      set({ aiConfig });
     },
 
     rerunFromHistory(sql) {

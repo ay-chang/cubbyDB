@@ -21,11 +21,8 @@ const MAX_OUTPUT_TOKENS: u32 = 8192;
 /// Live-fetches models visible to the key and keeps text/reasoning families
 /// that can plausibly serve the assistant's Responses API function tools.
 pub async fn list_models(api_key: &str) -> Result<Vec<ModelInfo>, DbError> {
-    let client = reqwest::Client::new();
-    let resp = client
-        .get(MODELS_URL)
-        .bearer_auth(api_key)
-        .send()
+    let client = super::http_client();
+    let resp = super::send_with_retry(|| client.get(MODELS_URL).bearer_auth(api_key))
         .await
         .map_err(|e| openai_request_error(e.to_string()))?;
 
@@ -141,7 +138,7 @@ where
     F: Fn(String, Value) -> Fut,
     Fut: Future<Output = Result<ToolOutcome, DbError>>,
 {
-    let client = reqwest::Client::new();
+    let client = super::http_client();
     let tools = openai_tool_definitions();
     let mut input: Vec<Value> = messages
         .iter()
@@ -150,54 +147,8 @@ where
     let mut trace = Vec::new();
 
     for _ in 0..MAX_TOOL_ITERATIONS {
-        let mut body = json!({
-            "model": model,
-            "instructions": system_prompt,
-            "input": input,
-            "tools": tools,
-            "max_output_tokens": MAX_OUTPUT_TOKENS,
-            // Database schemas and row samples should not be retained as
-            // provider-side response state. The complete tool loop is
-            // replayed explicitly below instead.
-            "store": false,
-        });
-        if let Some(effort) = reasoning_effort {
-            body["reasoning"] = json!({ "effort": effort.as_str() });
-        }
-
-        let resp = client
-            .post(API_URL)
-            .bearer_auth(api_key)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| openai_request_error(e.to_string()))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(openai_api_error(status.as_u16(), &text));
-        }
-
-        let parsed: OpenAiResponse = resp.json().await.map_err(|e| {
-            DbError::new(
-                DbErrorKind::Internal,
-                format!("OpenAI response parse failed: {e}"),
-            )
-        })?;
-
-        if let Some(usage) = &parsed.usage {
-            eprintln!(
-                "[cubbydb][ai] provider=openai cached={} in={} out={}",
-                usage
-                    .input_tokens_details
-                    .as_ref()
-                    .and_then(|details| details.cached_tokens)
-                    .unwrap_or(0),
-                usage.input_tokens.unwrap_or(0),
-                usage.output_tokens.unwrap_or(0),
-            );
-        }
+        let parsed =
+            send_turn(&client, api_key, model, reasoning_effort, &system_prompt, &input, Some(&tools)).await?;
 
         let reply = response_text(&parsed.output);
         let calls = function_calls(&parsed.output);
@@ -237,10 +188,84 @@ where
         }
     }
 
-    Err(DbError::new(
-        DbErrorKind::Internal,
-        "The AI kept working without reaching an answer — stopped after the iteration limit.",
-    ))
+    // Iteration cap reached without a final answer. Rather than discarding
+    // everything the turn already learned (the previous behavior — a bare
+    // error, no reply, tokens spent for nothing the user can see), ask once
+    // more with `tools` omitted. Without a tool to call, the model has no
+    // choice but to answer in text from what it already gathered — a
+    // degraded reply beats no reply.
+    let parsed = send_turn(&client, api_key, model, reasoning_effort, &system_prompt, &input, None).await?;
+    let reply = response_text(&parsed.output);
+    let reply = if reply.is_empty() {
+        "I wasn't able to reach a confident answer in the time available — could you narrow the question?".to_string()
+    } else {
+        reply
+    };
+    Ok(AiChatResult { reply, trace })
+}
+
+/// One request/response exchange with the Responses API. Split out from
+/// `run_loop` so the iteration-cap fallback (one last call with `tools:
+/// None`) shares the exact same request-building, retry, and error-handling
+/// path as every ordinary turn of the loop, rather than duplicating it.
+#[allow(clippy::too_many_arguments)]
+async fn send_turn(
+    client: &reqwest::Client,
+    api_key: &str,
+    model: &str,
+    reasoning_effort: Option<ReasoningEffort>,
+    system_prompt: &str,
+    input: &[Value],
+    tools: Option<&Value>,
+) -> Result<OpenAiResponse, DbError> {
+    let mut body = json!({
+        "model": model,
+        "instructions": system_prompt,
+        "input": input,
+        "max_output_tokens": MAX_OUTPUT_TOKENS,
+        // Database schemas and row samples should not be retained as
+        // provider-side response state. The complete tool loop is replayed
+        // explicitly instead.
+        "store": false,
+    });
+    if let Some(tools) = tools {
+        body["tools"] = tools.clone();
+    }
+    if let Some(effort) = reasoning_effort {
+        body["reasoning"] = json!({ "effort": effort.as_str() });
+    }
+
+    let resp = super::send_with_retry(|| client.post(API_URL).bearer_auth(api_key).json(&body))
+        .await
+        .map_err(|e| openai_request_error(e.to_string()))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(openai_api_error(status.as_u16(), &text));
+    }
+
+    let parsed: OpenAiResponse = resp.json().await.map_err(|e| {
+        DbError::new(
+            DbErrorKind::Internal,
+            format!("OpenAI response parse failed: {e}"),
+        )
+    })?;
+
+    if let Some(usage) = &parsed.usage {
+        eprintln!(
+            "[cubbydb][ai] provider=openai cached={} in={} out={}",
+            usage
+                .input_tokens_details
+                .as_ref()
+                .and_then(|details| details.cached_tokens)
+                .unwrap_or(0),
+            usage.input_tokens.unwrap_or(0),
+            usage.output_tokens.unwrap_or(0),
+        );
+    }
+
+    Ok(parsed)
 }
 
 /// The existing neutral definitions use Anthropic's `input_schema` key.

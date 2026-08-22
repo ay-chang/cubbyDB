@@ -11,6 +11,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 
 import type {
   ActiveConnectionInfo,
+  AiAuditEntry,
   AiChatResult,
   AiChatSummary,
   AiChatThread,
@@ -418,6 +419,16 @@ export function clearQueryHistory(): Promise<void> {
   return invoke("clear_query_history");
 }
 
+/** The most recent AI audit entries, newest first — empty until
+ *  `saveAiAuditLogEnabled(true)` has been called at least once. */
+export function aiAuditLog(limit?: number): Promise<AiAuditEntry[]> {
+  return invoke("ai_audit_log", { limit: limit ?? null });
+}
+
+export function clearAiAuditLog(): Promise<void> {
+  return invoke("clear_ai_audit_log");
+}
+
 // --- AI assistant ------------------------------------------------------------
 
 export function getAiConfig(): Promise<AiConfigStatus> {
@@ -437,6 +448,10 @@ export function saveAiConfig(
 
 export function clearAiConfig(provider: AiProvider): Promise<AiConfigStatus> {
   return invoke("clear_ai_config", { provider });
+}
+
+export function saveAiAuditLogEnabled(enabled: boolean): Promise<AiConfigStatus> {
+  return invoke("save_ai_audit_log_enabled", { enabled });
 }
 
 /** Opens Codex CLI's browser-based ChatGPT subscription login. CubbyDB never
@@ -514,6 +529,13 @@ export function aiChat(
     cubby,
     messages,
   });
+}
+
+/** Stops an in-flight `aiChat` turn for this session, if one is still
+ *  running. A no-op if it already finished — that race is fine, not an
+ *  error. */
+export function cancelAiChat(sessionId: string): Promise<void> {
+  return invoke("ai_cancel_chat", { sessionId });
 }
 
 /** Turns a natural-language description into a WHERE predicate for one

@@ -511,6 +511,39 @@ export interface AiConfigStatus {
   /** Whether the user has accepted the current AI-provider terms at
    *  cubbydb.com/terms — gates the Codex/Claude Code sign-in buttons. */
   termsAccepted: boolean;
+  /** Off by default — see `AiAuditEntry`. */
+  auditLogEnabled: boolean;
+}
+
+/** One tool call within an `AiAuditEntry`. `output` is `null` for
+ *  `run_sql`/`sample_rows` — the two tools that can return a database's
+ *  actual row content — even when the call succeeded; everything else
+ *  (`describeTable`, `searchSchema`, `explainQuery`) is schema/plan
+ *  metadata, kept in full. */
+export interface AiAuditToolCall {
+  tool: string;
+  input: unknown;
+  output: string | null;
+  rowCount: number | null;
+  error: string | null;
+  elapsedMs: number;
+}
+
+/** One completed AI turn, persisted only while `AiConfigStatus.auditLogEnabled`
+ *  is on. Unlike a chat message's `trace` (summarized, for the panel), this
+ *  keeps the literal system prompt and full tool input/output — see
+ *  `src-tauri/src/ai/audit.rs`. */
+export interface AiAuditEntry {
+  startedAt: number;
+  connectionName: string;
+  provider: string;
+  model: string;
+  systemPrompt: string;
+  userMessage: string;
+  toolCalls: AiAuditToolCall[];
+  reply: string;
+  error: string | null;
+  elapsedMs: number;
 }
 
 /** One model the active provider currently offers, for the Settings model picker —

@@ -32,14 +32,15 @@ const EFFORT: &str = "medium";
 /// Live-fetches the models available to this key. The Models API returns
 /// newest-released first, so the list is shown in that order as-is.
 pub async fn list_models(api_key: &str) -> Result<Vec<ModelInfo>, DbError> {
-    let client = reqwest::Client::new();
-    let resp = client
-        .get(MODELS_URL)
-        .header("x-api-key", api_key)
-        .header("anthropic-version", API_VERSION)
-        .send()
-        .await
-        .map_err(|e| DbError::new(DbErrorKind::Internal, format!("Anthropic request failed: {e}")))?;
+    let client = super::http_client();
+    let resp = super::send_with_retry(|| {
+        client
+            .get(MODELS_URL)
+            .header("x-api-key", api_key)
+            .header("anthropic-version", API_VERSION)
+    })
+    .await
+    .map_err(|e| DbError::new(DbErrorKind::Internal, format!("Anthropic request failed: {e}")))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -117,7 +118,7 @@ where
     F: Fn(String, Value) -> Fut,
     Fut: Future<Output = Result<ToolOutcome, DbError>>,
 {
-    let client = reqwest::Client::new();
+    let client = super::http_client();
     let tools = tool_definitions();
 
     // Anthropic's own wire-format conversation, seeded from the plain
@@ -131,71 +132,8 @@ where
     let mut trace = Vec::new();
 
     for _ in 0..MAX_TOOL_ITERATIONS {
-        // `system` is sent as a block array (not a bare string) purely so it
-        // can carry `cache_control`. Anthropic renders the request as
-        // tools -> system -> messages and caching is a prefix match, so a
-        // breakpoint on the last system block caches the tool definitions
-        // and the whole schema together — the expensive, byte-identical part
-        // of every turn in a conversation.
-        //
-        // This only holds while the prefix is stable: anything per-request
-        // in the system prompt (a timestamp, a session id) silently
-        // invalidates it on every call. `build_system_prompt` deliberately
-        // includes only a date, which is stable far longer than the cache's
-        // own TTL.
-        let mut body = json!({
-            "model": model,
-            "max_tokens": MAX_TOKENS,
-            "system": [{
-                "type": "text",
-                "text": system_prompt,
-                "cache_control": { "type": "ephemeral" },
-            }],
-            "messages": wire_messages,
-            "tools": tools,
-        });
-        // Only for models that actually accept it — see `send_effort`'s
-        // source in `AiConfig::model_supports_effort`.
-        if send_effort {
-            body["output_config"] = json!({ "effort": EFFORT });
-        }
-
-        let resp = client
-            .post(API_URL)
-            .header("x-api-key", api_key)
-            .header("anthropic-version", API_VERSION)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| DbError::new(DbErrorKind::Internal, format!("Anthropic request failed: {e}")))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(DbError::new(
-                DbErrorKind::Internal,
-                format!("Anthropic API error ({status}): {text}"),
-            ));
-        }
-
-        let parsed: AnthropicResponse = resp.json().await.map_err(|e| {
-            DbError::new(DbErrorKind::Internal, format!("Anthropic response parse failed: {e}"))
-        })?;
-
-        // Cache effectiveness is invisible without this. A healthy multi-turn
-        // chat reads ~0 cached tokens on its first message and thousands on
-        // every one after; a steady 0 means something per-request leaked into
-        // the system prompt and the cache never hits. Cheap to leave in — one
-        // line per turn on stderr.
-        if let Some(usage) = &parsed.usage {
-            eprintln!(
-                "[cubbydb][ai] cache write={} read={} in={} out={}",
-                usage.cache_creation_input_tokens.unwrap_or(0),
-                usage.cache_read_input_tokens.unwrap_or(0),
-                usage.input_tokens.unwrap_or(0),
-                usage.output_tokens.unwrap_or(0),
-            );
-        }
+        let parsed = send_turn(&client, api_key, model, send_effort, &system_prompt, &wire_messages, Some(&tools))
+            .await?;
 
         // Content blocks are kept as raw `Value`s rather than deserialized
         // into a typed struct — Anthropic has several block shapes beyond
@@ -273,10 +211,110 @@ where
         wire_messages.push(json!({ "role": "user", "content": tool_results }));
     }
 
-    Err(DbError::new(
-        DbErrorKind::Internal,
-        "The AI kept working without reaching an answer — stopped after the iteration limit.",
-    ))
+    // Iteration cap reached without a final answer. Rather than discarding
+    // everything the turn already learned (the previous behavior — a bare
+    // error, no reply, tokens spent for nothing the user can see), ask once
+    // more with `tools` omitted. Without a tool to call, the model has no
+    // choice but to answer in text from what it already gathered — a
+    // degraded reply beats no reply.
+    let parsed = send_turn(&client, api_key, model, send_effort, &system_prompt, &wire_messages, None).await?;
+    let mut text = String::new();
+    for block in &parsed.content {
+        if block.get("type").and_then(|t| t.as_str()) == Some("text") {
+            if let Some(t) = block.get("text").and_then(|t| t.as_str()) {
+                text.push_str(t);
+            }
+        }
+    }
+    if text.is_empty() {
+        text = "I wasn't able to reach a confident answer in the time available — could you narrow the question?".to_string();
+    }
+    Ok(AiChatResult { reply: text, trace })
+}
+
+/// One request/response exchange with the Messages API. Split out from
+/// `run_loop` so the iteration-cap fallback (one last call with `tools:
+/// None`) shares the exact same request-building, retry, and error-handling
+/// path as every ordinary turn of the loop, rather than duplicating it.
+#[allow(clippy::too_many_arguments)]
+async fn send_turn(
+    client: &reqwest::Client,
+    api_key: &str,
+    model: &str,
+    send_effort: bool,
+    system_prompt: &str,
+    wire_messages: &[Value],
+    tools: Option<&Value>,
+) -> Result<AnthropicResponse, DbError> {
+    // `system` is sent as a block array (not a bare string) purely so it can
+    // carry `cache_control`. Anthropic renders the request as
+    // tools -> system -> messages and caching is a prefix match, so a
+    // breakpoint on the last system block caches the tool definitions and
+    // the whole schema together — the expensive, byte-identical part of
+    // every turn in a conversation.
+    //
+    // This only holds while the prefix is stable: anything per-request in
+    // the system prompt (a timestamp, a session id) silently invalidates it
+    // on every call. `build_system_prompt` deliberately includes only a
+    // date, which is stable far longer than the cache's own TTL.
+    let mut body = json!({
+        "model": model,
+        "max_tokens": MAX_TOKENS,
+        "system": [{
+            "type": "text",
+            "text": system_prompt,
+            "cache_control": { "type": "ephemeral" },
+        }],
+        "messages": wire_messages,
+    });
+    if let Some(tools) = tools {
+        body["tools"] = tools.clone();
+    }
+    // Only for models that actually accept it — see `send_effort`'s source
+    // in `AiConfig::model_supports_effort`.
+    if send_effort {
+        body["output_config"] = json!({ "effort": EFFORT });
+    }
+
+    let resp = super::send_with_retry(|| {
+        client
+            .post(API_URL)
+            .header("x-api-key", api_key)
+            .header("anthropic-version", API_VERSION)
+            .json(&body)
+    })
+    .await
+    .map_err(|e| DbError::new(DbErrorKind::Internal, format!("Anthropic request failed: {e}")))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(DbError::new(
+            DbErrorKind::Internal,
+            format!("Anthropic API error ({status}): {text}"),
+        ));
+    }
+
+    let parsed: AnthropicResponse = resp.json().await.map_err(|e| {
+        DbError::new(DbErrorKind::Internal, format!("Anthropic response parse failed: {e}"))
+    })?;
+
+    // Cache effectiveness is invisible without this. A healthy multi-turn
+    // chat reads ~0 cached tokens on its first message and thousands on
+    // every one after; a steady 0 means something per-request leaked into
+    // the system prompt and the cache never hits. Cheap to leave in — one
+    // line per turn on stderr.
+    if let Some(usage) = &parsed.usage {
+        eprintln!(
+            "[cubbydb][ai] cache write={} read={} in={} out={}",
+            usage.cache_creation_input_tokens.unwrap_or(0),
+            usage.cache_read_input_tokens.unwrap_or(0),
+            usage.input_tokens.unwrap_or(0),
+            usage.output_tokens.unwrap_or(0),
+        );
+    }
+
+    Ok(parsed)
 }
 
 #[derive(Debug, Deserialize)]

@@ -28,6 +28,9 @@ yarn-error.log*
 
 # Environment / local secrets (never commit connection credentials)
 .env
+
+# Private notes — monetization/paid-feature thinking, not for the public repo
+PAID_FEATURES.md
 .env.local
 *.local
 

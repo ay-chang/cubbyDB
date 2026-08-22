@@ -350,7 +350,14 @@ where
         |cmd| {
             cmd.stdin(Stdio::piped())
                 .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
+                .stderr(Stdio::piped())
+                // Lets `ai_cancel_chat` actually stop this turn: cancellation
+                // is implemented as dropping this whole future (see
+                // `commands::ai_chat`), and without this the child — and the
+                // ephemeral MCP server bridging it to CubbyDB's tools — would
+                // otherwise leak as an orphaned process instead of exiting
+                // with it.
+                .kill_on_drop(true);
         },
     )
     .map_err(to_db_error)?;

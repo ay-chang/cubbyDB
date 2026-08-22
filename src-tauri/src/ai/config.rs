@@ -86,6 +86,11 @@ pub struct AiConfig {
     /// change can re-prompt instead of silently grandfathering old consent.
     #[serde(default)]
     pub terms_accepted_version: Option<String>,
+    /// Off by default: the audit log can hold the literal system prompt and
+    /// (for schema-only tools) full tool output, so it isn't written unless
+    /// the user opts in. See `audit.rs`.
+    #[serde(default)]
+    pub audit_log_enabled: bool,
 }
 
 impl AiConfig {
@@ -182,6 +187,7 @@ pub struct AiConfigStatus {
     /// Whether `terms_accepted_version` matches `CURRENT_AI_TERMS_VERSION` —
     /// the frontend only needs to know "current or not", not the raw string.
     pub terms_accepted: bool,
+    pub audit_log_enabled: bool,
 }
 
 impl From<&AiConfig> for AiConfigStatus {
@@ -226,6 +232,7 @@ impl From<&AiConfig> for AiConfigStatus {
             claude_code_error: None,
             terms_accepted: config.terms_accepted_version.as_deref()
                 == Some(CURRENT_AI_TERMS_VERSION),
+            audit_log_enabled: config.audit_log_enabled,
         }
     }
 }
@@ -380,6 +387,13 @@ impl AiConfigStore {
     pub fn accept_terms(&self) -> Result<AiConfig, DbError> {
         let mut config = self.get()?;
         config.terms_accepted_version = Some(CURRENT_AI_TERMS_VERSION.to_string());
+        self.write(&config)?;
+        Ok(config)
+    }
+
+    pub fn set_audit_log_enabled(&self, enabled: bool) -> Result<AiConfig, DbError> {
+        let mut config = self.get()?;
+        config.audit_log_enabled = enabled;
         self.write(&config)?;
         Ok(config)
     }
