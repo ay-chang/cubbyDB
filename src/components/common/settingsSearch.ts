@@ -134,6 +134,16 @@ export const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
     keywords: ["header", "connection", "version"],
   },
   {
+    id: "appearance.tab-icons",
+    label: "Tab icons",
+    description: "Show a kind icon (table, query, function, …) on each open tab.",
+    path: "Appearance · Interface",
+    section: "appearance",
+    appearanceSub: "interface",
+    targetId: "appearance.tab-icons",
+    keywords: ["glyph", "marker", "table icon"],
+  },
+  {
     id: "table.font",
     label: "Results table font",
     description: "Choose the typeface used for result data.",

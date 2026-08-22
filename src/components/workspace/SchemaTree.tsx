@@ -12,6 +12,7 @@ import {
 } from "../../state/store";
 import type { SchemaNode, TableNode } from "../../types";
 import { SchemaComparePicker } from "./SchemaComparePicker";
+import { TableTabIcon } from "./tabIcons";
 
 type Menu =
   | { kind: "table"; x: number; y: number; schema: string; table: string }
@@ -197,6 +198,9 @@ export function SchemaTree({ onClose }: { onClose: () => void }) {
                       }}
                     >
                       <span className="tree__chevron" />
+                      <span className="tree__icon">
+                        <TableTabIcon className="tree__icon-svg" />
+                      </span>
                       <span className="tree__label">
                         {/* The schema is normally implied by the tree's own
                             nesting, which a flat pinned list loses — so show
@@ -306,6 +310,9 @@ export function SchemaTree({ onClose }: { onClose: () => void }) {
                                 }}
                               >
                                 {tableOpen ? "▼" : "▶"}
+                              </span>
+                              <span className="tree__icon">
+                                <TableTabIcon className="tree__icon-svg" />
                               </span>
                               <span className="tree__label">
                                 {t.name}

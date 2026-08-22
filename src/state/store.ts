@@ -1003,6 +1003,8 @@ interface AppStore {
   editorLineWrap: boolean;
   /** Whether the top bar hides the connection's Postgres-version subtext. */
   compactTopBar: boolean;
+  /** Whether editor tabs show their kind icon (table/query/function/…). */
+  showTabIcons: boolean;
   /** Whether the table filter bar is in AI mode — you describe the rows you
    *  want instead of typing the predicate. App-wide rather than per-tab
    *  because `FilterBar` is keyed by tab id, so per-tab state would drop the
@@ -1362,6 +1364,7 @@ interface AppStore {
   setEditorFontSize: (size: EditorFontSize) => void;
   setEditorLineWrap: (enabled: boolean) => void;
   setCompactTopBar: (enabled: boolean) => void;
+  setShowTabIcons: (enabled: boolean) => void;
   setFilterAiMode: (enabled: boolean) => void;
   setRestoreTabsOnLaunch: (enabled: boolean) => void;
   setCloseTabsOnCubbyOpen: (enabled: boolean) => void;
@@ -1436,6 +1439,7 @@ const EDITOR_FONT_KEY = "cubbydb:editorFont";
 const EDITOR_FONT_SIZE_KEY = "cubbydb:editorFontSize";
 const EDITOR_LINE_WRAP_KEY = "cubbydb:editorLineWrap";
 const COMPACT_TOP_BAR_KEY = "cubbydb:compactTopBar";
+const SHOW_TAB_ICONS_KEY = "cubbydb:showTabIcons";
 const RESTORE_TABS_KEY = "cubbydb:restoreTabsOnLaunch";
 const CLOSE_TABS_ON_CUBBY_OPEN_KEY = "cubbydb:closeTabsOnCubbyOpen";
 const STARTER_SQL_KEY = "cubbydb:starterSql";
@@ -1829,6 +1833,25 @@ function loadCompactTopBar(): boolean {
 function saveCompactTopBar(enabled: boolean) {
   try {
     localStorage.setItem(COMPACT_TOP_BAR_KEY, String(enabled));
+  } catch {
+    // Storage unavailable — non-fatal.
+  }
+}
+
+/** Read the saved show-tab-icons preference, defaulting to on. */
+function loadShowTabIcons(): boolean {
+  try {
+    return localStorage.getItem(SHOW_TAB_ICONS_KEY) !== "false";
+  } catch {
+    return true;
+  }
+}
+
+/** Persist the show-tab-icons preference. Consumed directly by `EditorTabs`
+ *  and the command palette — no CSS involved. */
+function saveShowTabIcons(enabled: boolean) {
+  try {
+    localStorage.setItem(SHOW_TAB_ICONS_KEY, String(enabled));
   } catch {
     // Storage unavailable — non-fatal.
   }
@@ -2515,6 +2538,7 @@ export const useStore = create<AppStore>((set, get) => {
     editorFontSize: loadEditorFontSize(),
     editorLineWrap: loadEditorLineWrap(),
     compactTopBar: loadCompactTopBar(),
+    showTabIcons: loadShowTabIcons(),
     filterAiMode: false,
     restoreTabsOnLaunch: loadRestoreTabsOnLaunch(),
     closeTabsOnCubbyOpen: loadCloseTabsOnCubbyOpen(),
@@ -4779,6 +4803,11 @@ export const useStore = create<AppStore>((set, get) => {
     setCompactTopBar(enabled) {
       saveCompactTopBar(enabled);
       set({ compactTopBar: enabled });
+    },
+
+    setShowTabIcons(enabled) {
+      saveShowTabIcons(enabled);
+      set({ showTabIcons: enabled });
     },
 
     setFilterAiMode(enabled) {

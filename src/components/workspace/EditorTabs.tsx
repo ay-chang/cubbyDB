@@ -10,6 +10,14 @@ import {
   useActiveTabs,
   useStore,
 } from "../../state/store";
+import {
+  ErdTabIcon,
+  QueryTabIcon,
+  SchemaCompareTabIcon,
+  StructureTabIcon,
+  TableTabIcon,
+  WhatsNewTabIcon,
+} from "./tabIcons";
 
 /**
  * The tab strip above the editor. Active tab carries a 2px accent underline.
@@ -27,6 +35,7 @@ export function EditorTabs({ onSaveQuery }: { onSaveQuery: () => void }) {
   const activeCubby = useActiveCubby();
   const addEntryToCubby = useStore((s) => s.addEntryToCubby);
   const bindings = useKeybindingStore((s) => s.bindings);
+  const showTabIcons = useStore((s) => s.showTabIcons);
 
   // A tagged connection's color carries over to its active tab's highlight
   // — same source (`ConnectionColorMenu` in TopBar.tsx) and the same
@@ -174,23 +183,24 @@ export function EditorTabs({ onSaveQuery }: { onSaveQuery: () => void }) {
             // visible by widening the pane — is one hover away.
             title={tab.title}
           >
-            {tab.kind === "function" || tab.kind === "sequence" ? (
-              // Plain Latin/ASCII characters — universally present with
-              // predictable metrics, so a text glyph is fine here.
-              <span className="tab__marker mono">{tab.kind === "function" ? "ƒ" : "#"}</span>
-            ) : tab.kind === "table" ? (
-              <TableTabIcon />
-            ) : tab.kind === "structure" ? (
-              <StructureTabIcon />
-            ) : tab.kind === "whatsnew" ? (
-              <WhatsNewTabIcon />
-            ) : tab.kind === "schemaCompare" ? (
-              <SchemaCompareTabIcon />
-            ) : tab.kind === "erDiagram" ? (
-              <ErdTabIcon />
-            ) : (
-              <QueryTabIcon />
-            )}
+            {showTabIcons &&
+              (tab.kind === "function" || tab.kind === "sequence" ? (
+                // Plain Latin/ASCII characters — universally present with
+                // predictable metrics, so a text glyph is fine here.
+                <span className="tab__marker mono">{tab.kind === "function" ? "ƒ" : "#"}</span>
+              ) : tab.kind === "table" ? (
+                <TableTabIcon />
+              ) : tab.kind === "structure" ? (
+                <StructureTabIcon />
+              ) : tab.kind === "whatsnew" ? (
+                <WhatsNewTabIcon />
+              ) : tab.kind === "schemaCompare" ? (
+                <SchemaCompareTabIcon />
+              ) : tab.kind === "erDiagram" ? (
+                <ErdTabIcon />
+              ) : (
+                <QueryTabIcon />
+              ))}
             <span className="tab__title">{tab.title}</span>
             {tab.kind === "query" && active && (
               <span
@@ -258,144 +268,3 @@ export function EditorTabs({ onSaveQuery }: { onSaveQuery: () => void }) {
   );
 }
 
-/**
- * The four tab-marker glyphs below (table/structure/What's New/query) are
- * drawn as SVG rather than left as Unicode block/star/diamond characters
- * (▦ ▤ ✦ ◆, the previous approach): those symbol codepoints are exactly the
- * class of glyph most prone to landing outside a font's own metrics — a
- * different fallback font can substitute in per-character, each with its
- * own ascent/descent, so even a perfectly flex-centered `.tab__marker` box
- * can end up visibly off against the adjacent title text. `ƒ` and `#`
- * (plain Latin/ASCII) don't have that problem and are left as text glyphs
- * above. `viewBox="0 0 16 16"` at 12x12 roughly matches the previous
- * glyphs' visual weight at the tab strip's font size.
- */
-function TableTabIcon() {
-  return (
-    <svg
-      className="tab__marker"
-      width="12"
-      height="12"
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
-      <line x1="1.5" y1="6.5" x2="14.5" y2="6.5" />
-      <line x1="6.5" y1="6.5" x2="6.5" y2="13.5" />
-    </svg>
-  );
-}
-
-/** Two horizontal dividers only (no vertical) — reads as a row/column
- *  listing rather than `TableTabIcon`'s grid, so the two stay visually
- *  distinct at a glance despite sharing the same outer square. */
-function StructureTabIcon() {
-  return (
-    <svg
-      className="tab__marker"
-      width="12"
-      height="12"
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
-      <line x1="1.5" y1="6" x2="14.5" y2="6" />
-      <line x1="1.5" y1="9.5" x2="14.5" y2="9.5" />
-    </svg>
-  );
-}
-
-function WhatsNewTabIcon() {
-  return (
-    <svg
-      className="tab__marker"
-      width="12"
-      height="12"
-      viewBox="0 0 24 24"
-      fill="currentColor"
-      aria-hidden
-    >
-      <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z" />
-    </svg>
-  );
-}
-
-/** Two small offset rectangles with a short connecting line — reads as
- *  "comparing two things" without relying on a Unicode glyph like `⇄`,
- *  which has the same cross-font metric-drift problem the other hand-drawn
- *  icons above already avoid. */
-function SchemaCompareTabIcon() {
-  return (
-    <svg
-      className="tab__marker"
-      width="12"
-      height="12"
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <rect x="1" y="3" width="6" height="10" rx="1" />
-      <rect x="9" y="3" width="6" height="10" rx="1" />
-      <line x1="7.5" y1="8" x2="8.5" y2="8" />
-    </svg>
-  );
-}
-
-/** Three small connected nodes — reads as "a diagram/graph of related
- *  things", distinct from `SchemaCompareTabIcon`'s two-boxes-one-line
- *  shape, same hand-drawn-SVG convention as every other tab icon here. */
-function ErdTabIcon() {
-  return (
-    <svg
-      className="tab__marker"
-      width="12"
-      height="12"
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <line x1="4" y1="4" x2="12" y2="4" />
-      <line x1="4" y1="4" x2="4" y2="12" />
-      <line x1="4" y1="12" x2="12" y2="12" />
-      <rect x="2" y="2" width="4" height="4" rx="1" />
-      <rect x="10" y="2" width="4" height="4" rx="1" />
-      <rect x="2" y="10" width="4" height="4" rx="1" />
-    </svg>
-  );
-}
-
-/** A plain query tab's marker — the fallback case for any `tab.kind` not
- *  otherwise handled above. Filled, to match the previous "◆" glyph's own
- *  weight (solid, not outlined, unlike the two grid icons above it). */
-function QueryTabIcon() {
-  return (
-    <svg
-      className="tab__marker"
-      width="12"
-      height="12"
-      viewBox="0 0 16 16"
-      fill="currentColor"
-      aria-hidden
-    >
-      <path d="M8 1.5 14.5 8 8 14.5 1.5 8z" />
-    </svg>
-  );
-}

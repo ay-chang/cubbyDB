@@ -560,6 +560,14 @@
 .tree__row--table .tree__icon {
   color: var(--text-fainter);
 }
+/* The SVG table markers (`TableTabIcon` in tabIcons.tsx) sit inside
+   `.tree__icon`'s fixed-width column rather than taking its own
+   `tab__marker` sizing, so they line up with the tree's chevron/label grid
+   instead of the tab strip's. */
+.tree__icon-svg {
+  display: inline-block;
+  vertical-align: middle;
+}
 .tree__label {
   overflow: hidden;
   text-overflow: ellipsis;

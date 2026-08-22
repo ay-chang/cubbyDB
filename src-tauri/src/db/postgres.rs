@@ -797,9 +797,15 @@ impl DbSession for PostgresSession {
     }
 
     async fn function_definition(&self, oid: i64) -> Result<FunctionDefinition, DbError> {
+        // `oid` arrives as `i64` (functions are listed with `p.oid::bigint`
+        // so the value round-trips through the frontend as a plain JS-safe
+        // number), but the driver's `ToSql` impl for Postgres's `oid` type
+        // only accepts Rust `u32` — binding the raw `i64` fails with
+        // "cannot convert between the Rust type `i64` and the Postgres type
+        // `oid`". Real oids always fit in 32 bits, so this is a lossless cast.
         let row = self
             .client
-            .query_one(FUNCTION_DEFINITION_SQL, &[&oid])
+            .query_one(FUNCTION_DEFINITION_SQL, &[&(oid as u32)])
             .await
             .map_err(map_query_err)?;
         Ok(FunctionDefinition { definition: row.get(0) })

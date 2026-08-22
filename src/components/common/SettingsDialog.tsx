@@ -1031,6 +1031,8 @@ function InterfaceSection() {
   const setAccentColor = useStore((s) => s.setAccentColor);
   const compactTopBar = useStore((s) => s.compactTopBar);
   const setCompactTopBar = useStore((s) => s.setCompactTopBar);
+  const showTabIcons = useStore((s) => s.showTabIcons);
+  const setShowTabIcons = useStore((s) => s.setShowTabIcons);
 
   return (
     <div className="settings-section">
@@ -1105,6 +1107,19 @@ function InterfaceSection() {
           </div>
         </div>
         <Toggle on={compactTopBar} onToggle={() => setCompactTopBar(!compactTopBar)} />
+      </div>
+
+      <div
+        className="settings-field settings-field--spaced settings-toggle-row"
+        data-setting-id="appearance.tab-icons"
+      >
+        <div>
+          <div className="settings-field__label">Tab icons</div>
+          <div className="settings-field__desc">
+            Show a kind icon (table, query, function, …) on each open tab.
+          </div>
+        </div>
+        <Toggle on={showTabIcons} onToggle={() => setShowTabIcons(!showTabIcons)} />
       </div>
     </div>
   );
