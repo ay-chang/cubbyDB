@@ -1237,6 +1237,12 @@ pub async fn ai_chat(
         .unwrap_or_default();
     let attached: Vec<(&str, &str)> =
         attached_tables.iter().map(|t| (t.schema.as_str(), t.table.as_str())).collect();
+    // The conversation's first user message — stable for the life of the
+    // conversation, unlike the latest one, so ranking off it (see
+    // `PromptContext::conversation_seed`) doesn't defeat prompt caching on
+    // every turn.
+    let conversation_seed =
+        messages.iter().find(|m| m.role == "user").map(|m| m.content.as_str()).unwrap_or("");
     let system_prompt = crate::ai::prompt::build_system_prompt(&crate::ai::prompt::PromptContext {
         schema: &schema,
         active_table: active_table
@@ -1249,6 +1255,7 @@ pub async fn ai_chat(
             name: &c.name,
             tables: &cubby_tables,
         }),
+        conversation_seed,
     });
 
     // A plain `&AppState` (trivially `Copy`, unlike `State` itself) so the
@@ -1291,6 +1298,7 @@ pub async fn ai_generate_filter(
         table: (table.schema.as_str(), table.table.as_str()),
         server_version: &server_version,
         current_filter: current_filter.as_deref(),
+        request: description,
     });
 
     let app_state: &AppState = state.inner();

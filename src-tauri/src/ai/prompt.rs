@@ -51,6 +51,16 @@ pub struct PromptContext<'a> {
     /// of tables. `None` when no cubby is open; identical to today's
     /// behavior in that case.
     pub cubby: Option<CubbyContext<'a>>,
+    /// The conversation's first user message, verbatim. Used only above
+    /// `relevance::RANKED_SCHEMA_TABLE_THRESHOLD` tables, to rank which
+    /// non-pinned tables are worth a line in the compact index — see
+    /// `render_schema`. Deliberately the *first* message rather than the
+    /// latest: it's the one value in this struct that would otherwise change
+    /// every turn, and a changing system prompt defeats the provider's
+    /// prefix-based cache on every single call. The first message is stable
+    /// for the life of the conversation, so ranking off it keeps the prompt
+    /// — and the cache hit — stable too.
+    pub conversation_seed: &'a str,
 }
 
 /// The active cubby's contribution to the prompt: which tables it names,
@@ -203,22 +213,53 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
     let mut pinned_tables: Vec<(&str, &str)> =
         cubby_tables.iter().map(|(s, t)| (s.as_str(), t.as_str())).collect();
     pinned_tables.extend(ctx.attached_tables.iter().copied());
-    render_schema(&mut out, ctx.schema, &pinned_tables);
+    render_schema(&mut out, ctx.schema, &pinned_tables, ctx.conversation_seed);
 
     out
 }
 
 /// Renders the schema at whichever level of detail fits its size. See
-/// `COMPACT_SCHEMA_TABLE_THRESHOLD`. `pinned_tables` are always rendered in
-/// full even when the schema as a whole is over threshold — the user already
-/// told us these specific tables matter for the task at hand. That's the
-/// active cubby's tables plus any explicitly-attached ones for the chat
-/// prompt, and the table being filtered for `filter.rs`'s.
-pub fn render_schema(out: &mut String, schema: &[SchemaNode], pinned_tables: &[(&str, &str)]) {
+/// `COMPACT_SCHEMA_TABLE_THRESHOLD` and `relevance::RANKED_SCHEMA_TABLE_THRESHOLD`.
+/// `pinned_tables` are always rendered in full even when the schema as a
+/// whole is over threshold — the user already told us these specific tables
+/// matter for the task at hand. That's the active cubby's tables plus any
+/// explicitly-attached ones for the chat prompt, and the table being
+/// filtered for `filter.rs`'s. `seed` is free text used only in the ranked
+/// tier — see `PromptContext::conversation_seed`.
+pub fn render_schema(out: &mut String, schema: &[SchemaNode], pinned_tables: &[(&str, &str)], seed: &str) {
     let table_count: usize = schema.iter().map(|s| s.tables.len()).sum();
     let pinned: HashSet<(&str, &str)> = pinned_tables.iter().copied().collect();
 
-    if table_count > COMPACT_SCHEMA_TABLE_THRESHOLD {
+    if table_count > crate::ai::relevance::RANKED_SCHEMA_TABLE_THRESHOLD {
+        let relevant = crate::ai::relevance::select_relevant_tables(
+            schema,
+            &pinned,
+            seed,
+            crate::ai::relevance::RANKED_SCHEMA_TABLE_LIMIT,
+        );
+        let mut body = String::new();
+        let mut shown = 0usize;
+        for s in schema {
+            for t in &s.tables {
+                let key = (s.name.as_str(), t.name.as_str());
+                if pinned.contains(&key) {
+                    render_table_full(&mut body, &s.name, t);
+                    shown += 1;
+                } else if relevant.contains(&key) {
+                    render_table_compact(&mut body, &s.name, t);
+                    shown += 1;
+                }
+            }
+        }
+        out.push_str(&format!(
+            "{table_count} tables — too many to list here even abbreviated. Showing the {shown} \
+             most relevant to this conversation: tables named or attached above, tables whose name \
+             or columns match what was asked, and their direct foreign-key neighbors. Call \
+             `search_schema` to find any other table by name, then `describe_table` for its full \
+             detail.\n\n"
+        ));
+        out.push_str(&body);
+    } else if table_count > COMPACT_SCHEMA_TABLE_THRESHOLD {
         out.push_str(&format!(
             "{table_count} tables. Abbreviated below — call `describe_table` for full detail on \
              any one of them. Tables named by the active cubby or attached for context above are \
@@ -366,6 +407,7 @@ mod tests {
             server_version: "16.2",
             connection_name: "test",
             cubby: None,
+            conversation_seed: "",
         }
     }
 
@@ -429,5 +471,54 @@ mod tests {
 
         assert!(prompt.contains("\npublic.cubby_table\n  col_0 text\n"));
         assert!(prompt.contains("\npublic.attached_table\n  col_0 text\n"));
+    }
+
+    #[test]
+    fn above_ranked_threshold_only_relevant_tables_are_rendered() {
+        let threshold = crate::ai::relevance::RANKED_SCHEMA_TABLE_THRESHOLD;
+        let mut tables: Vec<TableNode> =
+            (0..threshold + 1).map(|i| table(&format!("unrelated_widget_{i}"), 1)).collect();
+        tables.push(table("customer_orders", 1));
+        let schemas = vec![schema("public", tables)];
+
+        let mut ctx = base_ctx(&schemas);
+        ctx.conversation_seed = "show me recent customer orders";
+        let prompt = build_system_prompt(&ctx);
+
+        assert!(prompt.contains("too many to list here"));
+        assert!(prompt.contains("public.customer_orders"));
+    }
+
+    #[test]
+    fn ranked_tier_still_renders_pinned_tables_in_full_detail() {
+        let threshold = crate::ai::relevance::RANKED_SCHEMA_TABLE_THRESHOLD;
+        let mut tables: Vec<TableNode> =
+            (0..threshold + 1).map(|i| table(&format!("unrelated_widget_{i}"), 1)).collect();
+        tables.push(table("attached_table", 3));
+        let schemas = vec![schema("public", tables)];
+
+        let mut ctx = base_ctx(&schemas);
+        ctx.attached_tables = &[("public", "attached_table")];
+        ctx.conversation_seed = "unrelated question about nothing in particular";
+        let prompt = build_system_prompt(&ctx);
+
+        assert!(prompt.contains("\npublic.attached_table\n  col_0 text\n  col_1 text\n  col_2 text\n"));
+    }
+
+    #[test]
+    fn below_ranked_threshold_behaves_exactly_as_the_plain_compact_tier() {
+        let tables: Vec<TableNode> =
+            (0..COMPACT_SCHEMA_TABLE_THRESHOLD + 1).map(|i| table(&format!("t{i}"), 1)).collect();
+        let schemas = vec![schema("public", tables.clone())];
+
+        let mut ctx = base_ctx(&schemas);
+        ctx.conversation_seed = "irrelevant text that would otherwise change ranking";
+        let prompt = build_system_prompt(&ctx);
+
+        // Every table still appears, unranked — the seed only matters once
+        // the ranked tier's own (much higher) threshold is crossed.
+        for t in &tables {
+            assert!(prompt.contains(&format!("public.{} (1 cols)", t.name)));
+        }
     }
 }

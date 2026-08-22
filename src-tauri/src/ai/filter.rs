@@ -32,6 +32,14 @@ pub struct FilterPromptContext<'a> {
     /// it may refine it rather than always starting from scratch — the same
     /// affordance conar's filter bar gives its structured filters.
     pub current_filter: Option<&'a str>,
+    /// The natural-language description the user typed, verbatim. Used only
+    /// above `relevance::RANKED_SCHEMA_TABLE_THRESHOLD` tables, to rank which
+    /// non-pinned tables are worth a line in the "rest of the database"
+    /// listing — see `prompt::render_schema`. Unlike the chat panel's
+    /// `PromptContext::conversation_seed`, there's no cache-stability reason
+    /// to prefer an earlier message over this one: this prompt is stateless,
+    /// built fresh from this one request every time.
+    pub request: &'a str,
 }
 
 /// What the frontend gets back: the predicate to drop into the filter bar,
@@ -159,7 +167,7 @@ pub fn build_filter_prompt(ctx: &FilterPromptContext) -> String {
     // is rendered exactly as the chat panel renders it, so a subquery has
     // something to aim at.
     out.push_str("## Database\n");
-    crate::ai::prompt::render_schema(&mut out, ctx.schema, &[(schema_name, table_name)]);
+    crate::ai::prompt::render_schema(&mut out, ctx.schema, &[(schema_name, table_name)], ctx.request);
 
     out
 }

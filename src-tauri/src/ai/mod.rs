@@ -17,6 +17,7 @@ pub mod openai;
 pub mod prompt;
 pub mod provider;
 mod read_only;
+pub(crate) mod relevance;
 pub mod tools;
 
 use serde::{Deserialize, Serialize};

@@ -139,37 +139,20 @@ pub async fn sample_rows(ctx: &ToolContext<'_>, input: &Value) -> Result<ToolOut
     })
 }
 
-/// Substring search over table and column names. Pure in-memory over the
-/// schema tree that came with the turn — no database round trip, so it is
+/// Fuzzy search over table and column names. Pure in-memory over the schema
+/// tree that came with the turn — no database round trip, so it is
 /// effectively free and safe to call speculatively.
+///
+/// An exact or substring hit still wins outright — see `relevance::match_score`
+/// — so this behaves exactly like the old plain-substring search for the
+/// common single-word case. What it adds is a token-overlap fallback, which
+/// matters for two cases substring matching always missed: a multi-word
+/// query like "customer orders" (never a literal substring of any single
+/// identifier), and an abbreviated schema (`cust_ord_hdr` for "customer
+/// orders").
 pub fn search_schema(ctx: &ToolContext<'_>, input: &Value) -> Result<ToolOutcome, DbError> {
     let query = arg_str(input, "query")?;
-    let needle = query.to_lowercase();
-
-    let mut matches = Vec::new();
-    for s in ctx.schema {
-        for t in &s.tables {
-            if t.name.to_lowercase().contains(&needle) {
-                matches.push(format!(
-                    "table {}.{} ({} cols)",
-                    s.name,
-                    t.name,
-                    t.columns.len()
-                ));
-            }
-            for c in &t.columns {
-                if c.name.to_lowercase().contains(&needle) {
-                    matches.push(format!(
-                        "column {}.{}.{} {}",
-                        s.name, t.name, c.name, c.data_type
-                    ));
-                }
-            }
-        }
-    }
-
-    let total = matches.len();
-    matches.truncate(MAX_SEARCH_RESULTS);
+    let (matches, total) = find_matches(ctx.schema, &query);
 
     let content = if total == 0 {
         format!("No tables or columns matching \"{query}\".")
@@ -193,4 +176,113 @@ pub fn search_schema(ctx: &ToolContext<'_>, input: &Value) -> Result<ToolOutcome
             error: None,
         },
     })
+}
+
+/// Scores every table and column against `query`, returns the best matches
+/// as display lines (highest score first, truncated to `MAX_SEARCH_RESULTS`)
+/// plus the total match count. Split out from `search_schema` so it can be
+/// unit-tested without a `ToolContext` (which needs a live `DbSession`).
+fn find_matches(schema: &[crate::db::SchemaNode], query: &str) -> (Vec<String>, usize) {
+    let query_lower = query.trim().to_lowercase();
+    let query_tokens = crate::ai::relevance::tokenize(&query_lower);
+
+    let mut scored: Vec<(i32, String)> = Vec::new();
+    for s in schema {
+        for t in &s.tables {
+            if let Some(score) = crate::ai::relevance::match_score(&t.name, &query_lower, &query_tokens) {
+                scored.push((
+                    score,
+                    format!("table {}.{} ({} cols)", s.name, t.name, t.columns.len()),
+                ));
+            }
+            for c in &t.columns {
+                if let Some(score) =
+                    crate::ai::relevance::match_score(&c.name, &query_lower, &query_tokens)
+                {
+                    scored.push((
+                        score,
+                        format!("column {}.{}.{} {}", s.name, t.name, c.name, c.data_type),
+                    ));
+                }
+            }
+        }
+    }
+
+    // Highest score first; ties keep their original (schema, table, column)
+    // order via the stable sort, same as the plain-substring version's
+    // effective ordering.
+    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    let total = scored.len();
+    let matches = scored.into_iter().take(MAX_SEARCH_RESULTS).map(|(_, line)| line).collect();
+    (matches, total)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{ColumnNode, SchemaNode, TableKind, TableNode};
+
+    fn column(name: &str) -> ColumnNode {
+        ColumnNode {
+            name: name.to_string(),
+            data_type: "text".to_string(),
+            nullable: true,
+            is_primary_key: false,
+            references: vec![],
+            referenced_by: vec![],
+        }
+    }
+
+    fn table(name: &str, columns: &[&str]) -> TableNode {
+        TableNode {
+            name: name.to_string(),
+            kind: TableKind::Table,
+            estimated_rows: None,
+            columns: columns.iter().map(|c| column(c)).collect(),
+        }
+    }
+
+    fn schema(name: &str, tables: Vec<TableNode>) -> SchemaNode {
+        SchemaNode { name: name.to_string(), tables, functions: vec![], sequences: vec![], types: vec![] }
+    }
+
+    #[test]
+    fn exact_substring_still_matches_like_before() {
+        let schemas =
+            vec![schema("public", vec![table("orders", &["id"]), table("order_items", &["id"])])];
+        let (matches, total) = find_matches(&schemas, "order");
+        assert_eq!(total, 2);
+        assert!(matches.iter().any(|m| m.contains("public.orders")));
+        assert!(matches.iter().any(|m| m.contains("public.order_items")));
+    }
+
+    #[test]
+    fn multiword_query_finds_an_abbreviated_table_name() {
+        let schemas = vec![schema(
+            "public",
+            vec![table("cust_ord_hdr", &["id"]), table("shipping_labels", &["id"])],
+        )];
+        let (matches, total) = find_matches(&schemas, "customer orders");
+        assert_eq!(total, 1);
+        assert!(matches[0].contains("public.cust_ord_hdr"));
+    }
+
+    #[test]
+    fn no_match_reports_zero() {
+        let schemas = vec![schema("public", vec![table("orders", &["id"])])];
+        let (matches, total) = find_matches(&schemas, "zzz_nonexistent");
+        assert_eq!(total, 0);
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn exact_match_ranks_above_partial_match() {
+        let schemas = vec![schema(
+            "public",
+            vec![table("orders", &["id"]), table("order_items", &["id"])],
+        )];
+        let (matches, _) = find_matches(&schemas, "orders");
+        assert!(matches[0].contains("public.orders ("));
+        assert!(!matches[0].contains("order_items"));
+    }
 }
