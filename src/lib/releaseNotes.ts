@@ -33,6 +33,24 @@ export interface ReleaseNotesEntry {
 
 export const RELEASE_NOTES: ReleaseNotesEntry[] = [
   {
+    version: "0.1.17",
+    date: "2026-08-25",
+    sections: [
+      {
+        heading: "Branch tabs",
+        items: [
+          "Open a second, independent view of a table: right-click a table tab for \"Duplicate as Branch\", or right-click a row for \"Open Row in New Branch\" (pre-filtered to just that row). A branch keeps its own filter and sort — clicking into that table from anywhere else always lands on its one main tab, never a branch.",
+        ],
+      },
+      {
+        heading: "Query history",
+        items: [
+          "Cmd/Ctrl+[ and +] now step through the actual queries you've run — the table and WHERE clause — jumping to whichever table a past query was against and re-applying its filter, instead of just switching between tabs.",
+        ],
+      },
+    ],
+  },
+  {
     version: "0.1.16",
     date: "2026-08-22",
     sections: [
