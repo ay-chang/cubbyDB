@@ -131,3 +131,30 @@ export function QueryTabIcon({ className = "tab__marker" }: IconProps) {
     </svg>
   );
 }
+
+/** A branch table tab's marker — a git-fork glyph, standing in for
+ *  `TableTabIcon` on a tab created via "Duplicate as Branch"/"Open Row in
+ *  New Branch" (see `QueryTab.isBranch`), so a branch reads as distinct
+ *  from its table's main tab at a glance. */
+export function BranchTabIcon({ className = "tab__marker" }: IconProps) {
+  return (
+    <svg
+      className={className}
+      width="12"
+      height="12"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <circle cx="4.5" cy="3.5" r="1.5" />
+      <circle cx="4.5" cy="12.5" r="1.5" />
+      <circle cx="11.5" cy="7.5" r="1.5" />
+      <path d="M4.5 5v5" />
+      <path d="M4.5 8c0-1.8 1.5-2.5 3-2.5s3.5 0.7 3.5 1.5" />
+    </svg>
+  );
+}

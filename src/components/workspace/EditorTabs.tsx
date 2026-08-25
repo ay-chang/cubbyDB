@@ -11,6 +11,7 @@ import {
   useStore,
 } from "../../state/store";
 import {
+  BranchTabIcon,
   ErdTabIcon,
   QueryTabIcon,
   SchemaCompareTabIcon,
@@ -30,6 +31,7 @@ export function EditorTabs({ onSaveQuery }: { onSaveQuery: () => void }) {
   const activeTabId = useActiveTabId();
   const setActiveTab = useStore((s) => s.setActiveTab);
   const closeTab = useStore((s) => s.closeTab);
+  const branchTab = useStore((s) => s.branchTab);
   const newTab = useStore((s) => s.newTab);
   const reorderTab = useStore((s) => s.reorderTab);
   const activeCubby = useActiveCubby();
@@ -189,7 +191,11 @@ export function EditorTabs({ onSaveQuery }: { onSaveQuery: () => void }) {
                 // predictable metrics, so a text glyph is fine here.
                 <span className="tab__marker mono">{tab.kind === "function" ? "ƒ" : "#"}</span>
               ) : tab.kind === "table" ? (
-                <TableTabIcon />
+                tab.isBranch ? (
+                  <BranchTabIcon />
+                ) : (
+                  <TableTabIcon />
+                )
               ) : tab.kind === "structure" ? (
                 <StructureTabIcon />
               ) : tab.kind === "whatsnew" ? (
@@ -245,6 +251,21 @@ export function EditorTabs({ onSaveQuery }: { onSaveQuery: () => void }) {
           style={{ left: menu.x, top: menu.y }}
           onClick={(e) => e.stopPropagation()}
         >
+          {menuTab.kind === "table" && (
+            <>
+              <button
+                className="context-menu__item"
+                title="Open a second, independent view of this table — its own filter/sort, but never what navigation to this table lands on"
+                onClick={() => {
+                  setMenu(null);
+                  branchTab(menuTab.id);
+                }}
+              >
+                Duplicate as Branch
+              </button>
+              <div className="context-menu__sep" />
+            </>
+          )}
           {/* Stays visible but disabled when it can't act, so the reason
               ("open a cubby first", "save this query first") is discoverable
               rather than the menu just appearing empty. */}

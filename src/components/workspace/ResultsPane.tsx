@@ -1297,6 +1297,24 @@ function ResultsGrid({
     },
     [fkMenuData, openTableWithFilter],
   );
+  // Opens a new *branch* tab (see `QueryTab.isBranch`) pre-filtered to just
+  // the right-clicked row, built from its primary-key column(s) — same
+  // quoting/escaping convention as `openFkRef` above, just across every PK
+  // column instead of one FK column.
+  const openRowInBranch = useCallback(() => {
+    if (!fkMenu || !tab.source || pkColIndices.size === 0) return;
+    const r = fkMenu.r;
+    const clauses = Array.from(pkColIndices).map((idx) => {
+      const colName = result.columns[idx].name.replace(/"/g, '""');
+      const draft = tab.pendingEdits?.[r]?.[idx];
+      const v = draft !== undefined ? draft : (result.rows[r]?.[idx] ?? null);
+      return v === null ? `"${colName}" IS NULL` : `"${colName}" = '${v.replace(/'/g, "''")}'`;
+    });
+    setFkMenu(null);
+    void openTableWithFilter(tab.source.schema, tab.source.table, clauses.join(" AND "), {
+      asBranch: true,
+    });
+  }, [fkMenu, tab.source, tab.pendingEdits, pkColIndices, result, openTableWithFilter]);
   // Reset the highlighted item whenever the menu (re)opens or the filter
   // narrows the list, so Enter always lands on the top match by default.
   useEffect(() => {
@@ -2551,6 +2569,10 @@ function ResultsGrid({
           // this, that combination rendered a menu with nothing in it: an
           // empty, near-zero-height styled box and no way to tell why.
           const rangeHasAction = hasFk || canGenerateUuidRange || canSetNullRange;
+          // "Expand cell" reads as if it applied to the whole selection when
+          // a multi-row range has its own range-scoped action to offer
+          // instead — see the two items' render below.
+          const showExpandCell = !inMultiRange || !rangeHasAction;
 
           const item = (ref: ForeignKeyRef, key: string, globalIndex: number) => (
             <button
@@ -2592,29 +2614,6 @@ function ResultsGrid({
               }}
               onClick={(e) => e.stopPropagation()}
             >
-              {/* Hidden for a multi-row selection that actually has a
-                  range-scoped action to offer — "Expand cell" reads as if it
-                  applied to the whole selection there, and the range-scoped
-                  items below take its place. Falls back in in *any* other
-                  case, including a range kept alive by some other cell in it
-                  that turned out to have nothing to offer at this one —
-                  the alternative is a right-click that shows nothing. */}
-              {(!inMultiRange || !rangeHasAction) && (
-                <>
-                  <button
-                    className="context-menu__item"
-                    onClick={() => {
-                      setFkMenu(null);
-                      setExpandedCell({ value, columnName: result.columns[col].name });
-                    }}
-                  >
-                    Expand cell
-                  </button>
-                  {(hasFk || canGenerateUuid || canSetNull || isDirty) && (
-                    <div className="context-menu__sep" />
-                  )}
-                </>
-              )}
               {hasFk && showFkSearch && (
                 <div className="context-menu__search">
                   <input
@@ -2711,9 +2710,38 @@ function ResultsGrid({
                   </button>
                 </>
               )}
+              {(showExpandCell || pkColIndices.size > 0) && (
+                <>
+                  {(hasFk || canGenerateUuid || canGenerateUuidRange) && (
+                    <div className="context-menu__sep" />
+                  )}
+                  {showExpandCell && (
+                    <button
+                      className="context-menu__item"
+                      onClick={() => {
+                        setFkMenu(null);
+                        setExpandedCell({ value, columnName: result.columns[col].name });
+                      }}
+                    >
+                      Expand cell
+                    </button>
+                  )}
+                  {pkColIndices.size > 0 && (
+                    <button
+                      className="context-menu__item"
+                      title="Open a new tab filtered to just this row — independent of this tab's own filter, and never what navigation to this table lands on"
+                      onClick={openRowInBranch}
+                    >
+                      Open Row in New Branch
+                    </button>
+                  )}
+                </>
+              )}
               {canSetNull && (
                 <>
-                  {(hasFk || canGenerateUuid) && <div className="context-menu__sep" />}
+                  {(hasFk || canGenerateUuid || showExpandCell || pkColIndices.size > 0) && (
+                    <div className="context-menu__sep" />
+                  )}
                   <button
                     className="context-menu__item"
                     onClick={() => {
@@ -2727,7 +2755,9 @@ function ResultsGrid({
               )}
               {canSetNullRange && (
                 <>
-                  {(hasFk || canGenerateUuidRange) && <div className="context-menu__sep" />}
+                  {(hasFk || canGenerateUuidRange || pkColIndices.size > 0) && (
+                    <div className="context-menu__sep" />
+                  )}
                   <button
                     className="context-menu__item"
                     onClick={() => {
@@ -2748,7 +2778,9 @@ function ResultsGrid({
               )}
               {isDirty && !inMultiRange && (
                 <>
-                  {(hasFk || canGenerateUuid || canSetNull) && <div className="context-menu__sep" />}
+                  {(hasFk || canGenerateUuid || showExpandCell || pkColIndices.size > 0 || canSetNull) && (
+                    <div className="context-menu__sep" />
+                  )}
                   <button
                     className="context-menu__item"
                     onClick={() => {

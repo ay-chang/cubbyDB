@@ -118,6 +118,16 @@ export interface QueryTab {
    *  just a schema/table name plus this tab's own connection, all of which
    *  already survive a restart fine for every other tab kind. */
   erd?: { schema: string; table: string };
+  /**
+   * For `table` tabs: marks this as a *branch* — a second, independent view
+   * of a table that already has a "main" tab open. Branches carry their own
+   * filter/sort/page/results, but every "jump to this table" action
+   * (sidebar click, FK-cell click, command palette, …) always converges on
+   * the one tab per `source` where this is falsy — see `openSelectTop` and
+   * `openTableWithFilter`'s existing-tab lookups. Undefined/false for every
+   * other tab kind and for a table's own main tab.
+   */
+  isBranch?: boolean;
 }
 
 /** How many rows one page shows, in both the table browser and the SQL
@@ -147,6 +157,21 @@ export function tabHasPendingEdits(tab: QueryTab): boolean {
  * every slot's session stays open on the backend regardless of which is
  * visible.
  */
+
+/**
+ * One step in a connection's Cmd/Ctrl+[ / +] query-undo history — the table
+ * and WHERE clause (plus sort) you were browsing, not a tab. Opening a table
+ * with no filter is itself a step (`filter` undefined ~= `SELECT *`). See
+ * `ConnectionSlot.queryPast`/`queryPresent`/`queryFuture`.
+ */
+export interface QueryHistoryEntry {
+  schema: string;
+  table: string;
+  filter?: string;
+  sortColumn?: string | null;
+  sortDesc?: boolean;
+}
+
 export interface ConnectionSlot {
   sessionId: string;
   current: ActiveConnectionInfo;
@@ -159,14 +184,24 @@ export interface ConnectionSlot {
   schemaError: string | null;
   tabs: QueryTab[];
   activeTabId: string | null;
-  /** Tab-switch history for Cmd/Ctrl+[ / +] — most-recent last, capped at
-   *  `MAX_NAV_HISTORY`. `navBack` holds where we've been; `navForward` holds
-   *  what a `navigateBack` just stepped away from, so `navigateForward` can
-   *  retrace it. Any *real* tab switch (not itself a history nav) clears
-   *  `navForward`, same as a browser losing its forward history once you
-   *  navigate somewhere new. */
-  navBack: string[];
-  navForward: string[];
+  /**
+   * Cmd/Ctrl+[ / +] query-undo history — like a text editor's undo stack,
+   * but each step is a distinct table+WHERE-clause query rather than a
+   * keystroke. `queryPresent` is the query currently "checked out";
+   * `queryPast`/`queryFuture` are older/undone steps, most-recent-last
+   * (`navigateBack`/`navigateForward` pop off the end of each). Recording a
+   * *new* distinct query — any table open, FK jump, filter-bar edit, "open
+   * row in new branch", … — pushes `queryPresent` onto `queryPast` and
+   * clears `queryFuture`, same "new edit clears redo" rule as a text editor.
+   * Undo/redo re-opens (or focuses) whichever table the target step names
+   * and re-applies its filter/sort — see `gotoQueryHistoryEntry` — so
+   * retracing history always shows the WHERE clause that was actually
+   * active at that step, even if the table's tab has since been reused for
+   * a different query. Both capped at `MAX_QUERY_HISTORY`.
+   */
+  queryPast: QueryHistoryEntry[];
+  queryPresent: QueryHistoryEntry | null;
+  queryFuture: QueryHistoryEntry[];
   /** This connection's own AI chat thread — scoped per connection (like
    *  `tabs`/`schema`) rather than globally, so switching connections shows
    *  that database's own conversation. */
@@ -1245,7 +1280,12 @@ interface AppStore {
     schema: string,
     table: string,
     filter: string,
+    opts?: { asBranch?: boolean },
   ) => Promise<void>;
+  /** Duplicates a table tab's current view (filter/sort/page/results) into a
+   *  new *branch* tab, inserted right after it and made active. See
+   *  `QueryTab.isBranch`. No-op if `id` isn't a `table` tab. */
+  branchTab: (id: string) => void;
 
   // --- cell editing ---
   setCellEdit: (
@@ -1417,6 +1457,9 @@ function makeTab(opts?: {
   savedQueryId?: string;
   compare?: QueryTab["compare"];
   erd?: QueryTab["erd"];
+  sortColumn?: string | null;
+  sortDesc?: boolean;
+  isBranch?: boolean;
 }): QueryTab {
   return {
     id: nextTabId(),
@@ -1434,6 +1477,9 @@ function makeTab(opts?: {
     savedQueryId: opts?.savedQueryId,
     compare: opts?.compare,
     erd: opts?.erd,
+    sortColumn: opts?.sortColumn,
+    sortDesc: opts?.sortDesc,
+    isBranch: opts?.isBranch,
   };
 }
 
@@ -2136,26 +2182,6 @@ function patchSlot(
   return { ...connections, [connectionId]: { ...slot, ...p } };
 }
 
-/** Pops entries off a nav-history stack (most-recent last) until it finds one
- *  that's still a real, non-active tab — an id left over from a since-closed
- *  tab is discarded along the way rather than returned. Returns the
- *  remaining stack either way, so a caller that comes up empty can still
- *  persist the pruning instead of re-scanning the same dead entries next
- *  time. */
-function popValidTabId(
-  stack: string[],
-  slot: ConnectionSlot,
-): { id: string | null; stack: string[] } {
-  const remaining = [...stack];
-  while (remaining.length > 0) {
-    const candidate = remaining.pop()!;
-    if (candidate !== slot.activeTabId && slot.tabs.some((t) => t.id === candidate)) {
-      return { id: candidate, stack: remaining };
-    }
-  }
-  return { id: null, stack: remaining };
-}
-
 /** Patch one connection slot's `tabs` array specifically — the overwhelming
  *  majority of tab actions only ever touch this one field. */
 function mapSlotTabs(
@@ -2211,6 +2237,9 @@ function persistTabs(tabs: QueryTab[], activeTabId: string | null) {
         page: t.page,
         savedQueryId: t.savedQueryId,
         erd: t.erd,
+        sortColumn: t.sortColumn,
+        sortDesc: t.sortDesc,
+        isBranch: t.isBranch,
       })),
     };
     localStorage.setItem(TABS_KEY, JSON.stringify(payload));
@@ -2237,6 +2266,9 @@ function loadPersistedTabs(): { tabs: QueryTab[]; activeTabId: string } | null {
         page: t.page,
         savedQueryId: t.savedQueryId,
         erd: t.erd,
+        sortColumn: t.sortColumn,
+        sortDesc: t.sortDesc,
+        isBranch: t.isBranch,
       }),
     );
     const active = tabs[payload.activeIndex] ?? tabs[0];
@@ -2450,10 +2482,10 @@ export const useStore = create<AppStore>((set, get) => {
     }
   }
 
-  /** Cap on `navBack`/`navForward` — enough to retrace a real drill-down
+  /** Cap on `queryPast`/`queryFuture` — enough to retrace a real drill-down
    *  session (FK jump after FK jump) without the stacks growing unbounded
    *  over a long-lived connection. */
-  const MAX_NAV_HISTORY = 10;
+  const MAX_QUERY_HISTORY = 10;
 
   /**
    * Change a connection's active tab, first confirming if its current tab
@@ -2461,18 +2493,10 @@ export const useStore = create<AppStore>((set, get) => {
    * Takes an explicit `connectionId` (rather than assuming "the active
    * connection") so callers that already resolved a specific slot — e.g. via
    * `findTabOwner` — stay correct even if the visible connection changes
-   * mid-await.
-   *
-   * Every real switch (not `opts.isHistoryNav`) is recorded onto the slot's
-   * `navBack` stack for Cmd/Ctrl+[ / +], same as a browser's history —
-   * `navigateBack`/`navigateForward` themselves call back in here with
-   * `isHistoryNav: true` so retracing steps doesn't also record new ones.
+   * mid-await. Purely about which tab is visible — see `recordQueryHistory`
+   * for the separate, table/filter-keyed history behind Cmd/Ctrl+[ / +].
    */
-  async function switchActiveTab(
-    connectionId: string,
-    newId: string,
-    opts?: { isHistoryNav?: boolean },
-  ): Promise<boolean> {
+  async function switchActiveTab(connectionId: string, newId: string): Promise<boolean> {
     const slot = get().connections[connectionId];
     if (!slot) return false;
     const current = slot.tabs.find((t) => t.id === slot.activeTabId);
@@ -2492,25 +2516,100 @@ export const useStore = create<AppStore>((set, get) => {
         ),
       }));
     }
+    set((s) => ({
+      connections: patchSlot(s.connections, connectionId, { activeTabId: newId }),
+    }));
+    return true;
+  }
+
+  /**
+   * Records a new step in the connection's Cmd/Ctrl+[ / +] query-undo
+   * history (`queryPast`/`queryPresent`/`queryFuture`) — called by every
+   * action that actually issues a distinct table/filter query (opening a
+   * table, an FK jump, a filter-bar edit, "open row in new branch"). A
+   * no-op if `entry` is identical to `queryPresent` (e.g. re-focusing a
+   * table tab without changing its filter), so those don't pollute the
+   * stack. Otherwise pushes the outgoing `queryPresent` onto `queryPast` and
+   * clears `queryFuture` — same "new edit clears redo" rule as a text
+   * editor's undo stack.
+   */
+  function recordQueryHistory(connectionId: string, entry: QueryHistoryEntry) {
     set((s) => {
-      const prev = s.connections[connectionId];
-      if (!prev) return {};
-      const prevActiveId = prev.activeTabId;
-      const history =
-        !opts?.isHistoryNav && prevActiveId && prevActiveId !== newId
-          ? {
-              navBack: [...prev.navBack, prevActiveId].slice(-MAX_NAV_HISTORY),
-              navForward: [],
-            }
-          : {};
+      const slot = s.connections[connectionId];
+      if (!slot) return {};
+      const present = slot.queryPresent;
+      const unchanged =
+        present &&
+        present.schema === entry.schema &&
+        present.table === entry.table &&
+        (present.filter ?? "") === (entry.filter ?? "") &&
+        (present.sortColumn ?? null) === (entry.sortColumn ?? null) &&
+        (present.sortDesc ?? false) === (entry.sortDesc ?? false);
+      if (unchanged) return {};
       return {
         connections: patchSlot(s.connections, connectionId, {
-          activeTabId: newId,
-          ...history,
+          queryPast: present
+            ? [...slot.queryPast, present].slice(-MAX_QUERY_HISTORY)
+            : slot.queryPast,
+          queryPresent: entry,
+          queryFuture: [],
         }),
       };
     });
-    return true;
+  }
+
+  /**
+   * Opens (or focuses) `entry`'s table and applies its filter/sort — the
+   * "jump to that table and run that query" half of `navigateBack`/
+   * `navigateForward`. Deliberately bypasses `openSelectTop`/
+   * `openTableWithFilter`/`setTableFilter` so it never itself calls
+   * `recordQueryHistory` — undo/redo re-visits history, it doesn't add to
+   * it. Always lands on a table's one main tab (never a branch — see
+   * `QueryTab.isBranch`), creating it if it isn't already open.
+   */
+  async function gotoQueryHistoryEntry(connectionId: string, entry: QueryHistoryEntry) {
+    const slot = get().connections[connectionId];
+    if (!slot) return;
+    const { schema, table, filter, sortColumn, sortDesc } = entry;
+    const sort = sortColumn != null ? { column: sortColumn, desc: sortDesc ?? false } : null;
+    const sql = await tableSql(slot.sessionId, schema, table, filter?.trim() || null, 0, sort);
+    const existing = slot.tabs.find(
+      (t) => t.kind === "table" && !t.isBranch && t.source?.schema === schema && t.source?.table === table,
+    );
+    if (existing) {
+      const switched = await switchActiveTab(connectionId, existing.id);
+      if (!switched) return;
+      set((s) => ({
+        connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+          tabs.map((t) =>
+            t.id === existing.id ? { ...t, sql, filter, page: 0, sortColumn, sortDesc } : t,
+          ),
+        ),
+      }));
+      await get().runTab(existing.id);
+      return;
+    }
+    const tab = makeTab({
+      kind: "table",
+      title: table,
+      sql,
+      source: { schema, table },
+      filter,
+      page: 0,
+      sortColumn,
+      sortDesc,
+    });
+    set((s) => ({ connections: mapSlotTabs(s.connections, connectionId, (tabs) => [...tabs, tab]) }));
+    const switched = await switchActiveTab(connectionId, tab.id);
+    if (!switched) {
+      set((s) => ({
+        connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+          tabs.filter((t) => t.id !== tab.id),
+        ),
+      }));
+      return;
+    }
+    await get().runTab(tab.id);
   }
 
   return {
@@ -2684,8 +2783,9 @@ export const useStore = create<AppStore>((set, get) => {
         schemaError: null,
         tabs: [],
         activeTabId: null,
-        navBack: [],
-        navForward: [],
+        queryPast: [],
+        queryPresent: null,
+        queryFuture: [],
         aiMessages: [],
         aiAttachedTables: [],
         aiSending: false,
@@ -2876,7 +2976,23 @@ export const useStore = create<AppStore>((set, get) => {
           connections: patchSlot(s.connections, connectionId, (slot) => {
             const idx = slot.tabs.findIndex((t) => t.id === id);
             if (idx === -1) return {};
-            const tabs = slot.tabs.filter((t) => t.id !== id);
+            let tabs = slot.tabs.filter((t) => t.id !== id);
+            // Closing a table's main tab promotes its oldest remaining
+            // branch (if any) to take its place, so navigation to this
+            // table still converges on a real open tab instead of always
+            // spawning a fresh one.
+            if (tab.kind === "table" && !tab.isBranch && tab.source) {
+              const branchIdx = tabs.findIndex(
+                (t) =>
+                  t.kind === "table" &&
+                  t.isBranch &&
+                  t.source?.schema === tab.source!.schema &&
+                  t.source?.table === tab.source!.table,
+              );
+              if (branchIdx !== -1) {
+                tabs = tabs.map((t, i) => (i === branchIdx ? { ...t, isBranch: false } : t));
+              }
+            }
             let activeTabId = slot.activeTabId;
             if (activeTabId === id) {
               const neighbor = tabs[idx] ?? tabs[idx - 1] ?? null;
@@ -2916,51 +3032,39 @@ export const useStore = create<AppStore>((set, get) => {
     navigateBack() {
       const connectionId = get().activeConnectionId;
       const slot = connectionId ? get().connections[connectionId] : null;
-      if (!connectionId || !slot) return;
-      const target = popValidTabId(slot.navBack, slot);
-      if (!target.id) {
-        // Nothing usable, but still drop whatever stale entries were in the
-        // way so the next attempt doesn't re-scan them.
-        if (target.stack.length !== slot.navBack.length) {
-          set((s) => ({
-            connections: patchSlot(s.connections, connectionId, { navBack: target.stack }),
-          }));
-        }
-        return;
-      }
+      if (!connectionId || !slot || slot.queryPast.length === 0) return;
+      const queryPast = [...slot.queryPast];
+      const target = queryPast.pop()!;
+      const present = slot.queryPresent;
       set((s) => ({
         connections: patchSlot(s.connections, connectionId, {
-          navBack: target.stack,
-          navForward: slot.activeTabId
-            ? [...slot.navForward, slot.activeTabId].slice(-MAX_NAV_HISTORY)
-            : slot.navForward,
+          queryPast,
+          queryPresent: target,
+          queryFuture: present
+            ? [...slot.queryFuture, present].slice(-MAX_QUERY_HISTORY)
+            : slot.queryFuture,
         }),
       }));
-      void switchActiveTab(connectionId, target.id, { isHistoryNav: true });
+      void gotoQueryHistoryEntry(connectionId, target);
     },
 
     navigateForward() {
       const connectionId = get().activeConnectionId;
       const slot = connectionId ? get().connections[connectionId] : null;
-      if (!connectionId || !slot) return;
-      const target = popValidTabId(slot.navForward, slot);
-      if (!target.id) {
-        if (target.stack.length !== slot.navForward.length) {
-          set((s) => ({
-            connections: patchSlot(s.connections, connectionId, { navForward: target.stack }),
-          }));
-        }
-        return;
-      }
+      if (!connectionId || !slot || slot.queryFuture.length === 0) return;
+      const queryFuture = [...slot.queryFuture];
+      const target = queryFuture.pop()!;
+      const present = slot.queryPresent;
       set((s) => ({
         connections: patchSlot(s.connections, connectionId, {
-          navForward: target.stack,
-          navBack: slot.activeTabId
-            ? [...slot.navBack, slot.activeTabId].slice(-MAX_NAV_HISTORY)
-            : slot.navBack,
+          queryFuture,
+          queryPresent: target,
+          queryPast: present
+            ? [...slot.queryPast, present].slice(-MAX_QUERY_HISTORY)
+            : slot.queryPast,
         }),
       }));
-      void switchActiveTab(connectionId, target.id, { isHistoryNav: true });
+      void gotoQueryHistoryEntry(connectionId, target);
     },
 
     reorderTab(fromIndex, toIndex) {
@@ -3108,10 +3212,12 @@ export const useStore = create<AppStore>((set, get) => {
       const slot = get().connections[connectionId];
       if (!slot) return;
 
-      // If this table is already open, just focus its tab.
+      // If this table's main tab is already open, just focus it — a branch
+      // (see `isBranch`) is never a valid target for ordinary navigation.
       const existing = slot.tabs.find(
         (t) =>
           t.kind === "table" &&
+          !t.isBranch &&
           t.source?.schema === schema &&
           t.source?.table === table,
       );
@@ -3143,6 +3249,7 @@ export const useStore = create<AppStore>((set, get) => {
         return;
       }
       rememberDatabaseObject(connectionId, schema, table);
+      recordQueryHistory(connectionId, { schema, table });
       await get().runTab(tab.id);
     },
 
@@ -3361,35 +3468,42 @@ export const useStore = create<AppStore>((set, get) => {
       set({ pendingColumnHighlight: null });
     },
 
-    async openTableWithFilter(schema, table, filter) {
+    async openTableWithFilter(schema, table, filter, opts) {
       // Used by FK navigation: open (or focus) the referenced table showing only
       // the matching row. Backend builds the SQL from the filter predicate.
+      // `opts.asBranch` (row-context-menu "Open Row in New Branch") always
+      // creates a fresh branch tab instead — it never merges into an
+      // existing one, since the whole point is a second, independent view.
       const connectionId = get().activeConnectionId;
       if (!connectionId) return;
       const slot = get().connections[connectionId];
       if (!slot) return;
 
-      const existing = slot.tabs.find(
-        (t) =>
-          t.kind === "table" &&
-          t.source?.schema === schema &&
-          t.source?.table === table,
-      );
-      if (existing) {
-        const switched = await switchActiveTab(connectionId, existing.id);
-        if (!switched) return;
-        const sql = await tableSql(slot.sessionId, schema, table, filter.trim() || null, 0);
-        set((s) => ({
-          connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
-            tabs.map((t) =>
-              t.id === existing.id
-                ? { ...t, sql, filter: filter.trim() || undefined, page: 0 }
-                : t,
+      if (!opts?.asBranch) {
+        const existing = slot.tabs.find(
+          (t) =>
+            t.kind === "table" &&
+            !t.isBranch &&
+            t.source?.schema === schema &&
+            t.source?.table === table,
+        );
+        if (existing) {
+          const switched = await switchActiveTab(connectionId, existing.id);
+          if (!switched) return;
+          const sql = await tableSql(slot.sessionId, schema, table, filter.trim() || null, 0);
+          set((s) => ({
+            connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
+              tabs.map((t) =>
+                t.id === existing.id
+                  ? { ...t, sql, filter: filter.trim() || undefined, page: 0 }
+                  : t,
+              ),
             ),
-          ),
-        }));
-        await get().runTab(existing.id);
-        return;
+          }));
+          recordQueryHistory(connectionId, { schema, table, filter: filter.trim() || undefined });
+          await get().runTab(existing.id);
+          return;
+        }
       }
 
       const sql = await tableSql(slot.sessionId, schema, table, filter.trim() || null, 0);
@@ -3400,8 +3514,16 @@ export const useStore = create<AppStore>((set, get) => {
         source: { schema, table },
         filter: filter.trim() || undefined,
         page: 0,
+        isBranch: opts?.asBranch,
       });
-      set((s) => ({ connections: mapSlotTabs(s.connections, connectionId, (tabs) => [...tabs, tab]) }));
+      set((s) => ({
+        connections: mapSlotTabs(s.connections, connectionId, (tabs) => {
+          if (!opts?.asBranch) return [...tabs, tab];
+          const activeIdx = tabs.findIndex((t) => t.id === slot.activeTabId);
+          const insertAt = activeIdx === -1 ? tabs.length : activeIdx + 1;
+          return [...tabs.slice(0, insertAt), tab, ...tabs.slice(insertAt)];
+        }),
+      }));
       const switched = await switchActiveTab(connectionId, tab.id);
       if (!switched) {
         set((s) => ({
@@ -3411,7 +3533,39 @@ export const useStore = create<AppStore>((set, get) => {
         }));
         return;
       }
+      recordQueryHistory(connectionId, { schema, table, filter: filter.trim() || undefined });
       await get().runTab(tab.id);
+    },
+
+    branchTab(id) {
+      const owner = findTabOwner(get().connections, id);
+      if (!owner || owner.tab.kind !== "table") return;
+      const { connectionId, tab: source } = owner;
+      const branch = makeTab({
+        kind: "table",
+        title: source.title,
+        sql: source.sql,
+        source: source.source,
+        filter: source.filter,
+        page: source.page,
+        sortColumn: source.sortColumn,
+        sortDesc: source.sortDesc,
+        isBranch: true,
+      });
+      // Same query as `source` at this instant, so its last results are
+      // still valid — copied in directly rather than re-run, so the branch
+      // shows data immediately.
+      branch.result = source.result;
+      branch.error = source.error;
+      branch.hasRun = source.hasRun;
+      set((s) => ({
+        connections: mapSlotTabs(s.connections, connectionId, (tabs) => {
+          const idx = tabs.findIndex((t) => t.id === id);
+          const insertAt = idx === -1 ? tabs.length : idx + 1;
+          return [...tabs.slice(0, insertAt), branch, ...tabs.slice(insertAt)];
+        }),
+      }));
+      void switchActiveTab(connectionId, branch.id);
     },
 
     async setTableFilter(id, filter) {
@@ -3441,6 +3595,13 @@ export const useStore = create<AppStore>((set, get) => {
           ),
         ),
       }));
+      recordQueryHistory(connectionId, {
+        schema: tab.source.schema,
+        table: tab.source.table,
+        filter: filter.trim() || undefined,
+        sortColumn: tab.sortColumn,
+        sortDesc: tab.sortDesc,
+      });
       await get().runTab(id);
     },
 
@@ -4573,8 +4734,9 @@ export const useStore = create<AppStore>((set, get) => {
           connections: patchSlot(s.connections, targetSessionId, {
             tabs: [],
             activeTabId: null,
-            navBack: [],
-            navForward: [],
+            queryPast: [],
+            queryPresent: null,
+            queryFuture: [],
           }),
         }));
       }
