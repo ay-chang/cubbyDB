@@ -33,6 +33,46 @@ export interface ReleaseNotesEntry {
 
 export const RELEASE_NOTES: ReleaseNotesEntry[] = [
   {
+    version: "0.1.16",
+    date: "2026-08-22",
+    sections: [
+      {
+        heading: "AI assistant",
+        items: [
+          "\"Ask AI\" now shows exactly which tables it's using as context — a chip for whichever table you're currently viewing, plus a \"+\" to attach more tables explicitly, regardless of which tab is open.",
+          "More reliable under load: requests now retry automatically on a rate limit or a provider hiccup, Stop actually stops the in-flight request, and a long conversation no longer risks overflowing the model's context window.",
+          "Schema search inside the AI now understands multi-word and abbreviated queries (\"customer orders\" can find a table named cust_ord_hdr), not just exact substrings.",
+          "New opt-in AI audit log — a full record of what was sent to the model and what it did, viewable as a second tab in History. Off by default.",
+        ],
+      },
+      {
+        heading: "Schema Compare & ER diagrams",
+        items: [
+          "Schema Compare: diff two schemas — even across two different connections — and generate a migration script. CubbyDB never runs it for you; it's something to review and run yourself.",
+          "ER diagrams: right-click a table for a visual map of it and everything directly connected to it, with draggable, collapsible table cards.",
+          "Triggers and Row-Level Security policies now show up in a table's structure panel instead of being invisible.",
+        ],
+      },
+      {
+        heading: "Connections",
+        items: [
+          "Read-only connection mode blocks every write on a connection at the app level, independent of what the database role itself allows.",
+          "SSH tunneling: connect to a database behind a bastion host, with host-key verification the first time you connect.",
+        ],
+      },
+      {
+        heading: "Fixes",
+        items: [
+          "Generate random UUID now works on text/varchar columns storing UUIDs as strings, not just native uuid columns.",
+          "Set to NULL on a multi-cell selection now clears every selected column, not just one.",
+          "Right-clicking a multi-cell range on a read-only connection no longer shows an empty menu.",
+          "Viewing a function's definition could fail to load; fixed.",
+          "New setting to turn off the small kind icon (table/query/function/…) shown on each tab.",
+        ],
+      },
+    ],
+  },
+  {
     version: "0.1.13",
     date: "2026-08-18",
     sections: [

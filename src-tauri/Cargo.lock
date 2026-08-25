@@ -974,7 +974,7 @@ dependencies = [
 
 [[package]]
 name = "cubbydb"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "arboard",
  "async-trait",

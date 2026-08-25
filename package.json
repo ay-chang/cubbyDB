@@ -1,6 +1,6 @@
 {
   "name": "cubbydb",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "private": true,
   "description": "A modern, restrained desktop Postgres client.",
   "license": "MIT",
