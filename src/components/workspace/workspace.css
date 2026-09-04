@@ -1786,6 +1786,10 @@
 .grid__scroll {
   height: 100%;
   overflow: auto;
+  /* Keep the vertical scrollbar in its own strip. In WKWebView a sticky grid
+     header can otherwise paint beneath an overlay/classic scrollbar and make
+     the thumb look broken into disconnected pieces while scrolling. */
+  scrollbar-gutter: stable;
   /* Keeps the last row — real or a draft new one — from sitting flush
      against the window edge when scrolled to the bottom. Lives here (on the
      scroll container, after everything) rather than on `.grid__body`, which
@@ -1793,6 +1797,24 @@
      siblings, so padding on the body alone would leave this gap sitting
      *before* them instead of trailing the true last row. */
   padding-bottom: 40px;
+}
+.grid__scroll::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+.grid__scroll::-webkit-scrollbar-track,
+.grid__scroll::-webkit-scrollbar-corner {
+  background: var(--surface-raised);
+}
+.grid__scroll::-webkit-scrollbar-thumb {
+  min-width: 28px;
+  min-height: 28px;
+  border: 3px solid var(--surface-raised);
+  border-radius: 999px;
+  background: var(--border-strong);
+}
+.grid__scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--text-faint);
 }
 
 /* --- Transposed results view (More actions > Transpose) ---
@@ -1933,10 +1955,11 @@
   box-shadow: 0 6px 16px -6px rgba(20, 24, 40, 0.3);
 }
 /* Holds the windowed rows. When virtualizing it reserves the full scroll
-   height itself and the rows inside are taken out of flow, positioned by
-   transform. That replaces the pair of spacer divs this used to use: their
-   heights changed on every window update, which relaid out the entire sibling
-   list each time. Now the rows that stay put cost nothing to keep. */
+   height itself and the rows inside are taken out of flow. Each row gets its
+   fixed `top` position inline. Avoid transforms here: WKWebView can put a
+   transformed row and its sticky gutter on separate composited layers, which
+   flashes during fast scrolling on large external displays. This also avoids
+   the old spacer-div approach, whose changing heights relaid out every row. */
 .grid__body {
   position: relative;
 }

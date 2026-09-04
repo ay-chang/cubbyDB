@@ -79,6 +79,14 @@ impl DbSession for PostgresSession {
         &self.info
     }
 
+    async fn health_check(&self) -> Result<(), DbError> {
+        self.client
+            .simple_query("SELECT 1")
+            .await
+            .map(|_| ())
+            .map_err(map_conn_err)
+    }
+
     async fn fetch_schema(&self) -> Result<Vec<SchemaNode>, DbError> {
         // 1) All user schemas (so empty schemas still show in the tree).
         let schema_rows = self

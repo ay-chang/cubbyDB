@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Instant;
 
 use tokio::sync::Mutex;
 
@@ -30,6 +31,10 @@ pub struct ActiveSession {
     /// transparently re-established (serverless databases close idle links).
     pub params: ConnectionParams,
     pub engine: Engine,
+    /// Last user-triggered database operation for this session. After a quiet
+    /// period, the next operation checks the connection before using it so a
+    /// serverless endpoint's stale socket cannot absorb the user's request.
+    pub last_request_at: Instant,
 }
 
 pub struct AppState {

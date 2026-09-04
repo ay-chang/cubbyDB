@@ -57,9 +57,11 @@ textarea {
    scrollbars float above the content and fade in only while scrolling, which
    is both what we want and the more restrained look.
 
-   `.cm-tooltip-autocomplete` in editorTheme.ts is the one exception: it's a
-   small fixed dropdown, not a pane, so a visible thin scrollbar there is
-   deliberate and does not cost layout. */
+   The results grid is an explicit exception because its sticky header and
+   rows must not paint beneath the scrollbar; its rule is scoped locally in
+   workspace.css. `.cm-tooltip-autocomplete` in editorTheme.ts is the other
+   exception: it's a small fixed dropdown, not a pane, so a visible thin
+   scrollbar there is deliberate and does not cost layout. */
 
 .mono {
   font-family: var(--font-mono);

@@ -472,6 +472,12 @@ pub trait DatabaseDriver: Send + Sync {
 pub trait DbSession: Send + Sync {
     fn info(&self) -> &ConnectionInfo;
 
+    /// Verify that an idle session can still exchange messages with the
+    /// database. Called only when the user returns after a quiet period; this
+    /// is deliberately not a background heartbeat, so serverless computes can
+    /// still scale to zero.
+    async fn health_check(&self) -> Result<(), DbError>;
+
     /// Read the schema tree (schemas -> tables/views -> columns) using the
     /// engine's catalog / information_schema.
     async fn fetch_schema(&self) -> Result<Vec<SchemaNode>, DbError>;

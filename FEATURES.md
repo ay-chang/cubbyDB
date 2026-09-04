@@ -50,10 +50,13 @@ code comments or AGENTS.md's architecture section.
   as a new saved connection independently of reconnecting
 - Auto-reconnect on launch to the last-used connection; if it fails, the
   connect screen opens pre-filled with the reason
-- If a query or schema fetch fails because a connection silently dropped
-  (e.g. a Neon serverless compute suspending), CubbyDB reconnects and retries
-  once automatically — independently per connection, so one dropping doesn't
-  affect the others
+- If a query or schema fetch follows four minutes without database activity,
+  CubbyDB checks the connection on demand before sending the real operation.
+  A stale serverless connection (for example, after a Neon compute suspends)
+  is replaced promptly instead of making the query or Refresh wait for the
+  operating system's long socket timeout. Nothing runs in the background, so
+  idle serverless computes can still scale to zero. Unexpected connection
+  drops still reconnect and retry once automatically
 - Cmd/Ctrl+Enter connects from the form
 - Disconnecting a connection clears the launch auto-reconnect target only
   once every connection is closed — closing one of several open connections
@@ -166,7 +169,12 @@ code comments or AGENTS.md's architecture section.
   number of rows. The backend appends `LIMIT`/`OFFSET` to an unbounded single
   SELECT; it is appended rather than wrapped in a subquery, so the query's own
   `ORDER BY` still decides what lands on each page. Re-running a query returns
-  to the first page; a background refresh stays where you are
+  to the first page; a background refresh stays where you are. Large pages use
+  viewport-scaled row and column windowing. During a fast vertical scroll,
+  already-rendered rows remain mounted until movement stops, avoiding WebKit
+  flashes on tall external monitors without slowing horizontal scrolling. The
+  scrollbar has a dedicated gutter, so the sticky header and rows never paint
+  beneath it
 - A query that carries **its own `LIMIT`** is run exactly as written and shown
   whole rather than paged — the "Limit applied" badge marks that case, since
   the rest of the result isn't reachable by paging. Remove the LIMIT to page

@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tauri::State;
 
@@ -22,6 +22,14 @@ use crate::db::{
 use crate::history::{now_millis, HistoryEntry};
 use crate::saved_queries::SavedQuery;
 use crate::state::{ActiveSession, AppState};
+
+/// A user returning after this much quiet time gets a bounded health check
+/// before their real operation is sent. This is shorter than Neon Free's
+/// five-minute scale-to-zero window, but runs only on the next user action —
+/// never on a timer — so it cannot keep a serverless compute awake.
+const IDLE_HEALTH_CHECK_AFTER: Duration = Duration::from_secs(4 * 60);
+const IDLE_HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(3);
+const RECONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Returned by `connect` for a newly-opened session: its id (used by every
 /// other session-scoped command to address it) plus the same info the UI top
@@ -248,6 +256,7 @@ pub async fn connect(
             connection_id: connection_id.clone(),
             params,
             engine,
+            last_request_at: Instant::now(),
         },
     );
 
@@ -308,6 +317,7 @@ pub async fn reconnect_session(
             connection_id: connection_id.clone(),
             params,
             engine,
+            last_request_at: Instant::now(),
         },
     );
 
@@ -333,7 +343,21 @@ async fn reconnect_in_place(
     let name = old.name.clone();
     let connection_id = old.connection_id.clone();
 
-    let session = driver_for(engine).connect(&params, state.data_dir()).await?;
+    let driver = driver_for(engine);
+    let session = tokio::time::timeout(
+        RECONNECT_TIMEOUT,
+        driver.connect(&params, state.data_dir()),
+    )
+    .await
+    .map_err(|_| {
+        DbError::new(
+            DbErrorKind::Connection,
+            format!(
+                "Reconnecting timed out after {} seconds.",
+                RECONNECT_TIMEOUT.as_secs()
+            ),
+        )
+    })??;
     state
         .canceller
         .lock()
@@ -347,9 +371,49 @@ async fn reconnect_in_place(
             connection_id,
             params,
             engine,
+            last_request_at: Instant::now(),
         },
     );
     Ok(())
+}
+
+/// Check an old session immediately before the next real user operation.
+/// A timed-out check is safe to abandon because it is only `SELECT 1`; the
+/// old session is dropped as soon as `reconnect_in_place` replaces it.
+async fn prepare_session_after_idle(
+    active: &mut HashMap<String, ActiveSession>,
+    session_id: &str,
+    state: &AppState,
+) -> Result<(), DbError> {
+    let needs_check = active
+        .get(session_id)
+        .ok_or_else(DbError::not_connected)?
+        .last_request_at
+        .elapsed()
+        >= IDLE_HEALTH_CHECK_AFTER;
+
+    if !needs_check {
+        if let Some(session) = active.get_mut(session_id) {
+            session.last_request_at = Instant::now();
+        }
+        return Ok(());
+    }
+
+    let check = {
+        let session = active.get(session_id).ok_or_else(DbError::not_connected)?;
+        tokio::time::timeout(IDLE_HEALTH_CHECK_TIMEOUT, session.session.health_check()).await
+    };
+
+    match check {
+        Ok(Ok(())) => {
+            if let Some(session) = active.get_mut(session_id) {
+                session.last_request_at = Instant::now();
+            }
+            Ok(())
+        }
+        Ok(Err(error)) if error.kind != DbErrorKind::Connection => Err(error),
+        Ok(Err(_)) | Err(_) => reconnect_in_place(active, session_id, state).await,
+    }
 }
 
 /// `schema_snapshot`, with the same try-once/reconnect-once-on-`Connection`-
@@ -460,6 +524,7 @@ pub async fn fetch_schema(
     session_id: String,
 ) -> Result<Vec<SchemaNode>, DbError> {
     let mut active = state.active.lock().await;
+    prepare_session_after_idle(&mut active, &session_id, &state).await?;
     {
         let session = active.get(&session_id).ok_or_else(DbError::not_connected)?;
         match session.session.fetch_schema().await {
@@ -487,6 +552,7 @@ pub async fn run_query(
 ) -> Result<QueryResult, DbError> {
     let page = page.unwrap_or(0);
     let mut active = state.active.lock().await;
+    prepare_session_after_idle(&mut active, &session_id, &state).await?;
     let connection_name = active
         .get(&session_id)
         .ok_or_else(DbError::not_connected)?

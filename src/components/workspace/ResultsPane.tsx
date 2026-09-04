@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { flushSync } from "react-dom";
 
 import type { CopyResult } from "../../api/backend";
 import { copyToClipboard, errorMessage, readClipboard } from "../../api/backend";
@@ -448,21 +449,30 @@ const VIRTUALIZE_MIN_ROWS = 80;
  *  windowing them would only add spacer-track bookkeeping. */
 const VIRTUALIZE_MIN_COLS = 16;
 /**
- * Rows/columns rendered beyond each edge of the viewport. This is the buffer
+ * Minimum rows rendered beyond each edge of the viewport. This is the buffer
  * that decides whether a fast scroll shows blank space: the browser scrolls
  * and repaints on its own (compositor) timeline, while React only catches up
  * a frame or more later via the `scroll` event — so anything the user flings
- * past within that gap must already be rendered. At the default 32px row
- * that's ~1920px of vertical runway in each direction.
+ * past within that gap must already be rendered.
  *
- * A fixed buffer can only ever cover a fixed distance, though, and a hard
- * trackpad fling covers several thousand pixels between two frames — which
- * is what still showed blank rows. `leadRowsFor` below extends it in the
- * direction of travel instead, so the buffer grows with how fast the content
- * is actually moving.
+ * The real buffer is also at least one measured viewport tall. Keeping 60 as
+ * a floor preserves the laptop-sized behavior, while the viewport multiple
+ * prevents a tall monitor from turning that same fixed runway into less than
+ * one screen. `leadRowsFor` below extends it further in the direction of a
+ * fast fling.
  */
-const VIRTUALIZE_OVERSCAN = 60;
+const MIN_ROW_OVERSCAN = 60;
+const ROW_OVERSCAN_VIEWPORTS = 1;
 const COL_OVERSCAN = 4;
+
+/** Base row buffer for the scroller's current measured height. */
+function overscanRowsFor(viewportHeight: number, rowH: number): number {
+  if (rowH <= 0) return MIN_ROW_OVERSCAN;
+  return Math.max(
+    MIN_ROW_OVERSCAN,
+    Math.ceil(viewportHeight / rowH) * ROW_OVERSCAN_VIEWPORTS,
+  );
+}
 /**
  * Extra rows rendered *ahead* of a moving scroll, on top of the fixed
  * overscan. Reactive windowing always lands a frame or more behind the
@@ -1606,6 +1616,13 @@ function ResultsGrid({
     startCol: 0,
     endCol: 0,
   });
+  // The last window actually committed to the DOM. Keeping this separate
+  // from a queued state update lets the scroll path tell whether the browser
+  // is about to paint beyond the rows React has really mounted.
+  const committedWinRef = useRef(win);
+  useLayoutEffect(() => {
+    committedWinRef.current = win;
+  }, [win]);
 
   /** Pixels the scroller moved in the last sampled frame, signed: positive
    *  is downward. Drives the leading-edge overscan in `computeWin`. A ref,
@@ -1632,16 +1649,17 @@ function ResultsGrid({
     let endIdx = totalRows;
     if (virtualizeRows) {
       // Bias the buffer toward where the scroll is heading. Standing still,
-      // both sides are just VIRTUALIZE_OVERSCAN; mid-fling, the leading edge
+      // both sides cover at least one viewport; mid-fling, the leading edge
       // stretches to cover the ground about to be crossed while the trailing
       // edge stays small, so the window moves rather than merely growing.
+      const overscan = overscanRowsFor(vh, rowH);
       const lead = leadRowsFor(velocityRef.current, rowH);
       const down = velocityRef.current > 0;
-      const aheadRows = VIRTUALIZE_OVERSCAN + lead;
+      const aheadRows = overscan + lead;
       const first =
-        Math.floor((st - hh) / rowH) - (down ? VIRTUALIZE_OVERSCAN : aheadRows);
+        Math.floor((st - hh) / rowH) - (down ? overscan : aheadRows);
       const last =
-        Math.ceil((st - hh + vh) / rowH) + (down ? aheadRows : VIRTUALIZE_OVERSCAN);
+        Math.ceil((st - hh + vh) / rowH) + (down ? aheadRows : overscan);
       startIdx = clamp(snapDown(first, ROW_BLOCK), 0, totalRows);
       endIdx = clamp(snapUp(last, ROW_BLOCK), 0, totalRows);
     }
@@ -1662,10 +1680,39 @@ function ResultsGrid({
 
   const syncWin = useCallback(() => {
     setWin((prev) => {
-      const next = computeWin();
+      let next = computeWin();
+      // Removing rows while the compositor is still moving the scroller can
+      // expose WKWebView's repaint boundary for a frame, especially on a tall
+      // display. During an active vertical scroll, only grow the mounted row
+      // range; the settle pass below trims it back to the normal window once
+      // movement stops. This avoids permanent full-page rendering, so column
+      // window changes during horizontal scrolling stay cheap.
+      if (virtualizeRows && velocityRef.current !== 0) {
+        next = {
+          ...next,
+          startIdx: Math.min(prev.startIdx, next.startIdx),
+          endIdx: Math.max(prev.endIdx, next.endIdx),
+        };
+      }
       return sameWin(prev, next) ? prev : next;
     });
-  }, [computeWin]);
+  }, [computeWin, virtualizeRows]);
+
+  /** Whether every vertically visible row exists in the committed DOM. */
+  const verticalViewportIsCovered = useCallback(() => {
+    if (!virtualizeRows) return true;
+    const el = scrollRef.current;
+    if (!el || el.clientHeight <= 0) return true;
+    const hh = headRef.current?.offsetHeight ?? HEAD_H;
+    const first = clamp(Math.floor((el.scrollTop - hh) / rowH), 0, totalRows);
+    const last = clamp(
+      Math.ceil((el.scrollTop - hh + el.clientHeight) / rowH),
+      0,
+      totalRows,
+    );
+    const committed = committedWinRef.current;
+    return first >= committed.startIdx && last <= committed.endIdx;
+  }, [virtualizeRows, rowH, totalRows]);
 
   // Recompute before paint whenever a geometry input changes — mount, a new
   // result, the row-height/wrap settings, a column resize or reorder, a pane
@@ -1710,7 +1757,12 @@ function ResultsGrid({
       const top = scrollRef.current?.scrollTop ?? 0;
       velocityRef.current = top - lastTopRef.current;
       lastTopRef.current = top;
-      syncWin();
+      // Normal movement stays asynchronously buffered. If a hard fling or
+      // scrollbar jump has already escaped the rows currently mounted,
+      // commit the new window before WebKit's next paint; otherwise the
+      // compositor displays a blank band for a frame while React catches up.
+      if (verticalViewportIsCovered()) syncWin();
+      else flushSync(syncWin);
       // Once the fling stops, no further scroll events arrive to reset this,
       // so the window would stay stretched. Settle it on the next frame.
       if (velocityRef.current !== 0) {
@@ -1724,7 +1776,7 @@ function ResultsGrid({
         });
       }
     });
-  }, [syncWin]);
+  }, [syncWin, verticalViewportIsCovered]);
   useEffect(
     () => () => {
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
@@ -3196,7 +3248,7 @@ const GridCell = memo(function GridCell({
 interface GridRowProps {
   r: number;
   displayPos: number;
-  /** Y offset within the virtualized body, or null when rows are in flow. */
+  /** Y position within the virtualized body, or null when rows are in flow. */
   offsetY: number | null;
   row: Array<string | null>;
   rowEdits: Record<number, string | null> | undefined;
@@ -3295,7 +3347,7 @@ const GridRow = memo(function GridRow({
     () =>
       offsetY == null
         ? rowStyle
-        : { ...rowStyle, transform: `translateY(${offsetY}px)` },
+        : { ...rowStyle, top: offsetY },
     [rowStyle, offsetY],
   );
   return (
