@@ -244,17 +244,24 @@
 .topbar__btn--loading {
   cursor: default;
 }
-/* The Cubby button's label is the active cubby's name once one is open —
-   unlike the other right-edge toggles, that's user text of arbitrary
-   length, so it needs its own cap rather than growing the top bar. */
+/* The Cubby button only carries a label while a cubby is open, and that label
+   is the cubby's name — user text of arbitrary length, so it needs its own cap
+   rather than growing the top bar. Idle, the button renders as
+   `--icon` instead (see `TopBar.tsx`). */
 .topbar__btn--cubby {
-  max-width: 160px;
+  max-width: 180px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.topbar__btn__label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  display: inline-block;
 }
-/* Square icon-only variant (settings gear). */
+/* Square icon-only variant (settings gear, and the Saved/History/Refresh
+   group). Each of these is labelled only by its `title`, so every one of them
+   spells out its keyboard shortcut there too. */
 .topbar__btn--icon {
   width: 28px;
   padding: 0;
@@ -262,6 +269,63 @@
   align-items: center;
   justify-content: center;
 }
+/* Icon-only toggles sit tighter than the labelled buttons around them, so the
+   trio reads as one segmented group rather than three loose buttons. */
+.topbar__group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.topbar__divider {
+  flex: none;
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+}
+/* Instant hover label for a control whose icon is its only other clue about
+   what it does. The app leans on native `title` nearly everywhere, and that's
+   still fine for something already carrying a visible label — but the OS
+   waits about a second before showing one, which is far too slow when the
+   tooltip *is* the button's name. Pure CSS, no portal or JS: the short
+   transition delay keeps it from flashing as the pointer passes over on its
+   way somewhere else. A control using this must not also set `title`, or the
+   OS tooltip turns up a beat later and says the same thing twice. */
+[data-tip] {
+  position: relative;
+}
+[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 300;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-card);
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 90ms ease 300ms;
+}
+[data-tip]:hover::after,
+[data-tip]:focus-visible::after {
+  opacity: 1;
+}
+/* Every tip in the right-edge cluster hangs off the button's right edge
+   rather than centering under it: these buttons are 28px wide and sit within
+   a tip's width of the window edge, so a centered one would run off-screen. */
+.topbar__right [data-tip]::after {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+
 
 /* --- Body / panes --- */
 .workspace__body {

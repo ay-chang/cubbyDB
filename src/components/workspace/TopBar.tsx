@@ -9,6 +9,13 @@ import {
 import { ConnectionScreen } from "../connection/ConnectionScreen";
 import { Spinner } from "../common/Spinner";
 import {
+  CheckIcon,
+  CubbyIcon,
+  HistoryIcon,
+  RefreshIcon,
+  SavedIcon,
+} from "./topBarIcons";
+import {
   accentPaletteFor,
   THEME_MODE,
   useActiveCubby,
@@ -99,6 +106,12 @@ export function TopBar() {
   const newConnectionBinding = useKeybindingStore(
     (s) => s.bindings["workspace.newConnection"],
   );
+  const aiPanelBinding = useKeybindingStore(
+    (s) => s.bindings["workspace.toggleAiPanel"],
+  );
+  const cubbiesBinding = useKeybindingStore(
+    (s) => s.bindings["workspace.toggleCubbies"],
+  );
   const settingsBinding = useKeybindingStore(
     (s) => s.bindings["workspace.openSettings"],
   );
@@ -142,7 +155,6 @@ export function TopBar() {
   };
 
   const slots = Object.values(connections);
-  const active = activeConnectionId ? connections[activeConnectionId] : null;
 
   // The traffic lights anchor the top-left corner in windowed mode; true
   // fullscreen removes them entirely (no windowed chrome to draw them over),
@@ -229,71 +241,90 @@ export function TopBar() {
       </div>
 
       <div className="topbar__right">
-        <button
-          className={
-            "topbar__btn topbar__btn--cubby" +
-            (cubbiesOpen || activeCubby ? " topbar__btn--active" : "")
-          }
-          onClick={toggleCubbies}
-          title={activeCubby ? `Cubby: ${activeCubby.name}` : "Cubbies"}
-        >
-          {activeCubby ? activeCubby.name : "Cubby"}
-        </button>
+        {/* Leads the cluster rather than sitting inside it: it's the one
+            plain-text action here, and wedged between icons it read as though
+            it belonged to them. There's no conventional icon for "ask an AI"
+            the way there is for a bookmark or a clock, so it keeps its name.
+
+            Everything after it is icon-only, which makes `data-tip` (an
+            instant hover label — see `[data-tip]` in workspace.css) the only
+            thing naming those buttons. Native `title` is deliberately *not*
+            set alongside it: the OS tooltip would show up a second later and
+            say the same thing twice. `aria-label` covers screen readers. */}
         <button
           className={"topbar__btn" + (aiPanelOpen ? " topbar__btn--active" : "")}
           onClick={toggleAiPanel}
-          title="Ask AI"
+          data-tip={formatShortcutTitle("Ask AI", aiPanelBinding)}
         >
           Ask AI
         </button>
-        <button
-          className={"topbar__btn" + (savedQueriesOpen ? " topbar__btn--active" : "")}
-          onClick={toggleSavedQueries}
-          title="Saved queries"
-        >
-          Saved
-        </button>
-        <button
-          className={"topbar__btn" + (historyOpen ? " topbar__btn--active" : "")}
-          onClick={toggleHistory}
-          title="Query history"
-        >
-          History
-        </button>
+        {/* Cubby keeps its label only while a cubby is actually open — that
+            label is the cubby's *name*, real context worth the space. Idle,
+            there's nothing to say that the icon doesn't. */}
         <button
           className={
-            "topbar__btn topbar__btn--refresh" +
-            (schemaLoading ? " topbar__btn--loading" : "") +
-            (justRefreshed ? " topbar__btn--active" : "")
+            "topbar__btn" +
+            (activeCubby ? " topbar__btn--cubby" : " topbar__btn--icon") +
+            (cubbiesOpen || activeCubby ? " topbar__btn--active" : "")
           }
-          onClick={handleRefresh}
-          disabled={schemaLoading}
-          title={formatShortcutTitle(
-            "Refresh schema and the active tab's data",
-            refreshBinding,
+          onClick={toggleCubbies}
+          data-tip={formatShortcutTitle(
+            activeCubby ? `Cubby: ${activeCubby.name}` : "Cubbies",
+            cubbiesBinding,
           )}
+          aria-label={activeCubby ? `Cubby: ${activeCubby.name}` : "Cubbies"}
         >
-          {schemaLoading ? (
-            <>
-              <Spinner /> Refreshing…
-            </>
-          ) : justRefreshed ? (
-            "Refreshed ✓"
-          ) : (
-            "Refresh"
-          )}
+          <CubbyIcon />
+          {activeCubby && <span className="topbar__btn__label">{activeCubby.name}</span>}
         </button>
-        <button
-          className="topbar__btn"
-          onClick={() => void disconnect()}
-          title={active ? `Disconnect ${active.current.name}` : "Disconnect"}
-        >
-          Disconnect
-        </button>
+        <span className="topbar__divider" aria-hidden />
+        <div className="topbar__group">
+          <button
+            className={
+              "topbar__btn topbar__btn--icon" +
+              (savedQueriesOpen ? " topbar__btn--active" : "")
+            }
+            onClick={toggleSavedQueries}
+            data-tip="Saved queries"
+            aria-label="Saved queries"
+          >
+            <SavedIcon />
+          </button>
+          <button
+            className={
+              "topbar__btn topbar__btn--icon" + (historyOpen ? " topbar__btn--active" : "")
+            }
+            onClick={toggleHistory}
+            data-tip="Query history"
+            aria-label="Query history"
+          >
+            <HistoryIcon />
+          </button>
+          <button
+            className={
+              "topbar__btn topbar__btn--icon" +
+              (schemaLoading ? " topbar__btn--loading" : "") +
+              (justRefreshed ? " topbar__btn--active" : "")
+            }
+            onClick={handleRefresh}
+            disabled={schemaLoading}
+            data-tip={
+              schemaLoading
+                ? "Refreshing…"
+                : justRefreshed
+                  ? "Refreshed"
+                  : formatShortcutTitle("Refresh schema & data", refreshBinding)
+            }
+            aria-label="Refresh"
+          >
+            {schemaLoading ? <Spinner /> : justRefreshed ? <CheckIcon /> : <RefreshIcon />}
+          </button>
+        </div>
+        <span className="topbar__divider" aria-hidden />
         <button
           className="topbar__btn topbar__btn--icon"
           onClick={() => openSettings()}
-          title={formatShortcutTitle("Settings", settingsBinding)}
+          data-tip={formatShortcutTitle("Settings", settingsBinding)}
           aria-label="Settings"
         >
           <svg
