@@ -38,6 +38,14 @@ import "./workspace.css";
 const SIDEBAR_MIN = 200;
 const SIDEBAR_MAX = 800;
 const EDITOR_MIN = 120;
+/** How much of the editor/results split the SQL editor starts with. The rest
+ *  goes to results — enough to show a first page of rows without scrolling,
+ *  while leaving the editor the larger half, since an unrun query has nothing
+ *  to show below it yet. */
+const EDITOR_INITIAL_SHARE = 0.6;
+/** Floor for the results pane when sizing that initial split, so a short
+ *  window can't open with the results header jammed against the bottom. */
+const RESULTS_MIN = 180;
 const AI_PANEL_MIN = 300;
 const AI_PANEL_MAX = 900;
 const CUBBY_PANEL_MIN = 300;
@@ -58,6 +66,8 @@ export function Workspace() {
 
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [sidebarWidth, setSidebarWidth] = useState(300);
+  // Only the fallback for the first paint, before `workspace__main` has been
+  // measured — the effect below replaces it with a share of the real height.
   const [editorHeight, setEditorHeight] = useState(280);
   const [aiPanelWidth, setAiPanelWidth] = useState(380);
   const [cubbyPanelWidth, setCubbyPanelWidth] = useState(380);
@@ -92,6 +102,28 @@ export function Workspace() {
   const startCubbyPanelDrag = useDrag((dx, startWidth) => {
     setCubbyPanelWidth(clamp(startWidth - dx, CUBBY_PANEL_MIN, CUBBY_PANEL_MAX));
   }, cubbyPanelWidth);
+
+  // The editor/results split opened at a flat 280px no matter how tall the
+  // window was, which on any large display put the results pane barely a
+  // third of the way down — mostly empty space under a cramped editor. Size
+  // it from the actual container instead, once, on first mount: the editor
+  // takes `EDITOR_INITIAL_SHARE` of the height and results get the rest.
+  // Deliberately not re-run on resize — after that first measurement the
+  // height is the user's to set by dragging, and quietly overriding it
+  // whenever the window changed size would undo their choice.
+  useEffect(() => {
+    const container = mainRef.current;
+    if (!container) return;
+    const available = container.clientHeight;
+    if (available <= 0) return;
+    setEditorHeight(
+      clamp(
+        Math.round(available * EDITOR_INITIAL_SHARE),
+        EDITOR_MIN,
+        Math.max(EDITOR_MIN, available - RESULTS_MIN),
+      ),
+    );
+  }, []);
 
   // Editor/results horizontal split.
   const startEditorDrag = useDrag(
