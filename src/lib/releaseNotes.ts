@@ -33,6 +33,41 @@ export interface ReleaseNotesEntry {
 
 export const RELEASE_NOTES: ReleaseNotesEntry[] = [
   {
+    version: "0.1.18",
+    date: "2026-09-07",
+    sections: [
+      {
+        heading: "Connections",
+        items: [
+          "A query or Refresh that follows a few minutes of inactivity now checks the connection first and replaces it if it has gone stale — so a suspended serverless compute (Neon and friends) comes back promptly instead of hanging on the operating system's long socket timeout. Nothing polls in the background, so idle computes can still scale to zero.",
+        ],
+      },
+      {
+        heading: "Results grid",
+        items: [
+          "Large pages scroll noticeably better: rows and columns are windowed to the viewport, and a fast scroll no longer flashes blank on tall external monitors.",
+          "The scrollbar has its own gutter, so the sticky header and rows never paint underneath it.",
+        ],
+      },
+      {
+        heading: "Command palette",
+        items: [
+          "The highlighted row in Cmd/Ctrl+K keeps its connection color instead of being flooded with the app accent — so you can still tell which environment a result belongs to before you open it. Previously a selected production row could look like whatever your accent color happened to be.",
+          "New Appearance setting to pick how that row is marked: an outline (the new default) or a solid fill.",
+        ],
+      },
+      {
+        heading: "Top bar & tabs",
+        items: [
+          "The right-hand cluster is quieter: Saved, History and Refresh are icons now, grouped together, with hover labels that name each one and spell out its keyboard shortcut. Ask AI keeps its name, and the Cubby button shows the open cubby's name when there is one.",
+          "Disconnect is gone from the top bar — each connection pill already has its own close button.",
+          "Opening a SQL tab gives the editor a share of the window's real height instead of a fixed 280px, so the results pane no longer starts a third of the way down a large display.",
+          "The tab strip no longer shows a horizontal scrollbar when many tabs are open; it still scrolls by wheel, trackpad or drag.",
+        ],
+      },
+    ],
+  },
+  {
     version: "0.1.17",
     date: "2026-08-25",
     sections: [
