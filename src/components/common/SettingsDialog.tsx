@@ -37,12 +37,13 @@ import {
   EDITOR_FONT_SIZE_OPTIONS,
   HISTORY_LIMIT_OPTIONS,
   NULL_DISPLAY_LABELS,
+  PALETTE_SELECTION_STYLE_LABELS,
   SIDEBAR_ROW_HEIGHT_OPTIONS,
   TABLE_FONT_SIZE_OPTIONS,
   TABLE_FONT_STACKS,
   TABLE_ROW_HEIGHT_OPTIONS,
 } from "../../state/store";
-import type { NullDisplay } from "../../state/store";
+import type { NullDisplay, PaletteSelectionStyle } from "../../state/store";
 import {
   SETTINGS_SEARCH_ITEMS,
   SETTINGS_SECTIONS,
@@ -1024,6 +1025,10 @@ const THEMES: { id: Theme; label: string; hint: string }[] = [
   { id: "dracula", label: "Dracula", hint: "Vivid purple, pink & yellow" },
 ];
 
+const PALETTE_SELECTION_STYLES: { id: PaletteSelectionStyle; label: string }[] = (
+  Object.keys(PALETTE_SELECTION_STYLE_LABELS) as PaletteSelectionStyle[]
+).map((id) => ({ id, label: PALETTE_SELECTION_STYLE_LABELS[id] }));
+
 function InterfaceSection() {
   const theme = useStore((s) => s.theme);
   const setTheme = useStore((s) => s.setTheme);
@@ -1033,6 +1038,8 @@ function InterfaceSection() {
   const setCompactTopBar = useStore((s) => s.setCompactTopBar);
   const showTabIcons = useStore((s) => s.showTabIcons);
   const setShowTabIcons = useStore((s) => s.setShowTabIcons);
+  const paletteSelectionStyle = useStore((s) => s.paletteSelectionStyle);
+  const setPaletteSelectionStyle = useStore((s) => s.setPaletteSelectionStyle);
 
   return (
     <div className="settings-section">
@@ -1120,6 +1127,31 @@ function InterfaceSection() {
           </div>
         </div>
         <Toggle on={showTabIcons} onToggle={() => setShowTabIcons(!showTabIcons)} />
+      </div>
+
+      <div
+        className="settings-field settings-field--spaced"
+        data-setting-id="appearance.palette-selection"
+      >
+        <div className="settings-field__label">Command palette selection</div>
+        <div className="settings-field__desc">
+          How the highlighted row is marked in Cmd/Ctrl+K. Either way it's drawn
+          in that row's connection color, so you can tell which environment a
+          result belongs to before you open it.
+        </div>
+        <div className="settings-select-row">
+          <select
+            className="settings-select"
+            value={paletteSelectionStyle}
+            onChange={(e) => setPaletteSelectionStyle(e.target.value as PaletteSelectionStyle)}
+          >
+            {PALETTE_SELECTION_STYLES.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
     </div>
   );

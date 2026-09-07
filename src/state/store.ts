@@ -901,6 +901,25 @@ export const NULL_DISPLAY_LABELS: Record<NullDisplay, string> = {
   blank: "",
 };
 
+/**
+ * How the command palette (Cmd/Ctrl+K) marks its selected row. Persisted
+ * across launches.
+ *
+ * Both keep the row's connection color legible — that color is how you tell
+ * which environment a cross-connection result belongs to, and losing it on
+ * the one row you're about to act on is exactly the wrong moment for it. They
+ * differ only in weight: `outline` tints the row and rings it in that
+ * connection's color, `fill` floods the whole row with it.
+ */
+export type PaletteSelectionStyle = "outline" | "fill";
+
+/** Display label for each `PaletteSelectionStyle` option in the Settings
+ *  dropdown. Doubles as the `loadPaletteSelectionStyle` validity check. */
+export const PALETTE_SELECTION_STYLE_LABELS: Record<PaletteSelectionStyle, string> = {
+  outline: "Outline — tinted row with a colored ring (default)",
+  fill: "Fill — solid connection color",
+};
+
 /** A single-character field/value separator, used for CSV export and for
  *  copying rows to the clipboard. Persisted across launches. */
 export type Delimiter = "," | "\t" | ";";
@@ -1050,6 +1069,8 @@ interface AppStore {
   compactTopBar: boolean;
   /** Whether editor tabs show their kind icon (table/query/function/…). */
   showTabIcons: boolean;
+  /** How the command palette marks its selected row. */
+  paletteSelectionStyle: PaletteSelectionStyle;
   /** Whether the table filter bar is in AI mode — you describe the rows you
    *  want instead of typing the predicate. App-wide rather than per-tab
    *  because `FilterBar` is keyed by tab id, so per-tab state would drop the
@@ -1419,6 +1440,7 @@ interface AppStore {
   setEditorLineWrap: (enabled: boolean) => void;
   setCompactTopBar: (enabled: boolean) => void;
   setShowTabIcons: (enabled: boolean) => void;
+  setPaletteSelectionStyle: (style: PaletteSelectionStyle) => void;
   setFilterAiMode: (enabled: boolean) => void;
   setRestoreTabsOnLaunch: (enabled: boolean) => void;
   setCloseTabsOnCubbyOpen: (enabled: boolean) => void;
@@ -1500,6 +1522,7 @@ const EDITOR_FONT_SIZE_KEY = "cubbydb:editorFontSize";
 const EDITOR_LINE_WRAP_KEY = "cubbydb:editorLineWrap";
 const COMPACT_TOP_BAR_KEY = "cubbydb:compactTopBar";
 const SHOW_TAB_ICONS_KEY = "cubbydb:showTabIcons";
+const PALETTE_SELECTION_STYLE_KEY = "cubbydb:paletteSelectionStyle";
 const RESTORE_TABS_KEY = "cubbydb:restoreTabsOnLaunch";
 const CLOSE_TABS_ON_CUBBY_OPEN_KEY = "cubbydb:closeTabsOnCubbyOpen";
 const STARTER_SQL_KEY = "cubbydb:starterSql";
@@ -1802,6 +1825,30 @@ function loadNullDisplay(): NullDisplay {
 function saveNullDisplay(display: NullDisplay) {
   try {
     localStorage.setItem(NULL_DISPLAY_KEY, display);
+  } catch {
+    // Storage unavailable — non-fatal.
+  }
+}
+
+/** Read the saved command-palette selection style, defaulting to the lighter
+ *  `outline` treatment. */
+function loadPaletteSelectionStyle(): PaletteSelectionStyle {
+  try {
+    const saved = localStorage.getItem(PALETTE_SELECTION_STYLE_KEY);
+    return saved && saved in PALETTE_SELECTION_STYLE_LABELS
+      ? (saved as PaletteSelectionStyle)
+      : "outline";
+  } catch {
+    return "outline";
+  }
+}
+
+/** Persist the command-palette selection style. Read straight from the store
+ *  by `CommandPalette`, which turns it into a modifier class — no CSS
+ *  variable involved. */
+function savePaletteSelectionStyle(style: PaletteSelectionStyle) {
+  try {
+    localStorage.setItem(PALETTE_SELECTION_STYLE_KEY, style);
   } catch {
     // Storage unavailable — non-fatal.
   }
@@ -2654,6 +2701,7 @@ export const useStore = create<AppStore>((set, get) => {
     editorLineWrap: loadEditorLineWrap(),
     compactTopBar: loadCompactTopBar(),
     showTabIcons: loadShowTabIcons(),
+    paletteSelectionStyle: loadPaletteSelectionStyle(),
     filterAiMode: false,
     restoreTabsOnLaunch: loadRestoreTabsOnLaunch(),
     closeTabsOnCubbyOpen: loadCloseTabsOnCubbyOpen(),
@@ -5031,6 +5079,11 @@ export const useStore = create<AppStore>((set, get) => {
     setShowTabIcons(enabled) {
       saveShowTabIcons(enabled);
       set({ showTabIcons: enabled });
+    },
+
+    setPaletteSelectionStyle(style) {
+      savePaletteSelectionStyle(style);
+      set({ paletteSelectionStyle: style });
     },
 
     setFilterAiMode(enabled) {

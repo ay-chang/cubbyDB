@@ -174,6 +174,7 @@ export function CommandPalette() {
   const savedConnections = useStore((s) => s.savedConnections);
   const openCubby = useStore((s) => s.openCubby);
   const theme = useStore((s) => s.theme);
+  const paletteSelectionStyle = useStore((s) => s.paletteSelectionStyle);
   const switchConnection = useStore((s) => s.switchConnection);
   const setActiveTab = useStore((s) => s.setActiveTab);
   const newTab = useStore((s) => s.newTab);
@@ -319,7 +320,10 @@ export function CommandPalette() {
   return (
     <div className="cmdk-overlay" onClick={close}>
       <div
-        className="cmdk-panel"
+        className={
+          "cmdk-panel" +
+          (paletteSelectionStyle === "fill" ? " cmdk-panel--select-fill" : "")
+        }
         role="dialog"
         aria-modal="true"
         aria-label="Search CubbyDB"
@@ -415,7 +419,15 @@ export function CommandPalette() {
                     ? accentPaletteFor(connectionColor, THEME_MODE[theme])
                     : null;
                   const connectionStyle = connectionPalette
-                    ? ({ "--conn-color-tint": connectionPalette.accentTint } as React.CSSProperties)
+                    ? ({
+                        // `--conn-color` draws the selected row's ring in this
+                        // connection's own color (see `.cmdk-item--active`), so
+                        // selecting a row never costs you the "which
+                        // environment is this?" signal — same pair of custom
+                        // properties the tab strip already sets.
+                        "--conn-color": connectionPalette.accent,
+                        "--conn-color-tint": connectionPalette.accentTint,
+                      } as React.CSSProperties)
                     : undefined;
                   const keybindingId =
                     item.kind === "action" || item.kind === "setting"

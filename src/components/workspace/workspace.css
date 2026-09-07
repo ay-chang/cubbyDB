@@ -4161,16 +4161,67 @@
   cursor: pointer;
 }
 .cmdk-item--active {
-  background: var(--accent);
-  color: var(--on-accent);
+  /* A soft tint plus a saturated ring, not a solid accent fill. A solid fill
+     buried the row's connection tint (below) and washed its connection pill
+     out to translucent white, so the selected row — the one you're about to
+     act on — was the one row whose environment you *couldn't* read. Splitting
+     the two signals fixes that: the ring says "selected", the fill is left
+     free to say "which connection". */
+  background: var(--accent-tint);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1.5px var(--conn-color, var(--accent));
 }
 /* Carry connection colors into cross-connection results without competing
-   with the solid accent selection state. */
+   with the selection ring. */
 .cmdk-item--conn-fill {
   background: var(--conn-color-tint);
 }
 .cmdk-item--active.cmdk-item--conn-fill {
-  background: var(--accent);
+  /* Keeps its own connection tint while selected — the ring above is already
+     drawn in that same connection's color, so both read at once. */
+  background: var(--conn-color-tint);
+}
+
+/* The heavier alternative to the ring above, chosen in Settings > Appearance >
+   Interface (`PaletteSelectionStyle`): flood the selected row instead of
+   tinting it. Still drawn in the row's *connection* color rather than the app
+   accent, so a filled selection says which environment it belongs to just as
+   plainly as the outline does — only louder. */
+.cmdk-panel--select-fill .cmdk-item--active {
+  background: var(--conn-color, var(--accent));
+  color: var(--on-accent);
+  box-shadow: none;
+}
+.cmdk-panel--select-fill .cmdk-item--active.cmdk-item--conn-fill {
+  background: var(--conn-color);
+}
+/* Everything inside a flooded row sits on a saturated fill, so the normal
+   text/pill colors would sink into it — these restore the on-accent
+   treatment for that case only. */
+.cmdk-panel--select-fill .cmdk-item--active .cmdk-item__icon {
+  color: var(--on-accent);
+  opacity: 0.85;
+}
+.cmdk-panel--select-fill .cmdk-item--active .cmdk-item__conn {
+  background: rgba(255, 255, 255, 0.18);
+  color: var(--on-accent);
+}
+.cmdk-panel--select-fill .cmdk-item--active .cmdk-item__path {
+  color: var(--on-accent);
+  opacity: 0.75;
+}
+.cmdk-panel--select-fill .cmdk-item--active .cmdk-item__label mark {
+  color: var(--on-accent);
+}
+.cmdk-panel--select-fill .cmdk-item--active .cmdk-item__meta {
+  color: var(--on-accent);
+  opacity: 0.75;
+}
+.cmdk-panel--select-fill .cmdk-item--active .cmdk-item__shortcut {
+  border-color: rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--on-accent);
+  box-shadow: none;
 }
 .cmdk-group + .cmdk-group {
   margin-top: 6px;
@@ -4191,10 +4242,6 @@
   color: var(--text-faint);
   font-size: 12px;
 }
-.cmdk-item--active .cmdk-item__icon {
-  color: var(--on-accent);
-  opacity: 0.85;
-}
 .cmdk-item__conn {
   flex: none;
   padding: 1px 7px;
@@ -4208,16 +4255,8 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.cmdk-item--active .cmdk-item__conn {
-  background: rgba(255, 255, 255, 0.18);
-  color: var(--on-accent);
-}
 .cmdk-item__path {
   color: var(--text-faint);
-}
-.cmdk-item--active .cmdk-item__path {
-  color: var(--on-accent);
-  opacity: 0.75;
 }
 .cmdk-item__label {
   flex: 1;
@@ -4231,9 +4270,6 @@
   color: var(--accent);
   font-weight: 600;
 }
-.cmdk-item--active .cmdk-item__label mark {
-  color: var(--on-accent);
-}
 .cmdk-item__meta {
   flex: none;
   max-width: 170px;
@@ -4242,10 +4278,6 @@
   white-space: nowrap;
   font-size: 10.5px;
   color: var(--text-faint);
-}
-.cmdk-item--active .cmdk-item__meta {
-  color: var(--on-accent);
-  opacity: 0.75;
 }
 .cmdk-item__meta--wide {
   max-width: 220px;
@@ -4262,12 +4294,6 @@
   line-height: 1.2;
   text-align: center;
   box-shadow: 0 1px 0 var(--border);
-}
-.cmdk-item--active .cmdk-item__shortcut {
-  border-color: rgba(255, 255, 255, 0.25);
-  background: rgba(255, 255, 255, 0.14);
-  color: var(--on-accent);
-  box-shadow: none;
 }
 .cmdk-footer {
   flex: none;

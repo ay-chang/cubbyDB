@@ -144,6 +144,16 @@ export const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
     keywords: ["glyph", "marker", "table icon"],
   },
   {
+    id: "appearance.palette-selection",
+    label: "Command palette selection",
+    description: "Outline or fill the highlighted row in Cmd/Ctrl+K.",
+    path: "Appearance · Interface",
+    section: "appearance",
+    appearanceSub: "interface",
+    targetId: "appearance.palette-selection",
+    keywords: ["cmdk", "search", "highlight", "outline", "fill", "connection color"],
+  },
+  {
     id: "table.font",
     label: "Results table font",
     description: "Choose the typeface used for result data.",
