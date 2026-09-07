@@ -169,9 +169,23 @@ export function TopBar() {
     >
       <div className="topbar__left">
         {showBrandMark && (
-          <div className="brand-mark" aria-hidden>
-            <span />
-          </div>
+          /* The app logo itself, drawn from the same geometry as the bundled
+             icon (`app-icon.png`, generated from the handoff's
+             `icon-green.svg`) rather than the rounded-square-plus-inner-square
+             CSS that used to approximate it — that approximation predates the
+             current mark. The slot is a painted white shape, not a knockout,
+             so the mark reads the same here as it does in the Dock instead of
+             letting the top bar show through its middle. */
+          <svg className="brand-mark" viewBox="0 0 100 100" aria-hidden>
+            <path
+              fill="currentColor"
+              d="M28 4h44a24 24 0 0 1 24 24v44a24 24 0 0 1-24 24H28A24 24 0 0 1 4 72V28A24 24 0 0 1 28 4Z"
+            />
+            <path
+              fill="#fff"
+              d="M35 36h30a10 10 0 0 1 10 10v8a10 10 0 0 1-10 10H35a10 10 0 0 1-10-10v-8a10 10 0 0 1 10-10Z"
+            />
+          </svg>
         )}
         <div className="conn-switcher">
           {slots.map((slot) => (
