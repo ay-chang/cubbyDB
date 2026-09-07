@@ -47,21 +47,15 @@
   gap: 8px;
 }
 
+/* The logo is a single filled path with the cubby slot cut out of it (see
+   `TopBar.tsx`), so its own artwork supplies the rounded square — no
+   background or nested box here. Keeps following `--accent` the way the
+   shape it replaced did, so a tagged accent color still carries through. */
 .brand-mark {
   width: 20px;
   height: 20px;
-  border-radius: 5px;
-  background: var(--accent);
-  display: flex;
-  align-items: center;
-  justify-content: center;
   flex: none;
-}
-.brand-mark span {
-  width: 9px;
-  height: 9px;
-  border: 1.5px solid #fff;
-  border-radius: 2px;
+  color: var(--accent);
 }
 
 .conn-pill {
@@ -1856,10 +1850,13 @@
 .grid__scroll {
   height: 100%;
   overflow: auto;
-  /* Keep the vertical scrollbar in its own strip. In WKWebView a sticky grid
-     header can otherwise paint beneath an overlay/classic scrollbar and make
-     the thumb look broken into disconnected pieces while scrolling. */
-  scrollbar-gutter: stable;
+  /* No `scrollbar-gutter` and no `::-webkit-scrollbar` rules here on purpose:
+     either one opts this pane out of the platform's overlay scrollbars and
+     into permanently visible legacy ones, which is what the rest of the app
+     avoids (see the scrollbar note in global.css). The grid used to take that
+     trade to stop a sticky header painting under the thumb in WKWebView, but
+     a bar standing along both edges of every result set costs more than the
+     artifact it avoided. */
   /* Keeps the last row — real or a draft new one — from sitting flush
      against the window edge when scrolled to the bottom. Lives here (on the
      scroll container, after everything) rather than on `.grid__body`, which
@@ -1868,25 +1865,6 @@
      *before* them instead of trailing the true last row. */
   padding-bottom: 40px;
 }
-.grid__scroll::-webkit-scrollbar {
-  width: 11px;
-  height: 11px;
-}
-.grid__scroll::-webkit-scrollbar-track,
-.grid__scroll::-webkit-scrollbar-corner {
-  background: var(--surface-raised);
-}
-.grid__scroll::-webkit-scrollbar-thumb {
-  min-width: 28px;
-  min-height: 28px;
-  border: 3px solid var(--surface-raised);
-  border-radius: 999px;
-  background: var(--border-strong);
-}
-.grid__scroll::-webkit-scrollbar-thumb:hover {
-  background: var(--text-faint);
-}
-
 /* --- Transposed results view (More actions > Transpose) ---
    A plain sticky-header/sticky-first-column HTML table, not the windowed
    main grid — nothing here is editable or sortable, so a real `<table>` is

@@ -173,8 +173,8 @@ code comments or AGENTS.md's architecture section.
   viewport-scaled row and column windowing. During a fast vertical scroll,
   already-rendered rows remain mounted until movement stops, avoiding WebKit
   flashes on tall external monitors without slowing horizontal scrolling. The
-  scrollbar has a dedicated gutter, so the sticky header and rows never paint
-  beneath it
+  grid uses the platform's own overlay scrollbars, same as every other pane —
+  they fade in while scrolling rather than standing along both edges
 - A query that carries **its own `LIMIT`** is run exactly as written and shown
   whole rather than paged — the "Limit applied" badge marks that case, since
   the rest of the result isn't reachable by paging. Remove the LIMIT to page
