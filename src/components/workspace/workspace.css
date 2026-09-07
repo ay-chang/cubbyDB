@@ -794,9 +794,15 @@
   background: var(--surface-raised);
   padding: 0 8px;
   /* Horizontal scroll only — overflow-x:auto alone would implicitly enable a
-     vertical scrollbar too. */
+     vertical scrollbar too. The scrollbar itself is hidden (below): the
+     strip still scrolls by wheel/trackpad/drag once tabs overflow, there's
+     just no visible track/thumb cluttering the tab row for it. */
   overflow-x: auto;
   overflow-y: hidden;
+  scrollbar-width: none; /* Firefox */
+}
+.tabs::-webkit-scrollbar {
+  display: none; /* Chrome/Safari/Edge (Tauri's webview) */
 }
 .tab {
   position: relative;
