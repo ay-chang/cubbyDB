@@ -315,6 +315,8 @@ function GeneralSection() {
   const setStarterSql = useStore((s) => s.setStarterSql);
   const autoRefreshSchema = useStore((s) => s.autoRefreshSchema);
   const setAutoRefreshSchema = useStore((s) => s.setAutoRefreshSchema);
+  const confirmDestructiveSql = useStore((s) => s.confirmDestructiveSql);
+  const setConfirmDestructiveSql = useStore((s) => s.setConfirmDestructiveSql);
   const historyLimit = useStore((s) => s.historyLimit);
   const setHistoryLimit = useStore((s) => s.setHistoryLimit);
   const csvDelimiter = useStore((s) => s.csvDelimiter);
@@ -387,6 +389,23 @@ function GeneralSection() {
         <Toggle
           on={autoRefreshSchema}
           onToggle={() => setAutoRefreshSchema(!autoRefreshSchema)}
+        />
+      </div>
+
+      <div
+        className="settings-field settings-field--spaced settings-toggle-row"
+        data-setting-id="general.confirm-destructive"
+      >
+        <div>
+          <div className="settings-field__label">Confirm destructive statements</div>
+          <div className="settings-field__desc">
+            Ask before running a statement that removes rows or objects — DELETE, DROP, or
+            TRUNCATE. The confirmation shows the statements it found.
+          </div>
+        </div>
+        <Toggle
+          on={confirmDestructiveSql}
+          onToggle={() => setConfirmDestructiveSql(!confirmDestructiveSql)}
         />
       </div>
 

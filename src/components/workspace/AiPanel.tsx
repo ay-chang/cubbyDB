@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import {
+  useActiveAiActivity,
   useActiveAiAttachedTables,
   useActiveAiChatId,
   useActiveAiChats,
@@ -10,20 +11,23 @@ import {
   useActiveAiSending,
   useActiveConnectionCanSaveChats,
   useActiveCubby,
+  useActiveRepos,
   useActiveTabId,
   useActiveTabs,
   useStore,
 } from "../../state/store";
 import { copyToClipboard } from "../../api/backend";
 import { aiProviderLabel, aiProviderReady } from "../../lib/aiProvider";
-import type { AiChatSummary, AiMessage } from "../../types";
+import type { AiActivityStep, AiChatSummary, AiMessage } from "../../types";
 import { AiTablePicker } from "./AiTablePicker";
+import { RepoIcon, TableTabIcon } from "./tabIcons";
 import { Markdown } from "./Markdown";
 import { highlightSql, SnippetActions } from "./sqlSnippet";
 
 /** Cap on how tall the chat input grows before it starts scrolling instead —
- *  about 8-9 lines at the input's font size, VSCode-editor style. */
-const AI_INPUT_MAX_HEIGHT = 160;
+ *  about 10 lines at the input's font size, VSCode-editor style. Kept in sync
+ *  with `.ai-input`'s own `max-height`. */
+const AI_INPUT_MAX_HEIGHT = 220;
 
 function formatTime(ms: number): string {
   const d = new Date(ms);
@@ -67,7 +71,14 @@ export function AiPanel() {
     s.activeConnectionId ? s.connections[s.activeConnectionId]?.sessionId ?? null : null,
   );
   const openEditConnection = useStore((s) => s.openEditConnection);
+  const activity = useActiveAiActivity();
   const attachedTables = useActiveAiAttachedTables();
+  const repos = useActiveRepos();
+  // Attaching needs a *saved* connection id — the same precondition saving a
+  // chat has, so it reuses that selector rather than duplicating the check.
+  const canAttachRepo = canSaveChats;
+  const attachRepo = useStore((s) => s.attachRepo);
+  const detachRepo = useStore((s) => s.detachRepo);
   const attachAiContextTable = useStore((s) => s.attachAiContextTable);
   const removeAiContextTable = useStore((s) => s.removeAiContextTable);
   const activeTabs = useActiveTabs();
@@ -80,9 +91,44 @@ export function AiPanel() {
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  // Follows new content while the user is at the bottom, and stops the moment
+  // they scroll up to read something — being yanked back down mid-sentence
+  // because a tool call finished is worse than not following at all.
+  const followBottom = useRef(true);
+  const onListScroll = () => {
+    const el = listRef.current;
+    if (!el) return;
+    const fromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    followBottom.current = fromBottom <= STICK_TO_BOTTOM_PX;
+  };
+
+  // `useLayoutEffect` so the scroll lands in the same frame the row is painted;
+  // with `useEffect` a fast turn visibly jumps. Depends on `activity` (a new
+  // array on every tool event) and `sending`, not just the message count, so
+  // the view tracks the work as it happens rather than only when the answer
+  // finally lands.
+  useLayoutEffect(() => {
+    const el = listRef.current;
+    if (!el || !followBottom.current) return;
+    el.scrollTop = el.scrollHeight;
+  }, [messages.length, activity, sending]);
+
+  // A new turn always re-attaches to the bottom: the user just sent something,
+  // so they are asking to watch it.
   useEffect(() => {
-    listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
-  }, [messages.length]);
+    if (sending) followBottom.current = true;
+  }, [sending]);
+
+  // Opening a chat lands on its newest message. Two things make this its own
+  // effect rather than something the one above already covers: the thread
+  // list is unmounted while the history view is showing, so it comes back
+  // scrolled to the top, and `followBottom` may have been left false by
+  // whatever the user was reading in the previous chat.
+  useLayoutEffect(() => {
+    followBottom.current = true;
+    const el = listRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [chatId, historyView]);
 
   useEffect(() => {
     if (!historyView) requestAnimationFrame(() => inputRef.current?.focus());
@@ -191,7 +237,7 @@ export function AiPanel() {
         )
       ) : (
         <>
-          <div className="ai-panel__list" ref={listRef}>
+          <div className="ai-panel__list" ref={listRef} onScroll={onListScroll}>
             {messages.length === 0 && hasKey && (
               <p className="ai-panel__empty">
                 Ask about writing SQL, or ask a question about this database — "how many rows are
@@ -276,6 +322,7 @@ export function AiPanel() {
                 )}
               </div>
             ))}
+            {activity.length > 0 && <ActivityList steps={activity} />}
             {sending && <ThinkingIndicator />}
             {aiError && (
               <div className="ai-error" role="alert">
@@ -287,54 +334,6 @@ export function AiPanel() {
             )}
           </div>
           <div className="ai-input-row">
-            <div className="ai-context-row">
-              {currentTable && (
-                <span
-                  className="ai-context-chip ai-context-chip--current"
-                  title="Currently viewing — always included as context"
-                >
-                  <span className="mono">
-                    {currentTable.schema}.{currentTable.table}
-                  </span>
-                </span>
-              )}
-              {attachedTables.map((t) => (
-                <span key={`${t.schema}.${t.table}`} className="ai-context-chip">
-                  <span className="mono">
-                    {t.schema}.{t.table}
-                  </span>
-                  <button
-                    type="button"
-                    className="ai-context-chip__remove"
-                    onClick={() => removeAiContextTable(t.schema, t.table)}
-                    title="Remove from context"
-                    aria-label={`Remove ${t.schema}.${t.table} from context`}
-                  >
-                    ×
-                  </button>
-                </span>
-              ))}
-              <span className="ai-context-add-wrap">
-                <button
-                  type="button"
-                  className="ai-context-add"
-                  onClick={() => setTablePickerOpen((open) => !open)}
-                  title="Attach a table as context"
-                  aria-label="Attach a table as context"
-                >
-                  +
-                </button>
-                {tablePickerOpen && (
-                  <AiTablePicker
-                    onPick={(schema, table) => {
-                      attachAiContextTable(schema, table);
-                      setTablePickerOpen(false);
-                    }}
-                    onClose={() => setTablePickerOpen(false)}
-                  />
-                )}
-              </span>
-            </div>
             <div className="ai-input-box">
               <textarea
                 ref={inputRef}
@@ -351,6 +350,102 @@ export function AiPanel() {
                   }
                 }}
               />
+              {/* Everything being sent with the message, in the box it's
+                  being sent from. Order matches how the context accumulates:
+                  the table you're looking at, tables you pinned to this
+                  chat, then the repositories attached to the connection —
+                  broadest-lived context last. */}
+              <div className="ai-composer-bar">
+                <span className="ai-context-add-wrap">
+                  <button
+                    type="button"
+                    className="ai-composer-add"
+                    onClick={() => setTablePickerOpen((open) => !open)}
+                    title="Attach a table as context"
+                    aria-label="Attach a table as context"
+                  >
+                    +
+                  </button>
+                  {tablePickerOpen && (
+                    <AiTablePicker
+                      onPick={(schema, table) => {
+                        attachAiContextTable(schema, table);
+                        setTablePickerOpen(false);
+                      }}
+                      onClose={() => setTablePickerOpen(false)}
+                    />
+                  )}
+                </span>
+
+                {currentTable && (
+                  <span
+                    className="ai-composer-ref ai-composer-ref--current"
+                    title="Currently viewing — always included as context"
+                  >
+                    <TableTabIcon className="ai-composer-ref__icon" />
+                    <span className="ai-composer-ref__label mono">
+                      {currentTable.schema}.{currentTable.table}
+                    </span>
+                  </span>
+                )}
+
+                {attachedTables.map((t) => (
+                  <span key={`${t.schema}.${t.table}`} className="ai-composer-ref">
+                    <TableTabIcon className="ai-composer-ref__icon" />
+                    <span className="ai-composer-ref__label mono">
+                      {t.schema}.{t.table}
+                    </span>
+                    <button
+                      type="button"
+                      className="ai-composer-ref__remove"
+                      onClick={() => removeAiContextTable(t.schema, t.table)}
+                      title="Remove from context"
+                      aria-label={`Remove ${t.schema}.${t.table} from context`}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+
+                {repos.map((repo) => (
+                  <span
+                    key={repo.id}
+                    className="ai-composer-ref"
+                    title={`${repo.path} — attached to this connection`}
+                  >
+                    <RepoIcon className="ai-composer-ref__icon" />
+                    <span className="ai-composer-ref__label">{repo.name}</span>
+                    <button
+                      type="button"
+                      className="ai-composer-ref__remove"
+                      onClick={() => void detachRepo(repo.id)}
+                      title={`Detach ${repo.name} from this connection`}
+                      aria-label={`Detach ${repo.name}`}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+
+                {/* Carries its own label only while nothing is attached: an
+                    unlabeled folder icon is not a discoverable way to learn
+                    the assistant can read your code. */}
+                <button
+                  type="button"
+                  className="ai-composer-repo-add"
+                  onClick={() => void attachRepo()}
+                  disabled={!canAttachRepo}
+                  title={
+                    canAttachRepo
+                      ? "Attach a code repository to this connection"
+                      : "Save this connection first — a repository is attached to a saved connection, not to a session"
+                  }
+                  aria-label="Attach a code repository"
+                >
+                  <RepoIcon className="ai-composer-ref__icon" />
+                  {repos.length === 0 && <span>Add repo</span>}
+                </button>
+              </div>
               {sending ? (
                 <button
                   className="ai-input-box__action ai-input-box__action--stop"
@@ -483,6 +578,80 @@ function RegenerateIcon() {
  *  clipped to a moving gradient (see `.ai-thinking__shine`) — that shine can
  *  sweep off past the text entirely between passes without the word itself
  *  blinking out, which a single clipped layer can't do while resting. */
+/** The assistant's work in progress: one row per tool call, appearing as it
+ *  starts and filling in as it finishes.
+ *
+ *  Every row is closed by default. The point of the list is the *shape* of
+ *  what happened — searched, read, queried — which is readable at a glance;
+ *  the output is there for when a particular step's result is the thing you
+ *  actually want, and opening all of them by default would bury the answer
+ *  under its own working. */
+function ActivityList({ steps }: { steps: AiActivityStep[] }) {
+  return (
+    <div className="ai-activity">
+      {steps.map((step) => (
+        <ActivityRow key={step.step} step={step} />
+      ))}
+    </div>
+  );
+}
+
+function ActivityRow({ step }: { step: AiActivityStep }) {
+  const running = step.phase === "started";
+  const expandable = Boolean(step.output || step.error);
+
+  const summary = (
+    <>
+      <span className={`ai-activity__dot${running ? " ai-activity__dot--running" : ""}`} aria-hidden />
+      <span className="ai-activity__tool">{ACTIVITY_LABELS[step.tool] ?? step.tool}</span>
+      {step.detail && <span className="ai-activity__detail mono">{step.detail}</span>}
+      <span className="ai-activity__meta">
+        {step.error
+          ? "failed"
+          : step.rowCount != null
+            ? `${step.rowCount} ${step.rowCount === 1 ? "row" : "rows"}`
+            : ""}
+        {step.elapsedMs != null && step.elapsedMs >= 1000 && ` · ${(step.elapsedMs / 1000).toFixed(1)}s`}
+      </span>
+    </>
+  );
+
+  // A step with nothing to show renders as a plain row rather than a
+  // disclosure that opens onto nothing.
+  if (!expandable) {
+    return <div className="ai-activity__row">{summary}</div>;
+  }
+
+  return (
+    <details className="ai-activity__step">
+      <summary className="ai-activity__row">{summary}</summary>
+      {step.error ? (
+        <div className="ai-activity__error">{step.error}</div>
+      ) : (
+        <pre className="ai-activity__output">
+          <code>{step.output}</code>
+        </pre>
+      )}
+    </details>
+  );
+}
+
+/** Reads as what the assistant did, not as the function it called. */
+const ACTIVITY_LABELS: Record<string, string> = {
+  run_sql: "Queried",
+  explain_query: "Explained",
+  describe_table: "Described",
+  sample_rows: "Sampled",
+  search_schema: "Searched schema",
+  search_repo: "Searched code",
+  read_file: "Read",
+  list_repo_files: "Listed files",
+};
+
+/** How close to the bottom still counts as "following". Roughly one row, so
+ *  a stray pixel of overscroll doesn't detach the view. */
+const STICK_TO_BOTTOM_PX = 48;
+
 function ThinkingIndicator() {
   return (
     <div className="ai-thinking">

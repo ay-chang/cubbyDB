@@ -37,6 +37,28 @@ export function TableTabIcon({ className = "tab__marker" }: IconProps) {
   );
 }
 
+/** A folder, for an attached code repository. Shares the outer square of the
+ *  other markers so a repo reference sits at the same visual weight as a
+ *  table reference beside it in the AI composer. */
+export function RepoIcon({ className = "tab__marker" }: IconProps) {
+  return (
+    <svg
+      className={className}
+      width="12"
+      height="12"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M1.5 4a1 1 0 0 1 1-1h3.2l1.5 1.8h6.3a1 1 0 0 1 1 1v6.7a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z" />
+    </svg>
+  );
+}
+
 /** Two horizontal dividers only (no vertical) — reads as a row/column
  *  listing rather than `TableTabIcon`'s grid, so the two stay visually
  *  distinct at a glance despite sharing the same outer square. */

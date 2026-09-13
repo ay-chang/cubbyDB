@@ -17,6 +17,7 @@ use crate::connections::{ConnectionStore, LastConnectionStore};
 use crate::cubbies::CubbyStore;
 use crate::db::{ConnectionParams, DbSession, Engine, QueryCanceller};
 use crate::history::HistoryStore;
+use crate::repos::RepoStore;
 use crate::saved_queries::SavedQueryStore;
 use crate::ssh_known_hosts::SshKnownHostsStore;
 
@@ -95,6 +96,10 @@ impl AppState {
 
     pub fn cubby_store(&self) -> CubbyStore {
         CubbyStore::new(&self.data_dir)
+    }
+
+    pub fn repo_store(&self) -> RepoStore {
+        RepoStore::new(&self.data_dir)
     }
 
     pub fn ai_config_store(&self) -> AiConfigStore {

@@ -15,6 +15,7 @@ mod cubbies;
 mod db;
 mod history;
 mod keychain;
+mod repos;
 mod saved_queries;
 mod ssh_known_hosts;
 mod state;
@@ -46,6 +47,9 @@ pub fn run() {
             commands::list_cubbies,
             commands::save_cubby,
             commands::delete_cubby,
+            commands::list_repos,
+            commands::attach_repo,
+            commands::detach_repo,
             commands::test_connection,
             commands::probe_ssh_host_key,
             commands::trust_ssh_host_key,

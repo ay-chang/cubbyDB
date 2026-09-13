@@ -215,6 +215,33 @@ code comments or AGENTS.md's architecture section.
 - New tabs open with a configurable starter-SQL placeholder
   (Settings → General)
 
+### Destructive-statement confirmation
+
+- Running SQL that removes rows or objects asks first, showing the statements
+  it found in a code block rather than a generic "are you sure?" — the point is
+  to re-read the `WHERE` clause, which needs the statement in front of you.
+  Cancel does not run anything; "Run anyway" runs the script unchanged
+- Sized for real scripts: each statement is flattened to one line (so the list
+  stays scannable and the count means something) and truncated at 160
+  characters. The block opens showing five statements with a "Show 27 more"
+  toggle beneath it; expanded, it scrolls vertically at ~15 lines rather than
+  growing the dialog, and horizontally for a long `WHERE`. A pathological
+  script stops listing at 50 statements with a `-- …and N more` line, and the
+  card is capped at 80% of the window height so the Cancel/Run buttons are
+  never pushed off screen
+- Covers `DELETE`, `DROP`, `TRUNCATE`, `ALTER ... DROP COLUMN`/`DROP
+  CONSTRAINT`, and a `DELETE` hidden in a data-modifying CTE. Deliberately
+  **not** `UPDATE` or `INSERT`: they are the ordinary traffic of a query tab,
+  and a prompt that fires on half of all scripts gets dismissed unread
+- Keyword-based, not a full parser, so it errs toward asking — but it reads
+  the same lexer the AI panel uses, so a `DELETE` inside a string, comment,
+  quoted identifier, or dollar-quoted body is correctly ignored
+- Triggered by content, not by which button you pressed, so re-running a
+  `DELETE` from history prompts too, while table tabs, paging, and background
+  refreshes never do
+- Toggle in Settings → General ("Confirm destructive statements"), **on by
+  default**. Off runs everything without asking
+
 ## Saved queries
 
 - Save the active query tab as a named, persistent "saved query" —
@@ -571,16 +598,75 @@ code comments or AGENTS.md's architecture section.
   Model-generated SQL must be exactly one SELECT-family statement: a
   hardcoded allowlist rejects writes, DDL, session/transaction commands, and
   multi-statement input before PostgreSQL runs it in an always-rolled-back
-  read-only transaction. Tool activity is shown beneath the answer
-- The chip row above the input shows exactly what's being sent as table
-  context: a dashed, non-removable chip for whichever table tab is
-  currently active (this was already sent to the model before, just
-  invisibly), plus a removable chip per table explicitly **attached** via
-  the "+" button. The "+" opens a small search (the same fuzzy table search
-  Cmd+K uses) scoped to the current connection. Attached tables are rendered
-  in full column/index/FK detail in the system prompt regardless of schema
-  size — the same treatment an active cubby's tables already get — and are
-  cleared when starting a new chat, same lifecycle as the conversation itself
+  read-only transaction
+- **Live activity.** While a turn runs, each tool call appears as its own row
+  as it starts — "Searched code · public.orders", "Read · src/orders.ts" —
+  with a pulsing dot while it's in flight and its row count and elapsed time
+  once it lands. Rows are **collapsed by default**; opening one shows the
+  output the model actually saw, so the shape of the work reads at a glance
+  and the detail is one click away. The list stays after the answer arrives
+  and clears when the next turn starts
+- The thread **follows the work**: as rows appear and the answer lands, the
+  view stays pinned to the bottom. Scroll up to read something and it lets go
+  — being yanked back down because a tool call finished is worse than not
+  following at all — and sending the next message re-attaches it
+- Live activity is deliberately not persisted: reopening a saved chat shows
+  the summarized steps it always did, without their output. Saved chats stay
+  references and summaries, never copies of the data
+- **Changes are written, never run.** The assistant will draft an INSERT,
+  UPDATE, DELETE, or DDL statement when asked — schema-checked against the
+  real table, with a WHERE clause, the matching SELECT that shows which rows
+  it touches, and a BEGIN/ROLLBACK wrapper for anything hard to undo. It
+  arrives as an ordinary fenced block with Copy and "Open in editor", so it
+  reaches the database only by a person running it in a query tab. A fenced
+  SQL block the assistant could not have executed is labelled "Not run", so a
+  drafted UPDATE never reads as a change already made
+### Attached code repositories
+
+- **Attach a repo** from the AI panel's composer bar, and the assistant can
+  read your application's source alongside the schema. The schema says what a
+  column is; the code says what it means — which write path sets it, what a
+  status value actually represents, why two tables are joined the way they are
+- **Code questions are first-class**, not just a way to answer database
+  questions. With a repo attached the assistant's role widens: "what does this
+  function do", "where is this implemented", "how does this module fit
+  together" get answered directly, with the file cited, rather than steered
+  back to the schema. Without a repo attached the role is unchanged
+- **Read-only, structurally.** Everything goes through a capability wrapper
+  with no method that writes, the same shape as the database one. On the
+  Claude Code route the CLI is given only `Read`, `Grep` and `Glob` (with
+  `Edit`, `Write`, `Bash` and the rest denied by name as a second layer); on
+  every other route the assistant gets CubbyDB's own `search_repo`,
+  `read_file` and `list_repo_files`. Paths are canonicalized before use, so
+  neither `../` nor a symlink can reach outside the folder you attached
+- **Attached to the connection, not the chat.** Which repo backs a database is
+  a property of the project, so it is set once and every later chat on that
+  connection inherits it — unlike attached *tables*, which are per-chat
+  because which tables matter changes per question. Ad-hoc connections can't
+  attach one, the same limitation they have for saved chats
+- `.gitignore` is honored and `.git` skipped, so a search doesn't drown in
+  `node_modules` or a build directory. Files over 1 MB are skipped, and the
+  system prompt carries only a two-level directory outline — the code itself
+  is read on demand by tools, never pasted into the prompt
+- Attaching a repo also raises the per-turn tool-call ceiling: answering "how
+  does the app use this table" is an investigation of many searches and reads,
+  not a lookup. Turns are bounded by a wall-clock budget and by your own Stop
+  button rather than by a low call count
+
+- A **context bar inside the composer** — under the text you're typing, in
+  the same bordered box — shows exactly what's being sent, the way an editor
+  shows the file it has in hand. Left to right: a "+" that opens a small
+  fuzzy table search (the same one Cmd+K uses, scoped to the connection),
+  the table tab you're currently looking at, any tables explicitly attached,
+  then the repositories attached to the connection, then a button to attach
+  another. Broadest-lived context sits last
+- The current table is shown quieter and can't be removed — it was always
+  being sent, just invisibly, so the bar reports it rather than offering it.
+  Everything else carries an × . Attached tables are rendered in full
+  column/index/FK detail in the system prompt regardless of schema size — the
+  same treatment an active cubby's tables already get — and are cleared when
+  starting a new chat, same lifecycle as the conversation itself. Repositories
+  are not: they belong to the connection and outlive any one chat
 - Supports three independent provider routes: bring-your-own **Anthropic** and
   **OpenAI** API keys, plus the user's current **Codex CLI / ChatGPT
   subscription** login. Switching providers does not replace the others'
@@ -619,6 +705,9 @@ code comments or AGENTS.md's architecture section.
   which discards it and asks the same question again. Only the newest reply
   can be regenerated, since replacing an earlier one would discard everything
   said after it
+- Escape closes the results grid's find bar (Cmd/Ctrl+F) and the column-jump
+  popup, ahead of clearing a cell or row selection — closing what you just
+  opened beats undoing a selection you may not remember making
 - The Ask AI panel toggles with Cmd/Ctrl+J (rebindable in Settings)
 - Any table in an answer has a **Download CSV** button, so asking the
   assistant to export something produces a real file rather than CSV text to
@@ -736,8 +825,9 @@ Cmd/Ctrl+W closes the dialog rather than the database tab behind it.
   clears the current search
 
 - **General**: restore tabs on launch, close other tabs when opening a cubby,
-  starter SQL template, auto-refresh schema on connect, query-history display
-  limit, CSV export delimiter, row-copy delimiter
+  starter SQL template, auto-refresh schema on connect, confirm destructive
+  statements, query-history display limit, CSV export delimiter, row-copy
+  delimiter
 - **Appearance → Interface**: theme (8 presets — 2 light: Light, Paper; 6
   dark: Dark, Midnight, Charcoal, Slate, and two lifted from popular editor
   themes, One Dark and Dracula), accent color (20 presets — Green, Indigo,

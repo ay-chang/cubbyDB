@@ -850,7 +850,12 @@
   align-items: stretch;
   border-bottom: 1px solid var(--border);
   background: var(--surface-raised);
-  padding: 0 8px;
+  /* No left padding: the first tab sits flush against the sidebar's own
+     border, the way an editor's tab strip does. An inset there read as a gap
+     in the chrome rather than as breathing room, because the sidebar already
+     draws the boundary. The right padding stays — that side ends in open
+     space after the "+", which does want it. */
+  padding: 0 8px 0 0;
   /* Horizontal scroll only — overflow-x:auto alone would implicitly enable a
      vertical scrollbar too. The scrollbar itself is hidden (below): the
      strip still scrolls by wheel/trackpad/drag once tabs overflow, there's
@@ -2301,20 +2306,32 @@
 }
 
 /* --- Table toolbar (pagination + add/remove row), below the grid --- */
+/* Wraps to a second row rather than keeping a fixed height, because the pane
+   gets genuinely narrow — open the AI panel on a laptop and this bar has
+   ~300px to hold a pager and three buttons. At a fixed height the buttons
+   shrank, their labels broke onto two lines, and the overflow was clipped by
+   the bar's own height. Wrapping keeps every control visible and reachable;
+   the alternative, a horizontal scroll, hides controls behind a gesture
+   nobody expects in a 38px strip.
+
+   `min-height` rather than `height` so the single-row case is pixel-identical
+   to before: 26px of button plus 10px of padding still lands under 38. */
 .table-toolbar {
   flex: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  height: 38px;
-  padding: 0 12px;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  min-height: 38px;
+  padding: 5px 12px;
   border-top: 1px solid var(--border);
   background: var(--surface-raised);
 }
 .table-toolbar__group {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
 }
 .table-toolbar__info {
@@ -2324,6 +2341,10 @@
   white-space: nowrap;
 }
 .table-toolbar__btn {
+  flex: none;
+  /* Without this a squeezed button breaks "Add row" across two lines and
+     grows taller than the row it sits in. */
+  white-space: nowrap;
   height: 26px;
   padding: 0 11px;
   border-radius: var(--radius-sm);
@@ -3032,10 +3053,15 @@
 .ai-panel__close:hover {
   color: var(--text);
 }
+/* The generous bottom padding is deliberate: while a turn runs, the activity
+   list and the thinking indicator sit at the very end of this scroller, and
+   with even padding they end up pressed against the composer's top edge.
+   The gap gives the live status somewhere to breathe and keeps the last line
+   of an answer clear of the input box. */
 .ai-panel__list {
   flex: 1;
   overflow: auto;
-  padding: 12px;
+  padding: 12px 12px 28px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -3092,12 +3118,110 @@
 }
 /* Status, not a message — so no bubble, border, or background. Just the word
    where the reply will appear, with a highlight sweeping across it. */
+/* --- Live tool activity ---------------------------------------------------
+   What the assistant is doing, while it does it. Rows are quiet by design:
+   this sits above the answer and must not compete with it. */
+.ai-activity {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 2px 0 4px;
+}
+.ai-activity__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  cursor: default;
+  list-style: none;
+}
+.ai-activity__step > summary {
+  cursor: pointer;
+}
+.ai-activity__step > summary::-webkit-details-marker {
+  display: none;
+}
+.ai-activity__row:hover {
+  background: var(--border-faint);
+}
+.ai-activity__dot {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-ghost);
+}
+/* Still running. Pulses rather than spins: several of these can be on screen
+   at once and a row of spinners is noise, not information. */
+.ai-activity__dot--running {
+  background: var(--accent);
+  animation: ai-activity-pulse 1.1s ease-in-out infinite;
+}
+@keyframes ai-activity-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ai-activity__dot--running {
+    animation: none;
+    opacity: 1;
+  }
+}
+.ai-activity__tool {
+  flex: none;
+  color: var(--text-muted);
+}
+.ai-activity__detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+.ai-activity__meta {
+  flex: none;
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--text-ghost);
+}
+.ai-activity__output {
+  margin: 2px 0 6px;
+  padding: 8px 10px;
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+}
+.ai-activity__output code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-muted);
+  white-space: pre;
+}
+.ai-activity__error {
+  margin: 2px 0 6px;
+  padding: 8px 10px;
+  border-radius: var(--radius-control);
+  background: var(--error-bg);
+  color: var(--error);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
 .ai-thinking {
   align-self: flex-start;
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 2px 2px 2px 3px;
+  /* Sits directly under the activity rows it belongs to, then holds the
+     turn's trailing space itself rather than relying on the list's padding
+     alone — the two read as one block that way. */
+  margin: 2px 0 6px;
 }
 /* A small live-status dot ahead of the word, pulsing on its own beat rather
    than in lockstep with the shimmer — two independent motions read as more
@@ -3357,6 +3481,24 @@
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+/* "Not run" — a statement the assistant wrote but is not allowed to execute.
+   Sits with the language label rather than the buttons: it describes what the
+   block *is*, not something to click. */
+.md-code__badge {
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 9.5px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  cursor: default;
+}
+/* Three items in the bar now, so the actions claim the gap themselves
+   instead of relying on space-between to strand the badge in the middle. */
+.md-code__bar .snippet-actions {
+  margin-left: auto;
+}
 /* Copy / Open-in-editor, shared by fenced code blocks and trace steps. */
 .snippet-actions {
   display: flex;
@@ -3492,73 +3634,112 @@
      comment for why it anchors here and not to the "+" button itself. */
   position: relative;
 }
-/* The row of what's being sent to the AI as context — always visible above
-   the composer, not just when something's attached, so the "+" is always
-   reachable. */
-.ai-context-row {
+/* --- Composer context bar --------------------------------------------------
+   What's being sent with the message, rendered inside the composer rather
+   than as rows floating above it: the reference and the box it is attached
+   to read as one control, which is how editors present the same idea. Wraps
+   rather than scrolls — a narrow panel with several references is normal,
+   and a hidden horizontal scroll would just conceal what is being sent. */
+.ai-composer-bar {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 8px;
-}
-.ai-context-chip {
-  display: inline-flex;
-  align-items: center;
   gap: 4px;
-  padding: 3px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--pill-bg);
-  font-size: 11px;
-  color: var(--text);
+  /* Right padding clears the send button pinned in the box's corner. */
+  padding: 0 34px 6px 6px;
 }
-/* The implicitly-included "currently viewing" table — same shape as an
-   attached chip but visually quieter and never removable, since it's just
-   surfacing information that's always sent anyway (see `ActiveTableRef`). */
-.ai-context-chip--current {
-  border-style: dashed;
-  color: var(--text-muted);
-}
-.ai-context-chip__remove {
+.ai-composer-add {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 14px;
-  height: 14px;
-  border: none;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
+  border: 1px dashed var(--border);
   background: transparent;
   color: var(--text-faint);
   font-size: 12px;
   line-height: 1;
   cursor: pointer;
 }
-.ai-context-chip__remove:hover {
-  background: var(--border-faint);
-  color: var(--text);
+.ai-composer-add:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
-.ai-context-add-wrap {
-  /* Not a positioning context for the picker — see `.ai-table-picker`. */
+/* A reference to something the model will see. Borderless: several of these
+   sit inside an already-bordered box, and pills there read as clutter. */
+.ai-composer-ref {
   display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 1px 3px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
 }
-.ai-context-add {
+.ai-composer-ref:hover {
+  background: var(--border-faint);
+}
+/* The currently-viewed table is quieter than the rest: it is always sent
+   whether or not anyone asked for it, so it reports rather than invites.
+   Quieter, though, not unreadable — it still names what the model is about
+   to be told, and `--text-ghost` was too faint to check at a glance. */
+.ai-composer-ref--current {
+  color: var(--text-faint);
+}
+.ai-composer-ref__icon {
+  flex: none;
+  opacity: 0.75;
+}
+.ai-composer-ref__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ai-composer-ref__remove {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  flex: none;
+  width: 13px;
+  height: 13px;
+  border: none;
   border-radius: 50%;
-  border: 1px dashed var(--border);
   background: transparent;
-  color: var(--text-faint);
-  font-size: 13px;
+  color: var(--text-ghost);
+  font-size: 11px;
   line-height: 1;
   cursor: pointer;
 }
-.ai-context-add:hover {
+.ai-composer-ref__remove:hover {
+  background: var(--border-strong);
+  color: var(--text);
+}
+/* Square while it is only an icon, so it matches the "+" beside it instead
+   of reading as an empty labelled box at the end of the row. */
+.ai-composer-repo-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 20px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  border: 1px dashed var(--border);
+  background: transparent;
+  font-size: 11px;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.ai-composer-repo-add:not(:disabled):hover {
   border-color: var(--accent);
   color: var(--accent);
+}
+.ai-composer-repo-add:disabled {
+  color: var(--text-ghost);
+  cursor: default;
 }
 .ai-table-picker {
   position: absolute;
@@ -3632,6 +3813,8 @@
    input" against a darker surrounding chrome. */
 .ai-input-box {
   position: relative;
+  display: flex;
+  flex-direction: column;
   border: 1px solid var(--border);
   border-radius: var(--radius-card);
   background: var(--pill-bg);
@@ -3644,19 +3827,25 @@
 .ai-input {
   display: block;
   width: 100%;
-  min-height: var(--h-input);
+  /* Three lines at rest rather than the one `--h-input` gives every other
+     input in the app. This is a composer, not a form field: questions here
+     are sentences, and starting at a single line means the box grows under
+     the cursor from the first one. Not the shared token, deliberately —
+     that would resize every input in the app. */
+  min-height: 76px;
   /* Kept in sync with AI_INPUT_MAX_HEIGHT in AiPanel.tsx, which does the
      actual per-keystroke resizing — this is just the hard ceiling so a
      paste can't flash the box past it before JS catches up. */
-  max-height: 160px;
+  max-height: 220px;
   border: none;
   border-radius: inherit;
   background: transparent;
   color: var(--text);
-  /* Right padding clears the action button pinned in the corner. */
-  padding: 8px 38px 8px 10px;
-  font-size: 12.5px;
-  line-height: 1.4;
+  padding: 10px 12px 6px;
+  font-size: 13px;
+  /* Looser than the 1.5 the message bubbles use — text you are editing wants
+     more room between lines than text you are reading. */
+  line-height: 1.55;
   resize: none;
   overflow-y: auto;
   outline: none;
@@ -3727,6 +3916,9 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  /* This region is what opens the chat. The cursor goes here rather than on
+     `.ai-chat-item`, which also holds the rename and delete buttons. */
+  cursor: pointer;
 }
 .ai-chat-item__title {
   flex: 1;
@@ -3744,6 +3936,9 @@
 }
 .ai-chat-item__rename-input {
   flex: 1;
+  /* `cursor` inherits, and the pointer on the row above would otherwise
+     follow into the rename field while it is open. */
+  cursor: text;
   height: 24px;
   border: 1px solid var(--accent);
   border-radius: 6px;

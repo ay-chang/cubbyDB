@@ -40,7 +40,11 @@ use super::{AiChatResult, ChatMessage, ModelInfo, ReasoningEffort, ToolTrace, MA
 use crate::db::{DbError, DbErrorKind};
 
 const STATUS_TIMEOUT: Duration = Duration::from_secs(15);
-const TURN_TIMEOUT: Duration = Duration::from_secs(180);
+// Generous because a turn with repositories attached is an investigation,
+// not a lookup: the CLI's own harness may run many searches and reads before
+// it answers. The user can stop a turn at any point from the panel, which is
+// a better bound than a short timeout that truncates real work.
+const TURN_TIMEOUT: Duration = Duration::from_secs(600);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const LOGIN_GRACE_PERIOD: Duration = Duration::from_secs(3);
 const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
@@ -275,6 +279,7 @@ pub async fn run_loop<F, Fut>(
     reasoning_effort: ReasoningEffort,
     system_prompt: String,
     messages: Vec<ChatMessage>,
+    repo_paths: Vec<String>,
     run_tool: F,
 ) -> Result<AiChatResult, DbError>
 where
@@ -305,11 +310,28 @@ where
     })
     .to_string();
 
+    // With repositories attached the capability line has to change: Read,
+    // Grep and Glob really are available then, and telling the model they are
+    // not would leave it refusing to look at code it can see.
+    let capabilities = if repo_paths.is_empty() {
+        "Your only permitted capability is the `cubbydb` MCP server's read-only database tools. \
+         Never use Bash, filesystem, web search, or any other tool."
+            .to_string()
+    } else {
+        "Your permitted capabilities are the `cubbydb` MCP server's read-only database tools and \
+         the Read, Grep and Glob tools over the attached repositories listed above. Never use \
+         Bash, web search, or any tool that edits, creates, or deletes a file \u{2014} you can read \
+         the code and you cannot change it, which is deliberate. Reading the code is often the \
+         only way to answer how the application really uses a table, so reach for it rather than \
+         guessing from column names."
+            .to_string()
+    };
     let instructions = format!(
-        "{system_prompt}\n\nYou are running inside CubbyDB, not a coding workspace. Your only \
-         permitted capability is the `cubbydb` MCP server's read-only database tools. Never use \
-         Bash, filesystem, web search, or any other tool. Do not ask for approval. If a \
-         capability is not one of the supplied tools, it is unavailable."
+        "{system_prompt}\n\nYou are running inside CubbyDB, not a coding workspace. {capabilities} \
+         Do not ask for approval. If a capability is not one of the supplied tools, it is \
+         unavailable. That limits what you may do, not what you may say: writing a statement out \
+         in your reply for the user to run themselves is expected \u{2014} see the \"Changing data\" \
+         section above."
     );
 
     // Codex gets the whole conversation as one `turn/start` input array
@@ -326,26 +348,49 @@ where
         .join("\n\n");
 
     let effort = reasoning_effort.as_str();
+
+    // `--tools` is an allowlist over the CLI's built-in set. With no repos it
+    // stays empty, so the MCP database tools are the only capability at all.
+    // With repos it names the three read-only file tools and nothing else:
+    // no Edit, no Write, no Bash. `--disallowed-tools` then denies the
+    // mutating ones by name as a second layer, so the read-only guarantee
+    // does not rest on the allowlist alone being spelled correctly — the CLI
+    // does not validate tool names, and an unrecognized one silently yields
+    // *fewer* tools, never more.
+    let tools_flag = if repo_paths.is_empty() { "" } else { "Read,Grep,Glob" };
+    let mut args: Vec<&str> = vec![
+        "-p",
+        "--output-format",
+        "json",
+        "--model",
+        model,
+        "--effort",
+        effort,
+        "--system-prompt",
+        &instructions,
+        "--tools",
+        tools_flag,
+        "--disallowed-tools",
+        "Edit,Write,NotebookEdit,Bash,WebFetch,WebSearch",
+        "--mcp-config",
+        &mcp_config,
+        "--strict-mcp-config",
+        "--permission-mode",
+        "bypassPermissions",
+        "--no-session-persistence",
+    ];
+    // `--add-dir` grants tool access to directories outside the working
+    // directory, which stays the empty CubbyDB-owned workspace: the model
+    // reads the repositories, but nothing it does is rooted in one.
+    if !repo_paths.is_empty() {
+        args.push("--add-dir");
+        for path in &repo_paths {
+            args.push(path.as_str());
+        }
+    }
+
     let mut child = spawn_claude(
-        &[
-            "-p",
-            "--output-format",
-            "json",
-            "--model",
-            model,
-            "--effort",
-            effort,
-            "--system-prompt",
-            &instructions,
-            "--tools",
-            "",
-            "--mcp-config",
-            &mcp_config,
-            "--strict-mcp-config",
-            "--permission-mode",
-            "bypassPermissions",
-            "--no-session-persistence",
-        ],
+        &args,
         Some(&workspace),
         |cmd| {
             cmd.stdin(Stdio::piped())
@@ -615,7 +660,7 @@ async fn handle_mcp_request<F, Fut>(
             let _ = write_http_response(&mut stream, 202, "Accepted", None, &[]).await;
         }
         "tools/list" => {
-            let tools = tool_definitions()
+            let tools = tool_definitions(false)
                 .as_array()
                 .cloned()
                 .unwrap_or_default()
@@ -840,6 +885,7 @@ mod tests {
                     .to_string(),
                 trace: None,
             }],
+            Vec::new(),
             |name, input| async move {
                 assert_eq!(name, "run_sql");
                 Ok(ToolOutcome {

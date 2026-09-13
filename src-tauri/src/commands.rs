@@ -20,6 +20,7 @@ use crate::db::{
     SchemaSnapshot, SequenceDetails, TableStructure, PAGE_SIZE,
 };
 use crate::history::{now_millis, HistoryEntry};
+use crate::repos::AttachedRepo;
 use crate::saved_queries::SavedQuery;
 use crate::state::{ActiveSession, AppState};
 
@@ -124,6 +125,28 @@ pub async fn save_cubby(state: State<'_, AppState>, cubby: Cubby) -> Result<Cubb
 #[tauri::command]
 pub async fn delete_cubby(state: State<'_, AppState>, id: String) -> Result<(), DbError> {
     state.cubby_store().delete(&id)
+}
+
+// --- Attached repositories -------------------------------------------------
+// Scoped by `connection_id` (a *saved* connection's stable id) for the same
+// reason cubbies and chats are — see `repos.rs`.
+
+#[tauri::command]
+pub async fn list_repos(state: State<'_, AppState>) -> Result<Vec<AttachedRepo>, DbError> {
+    state.repo_store().list()
+}
+
+#[tauri::command]
+pub async fn attach_repo(
+    state: State<'_, AppState>,
+    repo: AttachedRepo,
+) -> Result<AttachedRepo, DbError> {
+    state.repo_store().upsert(repo)
+}
+
+#[tauri::command]
+pub async fn detach_repo(state: State<'_, AppState>, id: String) -> Result<(), DbError> {
+    state.repo_store().delete(&id)
 }
 
 // --- Connect / test --------------------------------------------------------
@@ -1153,6 +1176,7 @@ fn tool_runner<'a>(
     app_state: &'a AppState,
     session_id: String,
     schema: &'a [SchemaNode],
+    repos: &'a [crate::repos::AttachedRepo],
 ) -> impl Fn(
     String,
     serde_json::Value,
@@ -1164,7 +1188,11 @@ fn tool_runner<'a>(
             let mut active = app_state.active.lock().await;
             {
                 let session = active.get(&session_id).ok_or_else(DbError::not_connected)?;
-                let ctx = crate::ai::tools::ToolContext::new(session.session.as_ref(), schema);
+                let ctx = crate::ai::tools::ToolContext::new(
+                    session.session.as_ref(),
+                    schema,
+                    repos.to_vec(),
+                );
                 match crate::ai::tools::execute(&ctx, &name, &input).await {
                     Err(e) if e.kind == DbErrorKind::Connection => { /* retry below */ }
                     other => return other,
@@ -1172,7 +1200,11 @@ fn tool_runner<'a>(
             }
             reconnect_in_place(&mut active, &session_id, app_state).await?;
             let session = active.get(&session_id).ok_or_else(DbError::not_connected)?;
-            let ctx = crate::ai::tools::ToolContext::new(session.session.as_ref(), schema);
+            let ctx = crate::ai::tools::ToolContext::new(
+                session.session.as_ref(),
+                schema,
+                repos.to_vec(),
+            );
             crate::ai::tools::execute(&ctx, &name, &input).await
         })
     }
@@ -1186,6 +1218,7 @@ async fn run_provider_turn<F, Fut>(
     state: &AppState,
     system_prompt: String,
     messages: Vec<ChatMessage>,
+    repos: &[crate::repos::AttachedRepo],
     run_tool: F,
 ) -> Result<AiChatResult, DbError>
 where
@@ -1215,6 +1248,14 @@ where
     let model = config.model();
     let send_effort = config.model_supports_effort();
     let reasoning_effort = config.reasoning_effort();
+
+    // Two routes to the same repositories. Claude Code gets the directories
+    // themselves and reads them with its own Read/Grep/Glob, which are better
+    // at code than anything reimplemented here. Everything else gets
+    // CubbyDB's `search_repo`/`read_file` tools, so attaching a repository
+    // means the same thing whichever provider is selected.
+    let repo_paths: Vec<String> = repos.iter().map(|repo| repo.path.clone()).collect();
+    let include_repo_tools = !repos.is_empty();
     match provider {
         AiProvider::Anthropic => {
             crate::ai::provider::run_loop(
@@ -1223,6 +1264,7 @@ where
                 send_effort,
                 system_prompt,
                 messages,
+                include_repo_tools,
                 run_tool,
             )
             .await
@@ -1234,6 +1276,7 @@ where
                 send_effort.then_some(reasoning_effort.unwrap_or_default()),
                 system_prompt,
                 messages,
+                include_repo_tools,
                 run_tool,
             )
             .await
@@ -1245,6 +1288,7 @@ where
                 reasoning_effort.unwrap_or_default(),
                 system_prompt,
                 messages,
+                include_repo_tools,
                 run_tool,
             )
             .await
@@ -1256,6 +1300,7 @@ where
                 reasoning_effort.unwrap_or_default(),
                 system_prompt,
                 messages,
+                repo_paths,
                 run_tool,
             )
             .await
@@ -1263,18 +1308,42 @@ where
     }
 }
 
-/// Server version and connection name from the live session, so a prompt can
-/// state what the model is actually talking to. Read and released before the
+/// Pushes one activity event to the frontend. Best-effort on purpose: a
+/// failed emit means the panel misses a progress line, which must never turn
+/// into a failed turn.
+fn emit_activity(app: &tauri::AppHandle, activity: crate::ai::AiActivity) {
+    use tauri::Emitter;
+    let _ = app.emit(crate::ai::AI_ACTIVITY_EVENT, activity);
+}
+
+/// Caps a tool's output for the live view. Cuts on a character boundary and
+/// says what was left out, so a truncated result never reads as a complete
+/// one.
+fn truncate_activity_output(output: &str) -> String {
+    if output.chars().count() <= crate::ai::MAX_ACTIVITY_OUTPUT_CHARS {
+        return output.to_string();
+    }
+    let kept: String = output.chars().take(crate::ai::MAX_ACTIVITY_OUTPUT_CHARS).collect();
+    format!("{kept}\n\n… output truncated for display; the model received all of it.")
+}
+
+/// Server version, connection name, and saved-connection id from the live
+/// session, so a prompt can state what the model is actually talking to and
+/// which repositories are attached to it. Read and released before the
 /// tool-call closure takes the same lock.
+///
+/// The connection id is `None` for an ad-hoc connection, which is exactly the
+/// case that has no attached repositories — same as it has no saved chats.
 async fn session_prompt_context(
     state: &AppState,
     session_id: &str,
-) -> Result<(String, String), DbError> {
+) -> Result<(String, String, Option<String>), DbError> {
     let active = state.active.lock().await;
     let session = active.get(session_id).ok_or_else(DbError::not_connected)?;
     Ok((
         session.session.info().server_version.clone(),
         session.name.clone(),
+        session.connection_id.clone(),
     ))
 }
 
@@ -1286,6 +1355,7 @@ async fn session_prompt_context(
 /// uses.
 #[tauri::command]
 pub async fn ai_chat(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     session_id: String,
     schema: Vec<SchemaNode>,
@@ -1294,8 +1364,42 @@ pub async fn ai_chat(
     cubby: Option<CubbyPromptInfo>,
     messages: Vec<ChatMessage>,
 ) -> Result<AiChatResult, DbError> {
-    let (server_version, connection_name) =
+    let (server_version, connection_name, connection_id) =
         session_prompt_context(state.inner(), &session_id).await?;
+
+    // Repositories are attached to the *saved* connection, so an ad-hoc one
+    // simply has none. A read failure here is not worth failing the turn
+    // over: the assistant is still perfectly useful without the code.
+    let repos = connection_id
+        .as_deref()
+        .map(|id| state.repo_store().for_connection(id).unwrap_or_default())
+        .unwrap_or_default();
+
+    // A shallow directory listing per repository, for the prompt. Walking
+    // the tree is blocking work, so it goes to the blocking pool rather than
+    // stalling a runtime thread while another connection waits on a query.
+    // A repository that has been moved or deleted since it was attached
+    // yields an empty outline rather than failing the turn — the model can
+    // still answer from the schema, and the tools report the real problem if
+    // it tries to read.
+    let repo_outlines: Vec<Vec<String>> = {
+        let owned = repos.clone();
+        tokio::task::spawn_blocking(move || {
+            let reader = crate::ai::read_only_repo::ReadOnlyRepo::new(owned);
+            reader.all().iter().map(|repo| reader.outline(repo)).collect()
+        })
+        .await
+        .unwrap_or_else(|_| repos.iter().map(|_| Vec::new()).collect())
+    };
+    let repo_contexts: Vec<crate::ai::prompt::RepoContext> = repos
+        .iter()
+        .zip(repo_outlines.iter())
+        .map(|(repo, directories)| crate::ai::prompt::RepoContext {
+            name: &repo.name,
+            path: &repo.path,
+            directories,
+        })
+        .collect();
 
     let cubby_tables: Vec<(String, String)> = cubby
         .as_ref()
@@ -1321,6 +1425,7 @@ pub async fn ai_chat(
             name: &c.name,
             tables: &cubby_tables,
         }),
+        repos: &repo_contexts,
         conversation_seed,
     });
 
@@ -1364,18 +1469,76 @@ pub async fn ai_chat(
     // discarded below when logging is off.
     let audit_calls: std::sync::Arc<tokio::sync::Mutex<Vec<crate::ai::audit::AuditToolCall>>> =
         std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
+    // Counts tool calls within this turn so a `finished` event can be matched
+    // to the `started` one it belongs to. `AtomicU32` rather than a mutex
+    // because the closure below is `Fn`, not `FnMut`, and this is the only
+    // state it mutates.
+    let activity_step = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
     let run_tool = {
-        let inner = tool_runner(app_state, session_id.clone(), &schema);
+        let inner = tool_runner(app_state, session_id.clone(), &schema, &repos);
         let audit_calls = audit_calls.clone();
+        let activity_step = activity_step.clone();
+        let app = app.clone();
+        let activity_session = session_id.clone();
         move |name: String, input: serde_json::Value| {
             let audit_calls = audit_calls.clone();
             let name_for_record = name.clone();
             let input_for_record = input.clone();
+            let step = activity_step.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let app = app.clone();
+            let session_id = activity_session.clone();
+            let tool_for_activity = name.clone();
+            let detail_for_activity = crate::ai::describe_tool_input(&input);
             let fut = inner(name, input);
             async move {
+                // Emitted before the call, so the panel shows the step running
+                // rather than appearing only once it is already done — a
+                // repository search can take several seconds on its own.
+                emit_activity(
+                    &app,
+                    crate::ai::AiActivity {
+                        session_id: session_id.clone(),
+                        step,
+                        phase: "started",
+                        tool: tool_for_activity.clone(),
+                        detail: detail_for_activity.clone(),
+                        row_count: None,
+                        error: None,
+                        output: None,
+                        elapsed_ms: None,
+                    },
+                );
+
                 let started = std::time::Instant::now();
                 let outcome = fut.await;
                 let elapsed_ms = started.elapsed().as_millis() as u64;
+
+                let finished = match &outcome {
+                    Ok(o) => crate::ai::AiActivity {
+                        session_id,
+                        step,
+                        phase: "finished",
+                        tool: o.trace.tool.clone(),
+                        detail: o.trace.detail.clone(),
+                        row_count: o.trace.row_count,
+                        error: None,
+                        output: Some(truncate_activity_output(&o.content)),
+                        elapsed_ms: Some(elapsed_ms),
+                    },
+                    Err(e) => crate::ai::AiActivity {
+                        session_id,
+                        step,
+                        phase: "finished",
+                        tool: tool_for_activity,
+                        detail: detail_for_activity,
+                        row_count: None,
+                        error: Some(e.message.clone()),
+                        output: None,
+                        elapsed_ms: Some(elapsed_ms),
+                    },
+                };
+                emit_activity(&app, finished);
+
                 audit_calls.lock().await.push(crate::ai::audit::AuditToolCall::record(
                     name_for_record,
                     input_for_record,
@@ -1403,7 +1566,7 @@ pub async fn ai_chat(
             DbErrorKind::Internal,
             "Stopped by user.",
         )),
-        r = run_provider_turn(app_state, system_prompt, capped_messages, run_tool) => r,
+        r = run_provider_turn(app_state, system_prompt, capped_messages, &repos, run_tool) => r,
     };
 
     if let Some(system_prompt) = audit_system_prompt {
@@ -1492,7 +1655,7 @@ pub async fn ai_generate_filter(
         ));
     }
 
-    let (server_version, _connection_name) =
+    let (server_version, _connection_name, _connection_id) =
         session_prompt_context(state.inner(), &session_id).await?;
 
     let system_prompt = crate::ai::filter::build_filter_prompt(&crate::ai::filter::FilterPromptContext {
@@ -1504,7 +1667,11 @@ pub async fn ai_generate_filter(
     });
 
     let app_state: &AppState = state.inner();
-    let run_tool = tool_runner(app_state, session_id, &schema);
+    // No repositories here on purpose: this is one WHERE predicate against
+    // one table, and reading application code has nothing to add to it —
+    // only latency and tokens.
+    let no_repos: Vec<crate::repos::AttachedRepo> = Vec::new();
+    let run_tool = tool_runner(app_state, session_id, &schema, &no_repos);
     let result = run_provider_turn(
         app_state,
         system_prompt,
@@ -1513,6 +1680,7 @@ pub async fn ai_generate_filter(
             content: description.to_string(),
             trace: None,
         }],
+        &no_repos,
         run_tool,
     )
     .await?;

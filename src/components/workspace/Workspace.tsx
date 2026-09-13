@@ -9,6 +9,7 @@ import {
 } from "../../lib/keybindings";
 import {
   tabCubbyEntry,
+  useActiveAiSending,
   useActiveCubby,
   useActiveTabId,
   useActiveTabs,
@@ -319,6 +320,8 @@ function useDrag(
 function useWorkspaceShortcuts(toggleSidebar: () => void) {
   const runTab = useStore((s) => s.runTab);
   const cancelQuery = useStore((s) => s.cancelQuery);
+  const aiSending = useActiveAiSending();
+  const stopAiMessage = useStore((s) => s.stopAiMessage);
   const newTab = useStore((s) => s.newTab);
   const closeTab = useStore((s) => s.closeTab);
   const setActiveTab = useStore((s) => s.setActiveTab);
@@ -373,6 +376,15 @@ function useWorkspaceShortcuts(toggleSidebar: () => void) {
         if (activeTab?.running) {
           e.preventDefault();
           cancelQuery();
+          return;
+        }
+        // Nothing running in the grid, so Escape stops the other thing in the
+        // workspace worth interrupting: an AI turn. Second in line rather than
+        // first because a running query is the more expensive thing to leave
+        // going, and the two are almost never in flight together.
+        if (aiSending) {
+          e.preventDefault();
+          stopAiMessage();
         }
         return;
       }
@@ -468,6 +480,8 @@ function useWorkspaceShortcuts(toggleSidebar: () => void) {
   }, [
     runTab,
     cancelQuery,
+    aiSending,
+    stopAiMessage,
     newTab,
     closeTab,
     setActiveTab,

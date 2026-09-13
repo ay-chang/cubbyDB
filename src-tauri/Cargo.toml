@@ -68,6 +68,13 @@ arboard = "3"
 
 thiserror = "2"
 
+# Repository walking for the AI assistant's code tools. ripgrep's own walker:
+# it honors .gitignore and skips .git, which is what keeps a search over an
+# attached repo from drowning in node_modules or a build directory. Paired
+# with `regex` for the line matching `search_repo` does on what it yields.
+ignore = "0.4"
+regex = "1"
+
 # SSH tunneling, so a connection whose Postgres isn't directly reachable can
 # go through a bastion host. Pure Rust and tokio-native — no C library
 # dependency, matching the fully-async architecture everywhere else here —

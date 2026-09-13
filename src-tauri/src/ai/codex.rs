@@ -5,7 +5,16 @@
 //! CubbyDB uses the user's current Codex profile (`CODEX_HOME`, or Codex's
 //! normal default) just like the CLI and t3code, so an existing `codex login`
 //! is immediately available. The database turn itself still runs in an empty,
-//! read-only CubbyDB workspace and exposes only read-only database tools.
+//! read-only CubbyDB workspace and exposes only read-only tools.
+//!
+//! Unlike the Claude Code route, attached repositories reach this provider
+//! through CubbyDB's own `search_repo`/`read_file` tools rather than Codex's
+//! native filesystem access. That is a deliberate limit of what has been
+//! verified: pointing Codex at a directory means changing `cwd`,
+//! `runtimeWorkspaceRoots`, and `selectedCapabilityRoots` together, and this
+//! module's contract is that its app-server usage was checked against the
+//! real protocol rather than assumed. The supplied tools work here today;
+//! moving to native access is a later change, gated on verifying it.
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -25,7 +34,9 @@ use super::{
 use crate::db::{DbError, DbErrorKind};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
-const TURN_TIMEOUT: Duration = Duration::from_secs(180);
+// See the same constant in `claude_code.rs`: long enough for a turn that
+// actually reads code, with cancellation as the real bound.
+const TURN_TIMEOUT: Duration = Duration::from_secs(600);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 pub const DEFAULT_MODEL: &str = "gpt-5.6-luna";
 
@@ -328,6 +339,7 @@ pub async fn run_loop<F, Fut>(
     reasoning_effort: ReasoningEffort,
     system_prompt: String,
     messages: Vec<ChatMessage>,
+    include_repo_tools: bool,
     mut run_tool: F,
 ) -> Result<AiChatResult, DbError>
 where
@@ -337,7 +349,7 @@ where
     let mut client = CodexClient::connect(data_dir).await?;
     require_account(&mut client).await?;
 
-    let dynamic_tools = tool_definitions()
+    let dynamic_tools = tool_definitions(include_repo_tools)
         .as_array()
         .cloned()
         .unwrap_or_default()
@@ -354,7 +366,7 @@ where
 
     let workspace = data_dir.join("codex-workspace");
     let instructions = format!(
-        "{system_prompt}\n\nYou are running inside CubbyDB, not a coding workspace. Your only permitted capabilities are the supplied read-only database tools. Never use shell, filesystem, network, MCP, skills, code-editing tools, or any mutation command. Do not ask for approval. If a capability is not one of the supplied tools, it is unavailable."
+        "{system_prompt}\n\nYou are running inside CubbyDB, not a coding workspace. Your only permitted capabilities are the supplied tools. Never use shell, filesystem, network, MCP, skills, code-editing tools, or any mutation command \u{2014} when repositories are attached, the supplied read-only repository tools are how you read code, not your own filesystem access. Do not ask for approval. If a capability is not one of the supplied tools, it is unavailable. That limits what you may do, not what you may say: writing a statement out in your reply for the user to run themselves is expected \u{2014} see the \"Changing data\" section above."
     );
     let thread = client
         .request(

@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 
 import { errorMessage, runReadonlyQuery } from "../../api/backend";
 import { saveCsv } from "../../lib/csv";
+import { isReadOnlySql } from "../../lib/readOnlySql";
 import { useStore } from "../../state/store";
 import { highlightSql, SnippetActions } from "./sqlSnippet";
 
@@ -58,13 +59,29 @@ function textOf(node: ReactNode): string {
 
 /** A fenced code block: language label, Copy, and — for SQL — a one-click
  *  hand-off into a real query tab, which is the whole point of the assistant
- *  writing SQL in a database client. */
+ *  writing SQL in a database client.
+ *
+ *  The assistant is allowed to write an UPDATE, DELETE, or DDL statement for
+ *  the user, and is never allowed to run one. A block holding a statement the
+ *  assistant could not have executed says so, so the difference between "here
+ *  is what I ran" and "here is what you can run" is visible without reading
+ *  the SQL — and so an UPDATE in a reply never reads as a change already
+ *  made. */
 function CodeBlock({ code, lang }: { code: string; lang: string | null }) {
   const isSql = lang != null && SQL_LANGS.has(lang);
+  const isChange = isSql && !isReadOnlySql(code);
   return (
     <div className="md-code">
       <div className="md-code__bar">
         <span className="md-code__lang mono">{lang ?? "text"}</span>
+        {isChange && (
+          <span
+            className="md-code__badge"
+            title="Ask AI cannot run this. Copy it, or open it in a query tab and run it yourself."
+          >
+            Not run
+          </span>
+        )}
         <SnippetActions text={code} openAsSql={isSql} />
       </div>
       <pre className="md-code__body">

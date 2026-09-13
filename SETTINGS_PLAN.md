@@ -27,8 +27,15 @@ Not yet confirmed — pick which of these to build next.
 
 ## Flagged as non-trivial (don't expect a quick add)
 
-- [ ] Warn before running `DELETE`/`UPDATE` without a `WHERE` — needs real SQL
-      parsing to detect reliably, not just a keyword search
+- [x] ~~Warn before running a destructive statement~~ — shipped as
+      **Confirm destructive statements** (Settings → General, on by default);
+      see FEATURES.md's "Destructive-statement confirmation". It asks for every
+      `DELETE`/`DROP`/`TRUNCATE` rather than only the `WHERE`-less ones, which
+      sidesteps the parsing problem below
+- [ ] Narrow that prompt to only `DELETE`/`UPDATE` *without* a `WHERE` — still
+      needs real SQL parsing to detect reliably, not just a keyword search.
+      Lower value now that the broader confirmation exists; worth it only if
+      the current prompt proves too noisy in practice
 - [ ] Per-column timestamp/timezone formatting — the driver returns every
       value as plain text (`simple_query`, no type info), so this needs a new
       type-aware layer first

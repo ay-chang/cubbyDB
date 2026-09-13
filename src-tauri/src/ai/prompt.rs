@@ -52,6 +52,8 @@ pub struct PromptContext<'a> {
     /// behavior in that case.
     pub cubby: Option<CubbyContext<'a>>,
     /// The conversation's first user message, verbatim. Used only above
+    /// Repositories attached to this connection, if any.
+    pub repos: &'a [RepoContext<'a>],
     /// `relevance::RANKED_SCHEMA_TABLE_THRESHOLD` tables, to rank which
     /// non-pinned tables are worth a line in the compact index — see
     /// `render_schema`. Deliberately the *first* message rather than the
@@ -64,6 +66,20 @@ pub struct PromptContext<'a> {
 }
 
 /// The active cubby's contribution to the prompt: which tables it names,
+/// One attached code repository, as the prompt describes it.
+///
+/// Deliberately says nothing about *how* the model reads it: the Claude Code
+/// route uses its own Read/Grep/Glob and every other route uses CubbyDB's
+/// `search_repo`/`read_file`, and each provider appends that detail itself.
+/// Duplicating it here would contradict one of them.
+pub struct RepoContext<'a> {
+    pub name: &'a str,
+    pub path: &'a str,
+    /// Directories to two levels deep — enough to orient without spending the
+    /// context a real listing would.
+    pub directories: &'a [String],
+}
+
 /// rendered in full detail regardless of `COMPACT_SCHEMA_TABLE_THRESHOLD`.
 pub struct CubbyContext<'a> {
     pub name: &'a str,
@@ -73,10 +89,25 @@ pub struct CubbyContext<'a> {
 pub fn build_system_prompt(ctx: &PromptContext) -> String {
     let mut out = String::with_capacity(4096);
 
-    out.push_str(
-        "You are the AI assistant built into CubbyDB, a desktop PostgreSQL client. \
-         You help the user understand and query their database.\n\n",
-    );
+    // Attaching code changes what this assistant *is*, not just what it can
+    // reach. Left at "understand and query their database", the model treats
+    // a question about a function as off-topic and steers back to the schema
+    // — which is the opposite of why someone attaches a repository.
+    if ctx.repos.is_empty() {
+        out.push_str(
+            "You are the AI assistant built into CubbyDB, a desktop PostgreSQL client. \
+             You help the user understand and query their database.\n\n",
+        );
+    } else {
+        out.push_str(
+            "You are the AI assistant built into CubbyDB, a desktop PostgreSQL client. The user \
+             has attached their application's source code, so you help with two things and they \
+             carry equal weight: understanding and querying the database, and understanding the \
+             code that uses it. A question purely about the code deserves as complete an answer \
+             as a question about a table \u{2014} do not treat it as off-topic, and do not steer it \
+             back to the database when the user did not ask about the database.\n\n",
+        );
+    }
 
     // --- Context -----------------------------------------------------------
     out.push_str("## Context\n");
@@ -134,16 +165,73 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
          remember from training.\n\n",
     );
 
+    // --- Attached code -------------------------------------------------------
+    // The schema says what the columns are; the code says what they mean. A
+    // status column's allowed values, which write path sets a timestamp, why
+    // two tables are joined the way they are — none of that is in the
+    // catalog, and all of it is in the repository.
+    if !ctx.repos.is_empty() {
+        out.push_str("## Attached code\n");
+        out.push_str(
+            "The user has attached the application's own source code. You can read it, and you \
+             cannot change it.\n\n\
+             Read it for two kinds of question, and treat both as squarely your job.\n\
+             - Questions the schema alone cannot settle: what a status or type column's values \
+             actually mean, which code path writes a row, whether a nullable column is null in \
+             practice for a reason, what a column name is really recording. Prefer reading the \
+             code over guessing from a name.\n\
+             - Questions about the code itself, with no database angle at all: what a function \
+             does, where something is implemented, how a module fits together, why a piece of \
+             logic is written the way it is. Answer these directly.\n\n\
+             Search before answering rather than reasoning from the file names in the outline \
+             below \u{2014} it lists directories, not contents. Cite the file, and the line where it \
+             helps, so the user can go look. If a question would be better answered by changing \
+             the code, write the change out in a fenced block for them to apply; you have no way \
+             to edit a file and must never imply that you do.\n\n",
+        );
+        for repo in ctx.repos {
+            out.push_str(&format!("{} ({})\n", repo.name, repo.path));
+            for directory in repo.directories {
+                out.push_str(&format!("  {directory}\n"));
+            }
+        }
+        out.push('\n');
+    }
+
     // --- Writes ------------------------------------------------------------
-    // Deliberately does not promise a write tool: there isn't one yet, and
-    // naming a tool that doesn't exist just gets it called and errored.
+    // Deliberately does not promise a write tool: there isn't one, and naming
+    // a tool that doesn't exist just gets it called and errored.
+    //
+    // Drafting one, though, is encouraged. Executing a change and writing a
+    // change down are different capabilities, and only the first is
+    // dangerous: a fenced block in the panel carries Copy and Open-in-editor,
+    // so what the model writes lands in a query tab that a human still has to
+    // read and run. Refusing to write it just pushes the same statement into
+    // being typed from memory somewhere with less schema knowledge.
     out.push_str(
         "## Changing data\n\
-         You cannot modify this database. A hardcoded command allowlist accepts only one \
-         SELECT-family statement, and PostgreSQL executes it inside a READ ONLY transaction that \
-         is always rolled back. Never attempt or draft INSERT, UPDATE, DELETE, MERGE, DDL, session, \
-         transaction, or administrative commands. If the user asks to change data or schema, say \
-         that Ask AI is strictly read-only and offer a safe SELECT that previews the affected rows.\n\n",
+         You cannot execute a change, and you must not try. `run_sql` takes exactly one \
+         SELECT-family statement, a hardcoded command allowlist rejects everything else, and \
+         PostgreSQL runs what survives inside a READ ONLY transaction that is always rolled back. \
+         Never route a write, DDL, session, transaction, or administrative command through a tool, \
+         and never say or imply that you changed anything.\n\
+         You should still write the statement out when the user asks for one. Put it in a fenced \
+         ```sql block: those blocks carry Copy and Open-in-editor buttons, so the user runs it \
+         themselves in a query tab, having read it first. That hand-off is the feature. Do not \
+         refuse it, and do not quietly hand back a SELECT in place of the change they asked for.\n\
+         When you draft a change:\n\
+         - Call `describe_table` first. A change statement written against a guessed column is \
+         worse than no answer.\n\
+         - One statement per block, and only what was asked for.\n\
+         - Give every UPDATE and DELETE a WHERE clause, keyed on the primary key where you can. If \
+         the user really did ask to hit every row, say so in the line above the block rather than \
+         leaving it implicit.\n\
+         - Add the matching SELECT that shows which rows the change will touch, and run that one \
+         with `run_sql` when the count is worth knowing before they commit to anything.\n\
+         - For anything not trivially reversible — DELETE, DROP, TRUNCATE, ALTER ... DROP COLUMN, \
+         a wide UPDATE — wrap it in BEGIN; ... ROLLBACK; and tell them to swap the ROLLBACK for a \
+         COMMIT once the reported row count looks right.\n\
+         - Say in one short line that you have not run it and what it will change.\n\n",
     );
 
     // --- Style -------------------------------------------------------------
@@ -407,6 +495,7 @@ mod tests {
             server_version: "16.2",
             connection_name: "test",
             cubby: None,
+            repos: &[],
             conversation_seed: "",
         }
     }
@@ -418,6 +507,65 @@ mod tests {
         ctx.active_table = Some(("public", "orders"));
         let prompt = build_system_prompt(&ctx);
         assert!(prompt.contains("Currently viewing: public.orders"));
+    }
+
+    /// The whole write story in one assertion: never executed, always
+    /// written out. Without this, softening either half of that sentence in
+    /// the prompt silently turns the assistant back into one that will not
+    /// even draft an UPDATE.
+    #[test]
+    fn refuses_to_run_a_change_but_still_writes_one_out() {
+        let schemas = vec![schema("public", vec![table("orders", 2)])];
+        let prompt = build_system_prompt(&base_ctx(&schemas));
+        assert!(prompt.contains("You cannot execute a change, and you must not try."));
+        assert!(prompt.contains("You should still write the statement out"));
+        assert!(prompt.contains("```sql block"));
+    }
+
+    /// Attaching code widens what the assistant is for. Without this the role
+    /// line still reads "understand and query their database", and a question
+    /// about a function gets treated as off-topic.
+    #[test]
+    fn code_questions_are_in_scope_once_a_repo_is_attached() {
+        let schemas = vec![schema("public", vec![table("orders", 2)])];
+        let dirs = vec!["src".to_string()];
+        let repos = vec![RepoContext { name: "api", path: "/code/api", directories: &dirs }];
+
+        let without = build_system_prompt(&base_ctx(&schemas));
+        assert!(without.contains("You help the user understand and query their database."));
+        assert!(!without.contains("the code that uses it"));
+
+        let mut ctx = base_ctx(&schemas);
+        ctx.repos = &repos;
+        let with = build_system_prompt(&ctx);
+        assert!(with.contains("they carry equal weight"));
+        assert!(with.contains("with no database angle at all"));
+        // Reading code must never be mistaken for being able to edit it.
+        assert!(with.contains("you have no way to edit a file"));
+    }
+
+    /// Two halves of one sentence, and both matter: without the first the
+    /// model does not know it may read the code, and without the second it
+    /// will offer to edit it.
+    #[test]
+    fn attached_code_is_offered_as_readable_and_only_readable() {
+        let schemas = vec![schema("public", vec![table("orders", 2)])];
+        let dirs = vec!["src".to_string(), "src/db".to_string()];
+        let repos = vec![RepoContext { name: "recette-api", path: "/code/api", directories: &dirs }];
+        let mut ctx = base_ctx(&schemas);
+        ctx.repos = &repos;
+        let prompt = build_system_prompt(&ctx);
+        assert!(prompt.contains("## Attached code"));
+        assert!(prompt.contains("You can read it, and you cannot change it."));
+        assert!(prompt.contains("recette-api (/code/api)"));
+        assert!(prompt.contains("  src/db"));
+    }
+
+    #[test]
+    fn omits_the_code_section_entirely_when_no_repo_is_attached() {
+        let schemas = vec![schema("public", vec![table("orders", 2)])];
+        let prompt = build_system_prompt(&base_ctx(&schemas));
+        assert!(!prompt.contains("Attached code"));
     }
 
     #[test]

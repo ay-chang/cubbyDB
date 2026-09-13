@@ -7,6 +7,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
 import type {
@@ -20,7 +21,9 @@ import type {
   AiMessage,
   AiModelInfo,
   AiProvider,
+  AiActivityStep,
   AiReasoningEffort,
+  AttachedRepo,
   ColumnValue,
   ConnectionInfo,
   ConnectionParams,
@@ -311,6 +314,27 @@ export function deleteCubby(id: string): Promise<void> {
   return invoke("delete_cubby", { id });
 }
 
+// --- Attached repositories ---------------------------------------------------
+
+export function listRepos(): Promise<AttachedRepo[]> {
+  return invoke("list_repos");
+}
+
+export function attachRepo(repo: AttachedRepo): Promise<AttachedRepo> {
+  return invoke("attach_repo", { repo });
+}
+
+export function detachRepo(id: string): Promise<void> {
+  return invoke("detach_repo", { id });
+}
+
+/** Native folder picker for choosing a repository root. Returns null when the
+ *  dialog is dismissed. */
+export async function pickFolder(): Promise<string | null> {
+  const path = await open({ directory: true, multiple: false });
+  return typeof path === "string" ? path : null;
+}
+
 /** Copy text to the OS clipboard (via the backend — see the Rust command). */
 export function writeClipboard(text: string): Promise<void> {
   return invoke("write_clipboard", { text });
@@ -529,6 +553,13 @@ export function aiChat(
     cubby,
     messages,
   });
+}
+
+/** Subscribes to the backend's per-tool-call progress for in-flight AI turns.
+ *  Events carry their own `sessionId` because several connections can be
+ *  running a turn at once. Resolves to the unsubscribe function. */
+export function onAiActivity(handler: (step: AiActivityStep) => void): Promise<UnlistenFn> {
+  return listen<AiActivityStep>("ai-activity", (event) => handler(event.payload));
 }
 
 /** Stops an in-flight `aiChat` turn for this session, if one is still

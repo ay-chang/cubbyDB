@@ -18,6 +18,7 @@ pub mod openai;
 pub mod prompt;
 pub mod provider;
 mod read_only;
+pub(crate) mod read_only_repo;
 pub(crate) mod relevance;
 pub mod tools;
 
@@ -133,9 +134,99 @@ pub struct ModelInfo {
     pub default_reasoning_effort: Option<ReasoningEffort>,
 }
 
-/// Hard cap on ask<->tool round trips within one turn, so a model stuck
-/// re-querying can't loop forever (or run up the user's bill).
-pub const MAX_TOOL_ITERATIONS: u32 = 6;
+/// The Tauri event a turn pushes its tool activity onto, so the panel can
+/// show what the assistant is doing while it is still doing it rather than
+/// only in the summary that arrives with the answer.
+pub const AI_ACTIVITY_EVENT: &str = "ai-activity";
+
+/// How much of a tool's output travels with a `finished` event. The panel
+/// renders this in a disclosure the user can open; a `search_repo` across a
+/// large repository or a wide `run_sql` can be far larger than anything worth
+/// putting in a side panel, and this is a live view, not the record.
+pub const MAX_ACTIVITY_OUTPUT_CHARS: usize = 4000;
+
+/// One tool call's progress, emitted twice: once when it starts (so the panel
+/// can show it running, with a timer) and once when it finishes.
+///
+/// Deliberately richer than `ToolTrace`, which is what gets *persisted* with a
+/// chat and so stays summarized. This is ephemeral — it exists for as long as
+/// the panel wants to show it and is never saved — so it can carry the
+/// output the model actually saw.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiActivity {
+    /// Which connection's turn this belongs to. The panel is per-connection
+    /// and several can be running at once, so every event has to say.
+    pub session_id: String,
+    /// Monotonic within one turn, so a `finished` event replaces the
+    /// `started` one it belongs to rather than appending beside it.
+    pub step: u32,
+    /// `"started"` or `"finished"`.
+    pub phase: &'static str,
+    pub tool: String,
+    /// What it is working on — the SQL, the table, the search pattern. Known
+    /// approximately at `started` (derived from the arguments) and exactly at
+    /// `finished` (taken from the tool's own trace).
+    pub detail: String,
+    pub row_count: Option<i64>,
+    pub error: Option<String>,
+    /// What the tool returned to the model, truncated to
+    /// `MAX_ACTIVITY_OUTPUT_CHARS`. `None` on `started`.
+    pub output: Option<String>,
+    pub elapsed_ms: Option<u64>,
+}
+
+/// A short description of what a tool call is about to do, from its raw
+/// arguments — the panel needs something to show the moment a call starts,
+/// before there is any outcome to read a `detail` off.
+///
+/// Argument names are checked in the order a tool would use them rather than
+/// by tool name, so a new tool gets a reasonable label without being added
+/// here.
+pub fn describe_tool_input(input: &serde_json::Value) -> String {
+    for key in ["sql", "pattern", "path", "query", "table", "subdirectory", "repo"] {
+        if let Some(value) = input.get(key).and_then(serde_json::Value::as_str) {
+            if !value.trim().is_empty() {
+                // `describe_table`/`sample_rows` take a schema alongside the
+                // table, and "public.orders" reads better than "orders".
+                if key == "table" {
+                    if let Some(schema) = input.get("schema").and_then(serde_json::Value::as_str) {
+                        return format!("{schema}.{value}");
+                    }
+                }
+                return value.to_string();
+            }
+        }
+    }
+    String::new()
+}
+
+/// Hard ceiling on ask<->tool round trips within one turn.
+///
+/// Deliberately high enough that ordinary work never reaches it. This is a
+/// runaway guard, not a budget: a model stuck re-querying must eventually
+/// stop, but a turn that is making progress should be allowed to finish.
+/// Answering "how does the app use this table" against an attached
+/// repository is a 15-30 call investigation — grep, read a call site, follow
+/// an import, grep again — and the old cap of 6, tuned when the only tools
+/// were schema lookups, truncated that into a worse answer than no answer.
+///
+/// Two other things bound a turn, and both are better suited to it than a
+/// call count: `TURN_BUDGET` below, and the user, who can stop any turn from
+/// the panel (see `ai_cancel_chat`).
+pub const MAX_TOOL_ITERATIONS: u32 = 100;
+
+/// Wall-clock budget for one turn of CubbyDB's own provider loops.
+///
+/// The count above bounds a model that loops; this bounds one that is merely
+/// slow — a hundred searches over a large repository is a long wait even
+/// when every one of them is useful. On reaching either, the loop asks once
+/// more with no tools available, so the turn ends with the best answer from
+/// what it already gathered rather than an error.
+///
+/// The Codex and Claude Code routes do not use this: their own CLI harness
+/// runs the loop, and `TURN_TIMEOUT` in those modules bounds it instead.
+pub const TURN_BUDGET: std::time::Duration = std::time::Duration::from_secs(600);
 
 /// How many rows of a tool result are fed back to the model — independent of
 /// the app's own 500-row UI pagination cap, this bounds token usage.

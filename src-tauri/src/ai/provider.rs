@@ -6,7 +6,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::tools::{tool_definitions, ToolOutcome};
-use super::{AiChatResult, ChatMessage, ModelInfo, ToolTrace, MAX_TOOL_ITERATIONS};
+use super::{AiChatResult, ChatMessage, ModelInfo, ToolTrace, MAX_TOOL_ITERATIONS, TURN_BUDGET};
 use crate::db::{DbError, DbErrorKind};
 
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
@@ -112,6 +112,7 @@ pub async fn run_loop<F, Fut>(
     send_effort: bool,
     system_prompt: String,
     messages: Vec<ChatMessage>,
+    include_repo_tools: bool,
     run_tool: F,
 ) -> Result<AiChatResult, DbError>
 where
@@ -119,7 +120,7 @@ where
     Fut: Future<Output = Result<ToolOutcome, DbError>>,
 {
     let client = super::http_client();
-    let tools = tool_definitions();
+    let tools = tool_definitions(include_repo_tools);
 
     // Anthropic's own wire-format conversation, seeded from the plain
     // history the frontend sent — grows with tool_use/tool_result blocks as
@@ -130,8 +131,12 @@ where
         .collect();
 
     let mut trace = Vec::new();
+    let deadline = std::time::Instant::now() + TURN_BUDGET;
 
     for _ in 0..MAX_TOOL_ITERATIONS {
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
         let parsed = send_turn(&client, api_key, model, send_effort, &system_prompt, &wire_messages, Some(&tools))
             .await?;
 
@@ -211,7 +216,7 @@ where
         wire_messages.push(json!({ "role": "user", "content": tool_results }));
     }
 
-    // Iteration cap reached without a final answer. Rather than discarding
+    // Iteration cap or time budget reached without a final answer. Rather than discarding
     // everything the turn already learned (the previous behavior — a bare
     // error, no reply, tokens spent for nothing the user can see), ask once
     // more with `tools` omitted. Without a tool to call, the model has no

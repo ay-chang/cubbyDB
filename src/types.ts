@@ -473,6 +473,37 @@ export interface Cubby {
   updatedAt: number;
 }
 
+/** A code repository attached to a saved connection, so the AI assistant can
+ *  read how the application actually uses the database. Scoped to the
+ *  connection rather than to a chat: which repository backs a database is a
+ *  property of the project, not of one question. */
+export interface AttachedRepo {
+  id: string;
+  connectionId: string;
+  /** Absolute path to the repository root. */
+  path: string;
+  /** Display name, and how the model addresses it in a tool call. */
+  name: string;
+  addedAt: number;
+}
+
+/** One tool call's progress during an in-flight AI turn, pushed from the
+ *  backend as it happens. Richer than the `AiTrace` that gets saved with a
+ *  chat — this one carries the tool's output and is never persisted, so the
+ *  panel can show what the assistant actually saw while it is still working. */
+export interface AiActivityStep {
+  sessionId: string;
+  /** Monotonic within a turn; a "finished" event replaces its "started". */
+  step: number;
+  phase: "started" | "finished";
+  tool: string;
+  detail: string;
+  rowCount: number | null;
+  error: string | null;
+  output: string | null;
+  elapsedMs: number | null;
+}
+
 // --- AI assistant ------------------------------------------------------------
 
 export type AiProvider = "anthropic" | "openai" | "codex" | "claudeCode";

@@ -22,6 +22,8 @@ import type {
   AiReasoningEffort,
   ColumnValue,
   ConnectionParams,
+  AiActivityStep,
+  AttachedRepo,
   Cubby,
   CubbyEntry,
   DbError,
@@ -34,6 +36,7 @@ import type {
   SchemaNode,
 } from "../types";
 import { errorMessage, isDbError } from "../api/backend";
+import { describeDestructiveRun, findDestructiveStatements } from "../lib/destructiveSql";
 
 /**
  * A tab is a `query` tab (SQL editor + results), a `table` tab (results
@@ -213,6 +216,11 @@ export interface ConnectionSlot {
   aiAttachedTables: { schema: string; table: string }[];
   /** True while an `aiChat` call is in flight for this connection. */
   aiSending: boolean;
+  /** Tool calls from the turn in flight (or the one that just finished),
+   *  newest last. Cleared when the next turn starts — this is a live view,
+   *  not a record: the saved message keeps the summarized `trace` instead,
+   *  which is why reopening a chat shows steps but not their output. */
+  aiActivity: AiActivityStep[];
   /** A failed turn, shown as a retryable strip under the thread. Deliberately
    *  *not* an assistant message: an error written into `aiMessages` would be
    *  saved to the chat and replayed to the model next turn as something it
@@ -941,6 +949,10 @@ export const DEFAULT_HISTORY_LIMIT = 200;
 
 interface ConfirmDialogState {
   message: string;
+  /** Optional lines rendered as a code block under the message — the SQL a
+   *  destructive-statement confirmation is asking about. Absent for the
+   *  plain "are you sure?" confirmations, which are message-only. */
+  details?: string[];
   confirmLabel: string;
   onConfirm: () => void;
   onCancel: () => void;
@@ -979,6 +991,12 @@ interface AppStore {
    *  Small, reference-only records, so unlike AI chats there's no
    *  list/full-record split. */
   cubbies: Cubby[];
+  /** Every attached repository (all connections' — selectors filter to the
+   *  active one). Connection-scoped rather than per-chat: which repository
+   *  backs a database doesn't change between questions, unlike which tables
+   *  matter, so attaching one is a set-once act that every later chat on that
+   *  connection inherits. */
+  repos: AttachedRepo[];
   cubbiesOpen: boolean;
   /** The cubby currently "open" — pins its tables in the schema tree and
    *  feeds them to the AI as extra context. `null` means no cubby is
@@ -1088,6 +1106,11 @@ interface AppStore {
   starterSql: string;
   /** Whether the schema tree refreshes automatically after connecting. */
   autoRefreshSchema: boolean;
+  /** Whether running a statement that removes rows or objects (`DELETE`,
+   *  `DROP`, `TRUNCATE`) asks first. On by default: the cost of being wrong
+   *  is asymmetric, and one click is a cheap way to re-read a `WHERE`
+   *  clause. */
+  confirmDestructiveSql: boolean;
   /** How many entries the History panel fetches/shows. */
   historyLimit: number;
   /** Field separator used for CSV export. */
@@ -1134,6 +1157,12 @@ interface AppStore {
 
   // --- cubbies ---
   loadCubbies: () => Promise<void>;
+  loadRepos: () => Promise<void>;
+  /** Opens the folder picker and attaches the chosen directory to the active
+   *  saved connection. A no-op on an ad-hoc connection, which has no stable
+   *  id to attach to. */
+  attachRepo: () => Promise<void>;
+  detachRepo: (id: string) => Promise<void>;
   toggleCubbies: () => void;
   createCubby: (name: string) => Promise<void>;
   renameCubby: (id: string, name: string) => Promise<void>;
@@ -1446,6 +1475,7 @@ interface AppStore {
   setCloseTabsOnCubbyOpen: (enabled: boolean) => void;
   setStarterSql: (sql: string) => void;
   setAutoRefreshSchema: (enabled: boolean) => void;
+  setConfirmDestructiveSql: (enabled: boolean) => void;
   setHistoryLimit: (limit: number) => void;
   setCsvDelimiter: (delimiter: Delimiter) => void;
   setRowCopyDelimiter: (delimiter: Delimiter) => void;
@@ -1527,6 +1557,7 @@ const RESTORE_TABS_KEY = "cubbydb:restoreTabsOnLaunch";
 const CLOSE_TABS_ON_CUBBY_OPEN_KEY = "cubbydb:closeTabsOnCubbyOpen";
 const STARTER_SQL_KEY = "cubbydb:starterSql";
 const AUTO_REFRESH_SCHEMA_KEY = "cubbydb:autoRefreshSchema";
+const CONFIRM_DESTRUCTIVE_SQL_KEY = "cubbydb:confirmDestructiveSql";
 const HISTORY_LIMIT_KEY = "cubbydb:historyLimit";
 const CSV_DELIMITER_KEY = "cubbydb:csvDelimiter";
 const ROW_COPY_DELIMITER_KEY = "cubbydb:rowCopyDelimiter";
@@ -2034,6 +2065,25 @@ function saveAutoRefreshSchema(enabled: boolean) {
   }
 }
 
+/** Read the saved destructive-statement confirmation preference, defaulting
+ *  to on — including when storage is unreadable, so a broken localStorage
+ *  fails toward asking rather than toward silently dropping a table. */
+function loadConfirmDestructiveSql(): boolean {
+  try {
+    return localStorage.getItem(CONFIRM_DESTRUCTIVE_SQL_KEY) !== "false";
+  } catch {
+    return true;
+  }
+}
+
+function saveConfirmDestructiveSql(enabled: boolean) {
+  try {
+    localStorage.setItem(CONFIRM_DESTRUCTIVE_SQL_KEY, String(enabled));
+  } catch {
+    // Storage unavailable — non-fatal.
+  }
+}
+
 /** Read the saved History-panel fetch limit, defaulting to 200. */
 function loadHistoryLimit(): number {
   try {
@@ -2349,11 +2399,16 @@ export const useStore = create<AppStore>((set, get) => {
    * user confirmed. Used by every action that would discard unsaved cell
    * edits: switching tabs, closing a tab, or re-running a dirty tab's query.
    */
-  function requestConfirm(message: string, confirmLabel: string): Promise<boolean> {
+  function requestConfirm(
+    message: string,
+    confirmLabel: string,
+    details?: string[],
+  ): Promise<boolean> {
     return new Promise((resolve) => {
       set({
         confirmDialog: {
           message,
+          details,
           confirmLabel,
           onConfirm: () => {
             set({ confirmDialog: null });
@@ -2668,6 +2723,7 @@ export const useStore = create<AppStore>((set, get) => {
     savedQueries: [],
     savedQueriesOpen: false,
     cubbies: [],
+    repos: [],
     cubbiesOpen: false,
     activeCubbyId: null,
     connections: {},
@@ -2707,6 +2763,7 @@ export const useStore = create<AppStore>((set, get) => {
     closeTabsOnCubbyOpen: loadCloseTabsOnCubbyOpen(),
     starterSql: loadStarterSql(),
     autoRefreshSchema: loadAutoRefreshSchema(),
+    confirmDestructiveSql: loadConfirmDestructiveSql(),
     historyLimit: loadHistoryLimit(),
     csvDelimiter: loadDelimiter(CSV_DELIMITER_KEY, ","),
     rowCopyDelimiter: loadDelimiter(ROW_COPY_DELIMITER_KEY, "\t"),
@@ -2722,6 +2779,30 @@ export const useStore = create<AppStore>((set, get) => {
       await get().loadSavedConnections();
       await get().loadSavedQueries();
       await get().loadCubbies();
+      await get().loadRepos();
+
+      // One subscription for the whole app: events name their own session, so
+      // routing is a lookup rather than a listener per connection. Never
+      // unsubscribed — it lives exactly as long as the app does.
+      void api
+        .onAiActivity((step) => {
+          set((s) => {
+            const entry = Object.entries(s.connections).find(
+              ([, slot]) => slot.sessionId === step.sessionId,
+            );
+            if (!entry) return s;
+            const [connectionId, slot] = entry;
+            // A "finished" event replaces the "started" one it belongs to, so
+            // a step is one row that fills in rather than two rows.
+            const existing = slot.aiActivity.findIndex((a) => a.step === step.step);
+            const aiActivity =
+              existing === -1
+                ? [...slot.aiActivity, step]
+                : slot.aiActivity.map((a, i) => (i === existing ? step : a));
+            return { connections: patchSlot(s.connections, connectionId, { aiActivity }) };
+          });
+        })
+        .catch((err) => console.error("failed to subscribe to AI activity:", errorMessage(err)));
 
       // Try to reconnect to the last-used database so the user doesn't have to
       // re-enter it every launch. Remember its params either way, to prefill the
@@ -2837,6 +2918,7 @@ export const useStore = create<AppStore>((set, get) => {
         aiMessages: [],
         aiAttachedTables: [],
         aiSending: false,
+        aiActivity: [],
         aiError: null,
         aiTurnToken: 0,
         aiChatId: null,
@@ -3171,6 +3253,21 @@ export const useStore = create<AppStore>((set, get) => {
           "Refresh",
         );
         if (!ok) return;
+      }
+
+      // Confirm anything that removes rows or objects. Content-based, so the
+      // generated SELECTs behind table tabs, paging, and background refreshes
+      // never trigger it — only SQL that actually deletes something does. A
+      // silent refresh is exempt regardless: it re-runs SQL the user already
+      // ran deliberately, and a modal nobody asked for is worse than useless
+      // in a background path.
+      if (!silent && get().confirmDestructiveSql) {
+        const destructive = findDestructiveStatements(sqlToRun);
+        if (destructive.length > 0) {
+          const { message, statements } = describeDestructiveRun(destructive);
+          const ok = await requestConfirm(message, "Run anyway", statements);
+          if (!ok) return;
+        }
       }
 
       if (silent) set({ silentRefreshTabId: id });
@@ -4321,6 +4418,7 @@ export const useStore = create<AppStore>((set, get) => {
         connections: patchSlot(s.connections, connectionId, {
           aiSending: true,
           aiError: null,
+          aiActivity: [],
           aiTurnToken: started,
         }),
       }));
@@ -4662,6 +4760,60 @@ export const useStore = create<AppStore>((set, get) => {
         set({ cubbies: list });
       } catch (err) {
         console.error("failed to load cubbies:", errorMessage(err));
+      }
+    },
+
+    async loadRepos() {
+      try {
+        set({ repos: await api.listRepos() });
+      } catch (err) {
+        console.error("failed to load repos:", errorMessage(err));
+      }
+    },
+
+    async attachRepo() {
+      const connectionId = get().activeConnectionId;
+      const slot = connectionId ? get().connections[connectionId] : null;
+      // The *saved* connection's id, which is what the backend scopes by. An
+      // ad-hoc connection has none, so there is nothing durable to attach to
+      // — the same limitation saved chats already have.
+      const savedId = slot?.current.connectionId;
+      if (!savedId) return;
+
+      let path: string | null = null;
+      try {
+        path = await api.pickFolder();
+      } catch (err) {
+        // A rejected picker is silent otherwise — the caller is a `void`ed
+        // promise — and a button that does nothing is indistinguishable from
+        // one that is broken.
+        console.error("folder picker failed:", errorMessage(err));
+        return;
+      }
+      if (!path) return;
+
+      try {
+        const repo = await api.attachRepo({
+          id: "",
+          connectionId: savedId,
+          path,
+          name: "",
+          addedAt: 0,
+        });
+        set((s) => ({ repos: [...s.repos.filter((r) => r.id !== repo.id), repo] }));
+      } catch (err) {
+        // Near-unreachable: the backend only rejects a path that is not an
+        // existing directory, and the native picker cannot return one.
+        console.error("failed to attach repo:", errorMessage(err));
+      }
+    },
+
+    async detachRepo(id) {
+      try {
+        await api.detachRepo(id);
+        set((s) => ({ repos: s.repos.filter((r) => r.id !== id) }));
+      } catch (err) {
+        console.error("failed to detach repo:", errorMessage(err));
       }
     },
 
@@ -5110,6 +5262,11 @@ export const useStore = create<AppStore>((set, get) => {
       set({ autoRefreshSchema: enabled });
     },
 
+    setConfirmDestructiveSql(enabled) {
+      saveConfirmDestructiveSql(enabled);
+      set({ confirmDestructiveSql: enabled });
+    },
+
     setHistoryLimit(limit) {
       saveHistoryLimit(limit);
       set({ historyLimit: limit });
@@ -5200,6 +5357,35 @@ export function useActiveAiAttachedTables(): { schema: string; table: string }[]
     s.activeConnectionId
       ? s.connections[s.activeConnectionId]?.aiAttachedTables ?? EMPTY_AI_ATTACHED_TABLES
       : EMPTY_AI_ATTACHED_TABLES,
+  );
+}
+
+const EMPTY_REPOS: AttachedRepo[] = [];
+
+/** Repositories attached to the active connection's *saved* record. Empty for
+ *  an ad-hoc connection, which has no stable id to attach to, and while
+ *  nothing is connected. Memoized against a shared empty array so a
+ *  connection with no repos doesn't re-render on every store change. */
+export function useActiveRepos(): AttachedRepo[] {
+  const savedId = useStore((s) =>
+    s.activeConnectionId ? s.connections[s.activeConnectionId]?.current.connectionId : undefined,
+  );
+  const repos = useStore((s) => s.repos);
+  return useMemo(
+    () => (savedId ? repos.filter((repo) => repo.connectionId === savedId) : EMPTY_REPOS),
+    [repos, savedId],
+  );
+}
+
+const EMPTY_AI_ACTIVITY: AiActivityStep[] = [];
+
+/** Live tool activity for the active connection's current (or just-finished)
+ *  turn. */
+export function useActiveAiActivity(): AiActivityStep[] {
+  return useStore((s) =>
+    s.activeConnectionId
+      ? s.connections[s.activeConnectionId]?.aiActivity ?? EMPTY_AI_ACTIVITY
+      : EMPTY_AI_ACTIVITY,
   );
 }
 

@@ -92,6 +92,7 @@
 }
 .confirm-card {
   width: 380px;
+  max-height: 80vh;
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -104,6 +105,60 @@
 .confirm-card__message {
   font-size: 13.5px;
   line-height: 1.5;
+  color: var(--text);
+}
+/* Wider when the card carries SQL: 380px wraps a `DELETE ... WHERE` after a
+   few words, which is exactly the part the user opened this dialog to read. */
+.confirm-card--code {
+  width: 520px;
+}
+/* The code block and its Show more/less control travel together, on a
+   tighter gap than the card's own. */
+.confirm-card__code-group {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+/* The statements themselves. Each is pre-flattened to one line, so this
+   scrolls in both directions rather than wrapping: wrapping would turn a list
+   of statements into a wall of text and lose the one-line-per-statement scan
+   that makes the count meaningful.
+
+   Collapsed, the height is whatever five lines need. Expanded, `max-height`
+   caps it well short of the card's own 80vh so a long script scrolls inside a
+   dialog that stays a sane size — on a tall monitor 80vh alone would render a
+   1000px-tall modal instead. */
+.confirm-card__code {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  max-height: 300px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+}
+.confirm-card__more {
+  padding: 2px 0;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  transition: color var(--transition);
+}
+.confirm-card__more:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+.confirm-card__code code {
+  display: block;
+  white-space: pre;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.7;
   color: var(--text);
 }
 .confirm-card__actions {

@@ -68,6 +68,15 @@ export const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
     keywords: ["connect", "schema tree"],
   },
   {
+    id: "general.confirm-destructive",
+    label: "Confirm destructive statements",
+    description: "Ask before running DELETE, DROP, or TRUNCATE.",
+    path: "General",
+    section: "general",
+    targetId: "general.confirm-destructive",
+    keywords: ["delete", "drop", "truncate", "warn", "safety", "confirmation"],
+  },
+  {
     id: "general.history-limit",
     label: "Query history limit",
     description: "Choose how many recent query executions are shown.",

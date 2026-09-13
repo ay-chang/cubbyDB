@@ -99,10 +99,16 @@ pub(crate) fn validate_read_only_statement(sql: &str) -> Result<(), DbError> {
     Ok(())
 }
 
+/// Also read by the model, as the failed tool call's result — so it says what
+/// to do instead of the rejected statement rather than only that it was
+/// rejected. Retrying a write is never the answer; writing it down for the
+/// user to run is (see `ai::prompt`'s "Changing data" section).
 fn read_only_error() -> DbError {
     DbError::new(
         DbErrorKind::Query,
-        "Ask AI can only execute one read-only SELECT-family statement.",
+        "Ask AI can only execute one read-only SELECT-family statement. A change is never \
+         executed here — put the statement in a fenced sql block in the reply instead, so the \
+         user can review it and run it themselves.",
     )
 }
 

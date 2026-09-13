@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use super::tools::{tool_definitions, ToolOutcome};
 use super::{
     AiChatResult, ChatMessage, ModelInfo, ReasoningEffort, ToolTrace, MAX_TOOL_ITERATIONS,
+    TURN_BUDGET,
 };
 use crate::db::{DbError, DbErrorKind};
 
@@ -132,6 +133,7 @@ pub async fn run_loop<F, Fut>(
     reasoning_effort: Option<ReasoningEffort>,
     system_prompt: String,
     messages: Vec<ChatMessage>,
+    include_repo_tools: bool,
     run_tool: F,
 ) -> Result<AiChatResult, DbError>
 where
@@ -139,14 +141,18 @@ where
     Fut: Future<Output = Result<ToolOutcome, DbError>>,
 {
     let client = super::http_client();
-    let tools = openai_tool_definitions();
+    let tools = openai_tool_definitions(include_repo_tools);
     let mut input: Vec<Value> = messages
         .iter()
         .map(|message| json!({ "role": message.role, "content": message.content }))
         .collect();
     let mut trace = Vec::new();
+    let deadline = std::time::Instant::now() + TURN_BUDGET;
 
     for _ in 0..MAX_TOOL_ITERATIONS {
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
         let parsed =
             send_turn(&client, api_key, model, reasoning_effort, &system_prompt, &input, Some(&tools)).await?;
 
@@ -270,8 +276,8 @@ async fn send_turn(
 
 /// The existing neutral definitions use Anthropic's `input_schema` key.
 /// Responses function tools use the same JSON Schema under `parameters`.
-fn openai_tool_definitions() -> Value {
-    let Some(definitions) = tool_definitions().as_array().cloned() else {
+fn openai_tool_definitions(include_repo_tools: bool) -> Value {
+    let Some(definitions) = tool_definitions(include_repo_tools).as_array().cloned() else {
         return json!([]);
     };
     Value::Array(
@@ -378,7 +384,7 @@ mod tests {
 
     #[test]
     fn responses_tools_use_parameters() {
-        let tools = openai_tool_definitions();
+        let tools = openai_tool_definitions(false);
         let first = &tools.as_array().unwrap()[0];
         assert_eq!(first["type"], "function");
         assert!(first.get("parameters").is_some());

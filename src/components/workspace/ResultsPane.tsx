@@ -1476,6 +1476,10 @@ function ResultsGrid({
         return;
       }
       if (e.key === "Escape") {
+        // The find bar and column-jump popup own Escape while they are open:
+        // closing what the user just opened beats clearing a selection they
+        // may not even remember making.
+        if (findOpen || colJumpOpen) return;
         // Deselect rather than letting Escape fall through to whatever else
         // it's bound to elsewhere (e.g. the tab-level shortcut) — with a
         // cell or row focused, Escape's job is just to back out of that.
@@ -1557,6 +1561,8 @@ function ResultsGrid({
     showCopyStatus,
     rowCopyDelimiter,
     clearSelection,
+    findOpen,
+    colJumpOpen,
   ]);
 
   // Column geometry in display order: `starts[pos]` is the x offset of the
@@ -2106,7 +2112,26 @@ function ResultsGrid({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (settingsOpen || e.defaultPrevented || e.repeat) return;
+      if (settingsOpen || e.repeat) return;
+      // Escape is checked ahead of the `defaultPrevented` bail below, because
+      // by the time this listener runs something else has usually already
+      // called preventDefault on it: the grid's own deselect handler, and
+      // `Workspace`'s fullscreen guard, which both listen on `window` and are
+      // registered first. Those calls suppress the *browser's* default (exiting
+      // fullscreen), they are not a claim on the key — and treating them as one
+      // is what left Escape unable to close this bar.
+      if (e.key === "Escape" && (findOpen || colJumpOpen)) {
+        e.preventDefault();
+        if (colJumpOpen) {
+          setColJumpOpen(false);
+          setColJumpQuery("");
+        } else {
+          setFindOpen(false);
+          setFindQuery("");
+        }
+        return;
+      }
+      if (e.defaultPrevented) return;
       if (matchesKeybinding(e, findBinding)) {
         e.preventDefault();
         setColJumpOpen(false);
@@ -2130,12 +2155,6 @@ function ResultsGrid({
       // opened while the SQL editor still held focus), so arrow/enter
       // navigation always works once the popup is open.
       if (colJumpOpen) {
-        if (e.key === "Escape") {
-          e.preventDefault();
-          setColJumpOpen(false);
-          setColJumpQuery("");
-          return;
-        }
         if (e.key === "ArrowDown") {
           e.preventDefault();
           const max = Math.min(colJumpMatches.length, 20) - 1;
@@ -2156,12 +2175,6 @@ function ResultsGrid({
         return;
       }
       if (!findOpen) return;
-      if (e.key === "Escape") {
-        e.preventDefault();
-        setFindOpen(false);
-        setFindQuery("");
-        return;
-      }
       if (e.key === "Enter" && document.activeElement === findInputRef.current) {
         e.preventDefault();
         gotoFindMatch(e.shiftKey ? -1 : 1);
