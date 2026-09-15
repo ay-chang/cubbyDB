@@ -33,6 +33,50 @@ export interface ReleaseNotesEntry {
 
 export const RELEASE_NOTES: ReleaseNotesEntry[] = [
   {
+    version: "0.1.19",
+    date: "2026-09-14",
+    sections: [
+      {
+        heading: "Ask AI",
+        items: [
+          "Attach your app's code repositories to a connection, and the assistant can read them — to explain how your code actually uses a table, or to answer questions about the code itself. It can read your code but never change it, and a repo stays attached to that connection for every later chat.",
+          "Watch the assistant work: each step — querying, searching code, reading a file — appears as it happens. Steps start collapsed; open one to see what it found.",
+          "The assistant can take many more steps before answering, so longer investigations finish instead of stopping early. Press Escape to stop a reply at any time.",
+          "Ask for an UPDATE, DELETE or schema change and the assistant writes the statement out for you to review and run yourself. It still can't run changes on its own, and SQL it didn't run is labelled \"Not run\".",
+          "The message box is roomier, and shows exactly what's sent with your question: the table you're viewing, tables you've attached, and your repos.",
+          "The chat follows along as a reply comes in, and stops if you scroll up to read. Saved chats open at their newest message.",
+        ],
+      },
+      {
+        heading: "Running SQL",
+        items: [
+          "Running a statement that deletes rows or drops a table now asks first, and shows you the statements it found. Turn this off in Settings → General → Confirm destructive statements.",
+        ],
+      },
+      {
+        heading: "Results grid",
+        items: [
+          "The grid uses your system's overlay scrollbars again, the same as every other pane.",
+          "Escape closes the find bar (Cmd/Ctrl+F), even after you've clicked into the results.",
+          "Add row, Import CSV and Remove row no longer get cut off when the window is narrow — the toolbar wraps onto a second line instead.",
+        ],
+      },
+      {
+        heading: "Connections",
+        items: [
+          "Browsing for an SSH private key file on the connection screen works again.",
+        ],
+      },
+      {
+        heading: "Look & feel",
+        items: [
+          "The top bar shows the new CubbyDB logo, and the app icon has been refreshed to match.",
+          "The first tab now sits flush against the sidebar.",
+        ],
+      },
+    ],
+  },
+  {
     version: "0.1.18",
     date: "2026-09-07",
     sections: [
