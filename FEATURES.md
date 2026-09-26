@@ -405,8 +405,9 @@ code comments or AGENTS.md's architecture section.
 
 ## Table structure
 
-- Right-click a table in the schema tree → "View structure" opens a read-only
-  tab showing its **columns** (type, nullable, default expression, primary/
+- Right-click a table in the schema tree, or right-click that table's own
+  open **tab** in the tab strip, → "View structure" opens a read-only tab
+  showing its **columns** (type, nullable, default expression, primary/
   foreign-key badges), **indexes**, and **check constraints**
 - Foreign-key badges are merged in from the schema tree's own data; index and
   check-constraint text comes straight from Postgres's own `pg_indexes` /
@@ -451,8 +452,9 @@ code comments or AGENTS.md's architecture section.
 
 ## ER / relationship diagram
 
-- Right-click a table in the tree → "View ER diagram" opens a pannable,
-  zoomable canvas centered on that table plus its **directly connected**
+- Right-click a table in the tree, or right-click that table's own open
+  **tab** in the tab strip, → "View ER diagram" opens a pannable, zoomable
+  canvas centered on that table plus its **directly connected**
   tables (one hop via foreign keys, either direction) — not the whole
   schema, so it stays small and fast no matter how many tables the schema
   has. Built entirely from schema data already loaded, no extra fetch

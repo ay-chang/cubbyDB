@@ -36,6 +36,8 @@ export function EditorTabs({ onSaveQuery }: { onSaveQuery: () => void }) {
   const reorderTab = useStore((s) => s.reorderTab);
   const activeCubby = useActiveCubby();
   const addEntryToCubby = useStore((s) => s.addEntryToCubby);
+  const openTableStructure = useStore((s) => s.openTableStructure);
+  const openErDiagram = useStore((s) => s.openErDiagram);
   const bindings = useKeybindingStore((s) => s.bindings);
   const showTabIcons = useStore((s) => s.showTabIcons);
 
@@ -155,8 +157,9 @@ export function EditorTabs({ onSaveQuery }: { onSaveQuery: () => void }) {
 
   const menuTab = menu ? tabs.find((t) => t.id === menu.tabId) ?? null : null;
   const menuEntry = menuTab ? tabCubbyEntry(menuTab) : null;
+  const menuTableSource = menuTab?.kind === "table" ? menuTab.source ?? null : null;
   const addDisabledReason = !activeCubby
-    ? "Open a cubby first"
+    ? "Open a cubby to add"
     : !menuEntry
       ? "Save this query first"
       : null;
@@ -251,7 +254,7 @@ export function EditorTabs({ onSaveQuery }: { onSaveQuery: () => void }) {
           style={{ left: menu.x, top: menu.y }}
           onClick={(e) => e.stopPropagation()}
         >
-          {menuTab.kind === "table" && (
+          {menuTab.kind === "table" && menuTableSource && (
             <>
               <button
                 className="context-menu__item"
@@ -263,11 +266,29 @@ export function EditorTabs({ onSaveQuery }: { onSaveQuery: () => void }) {
               >
                 Duplicate as Branch
               </button>
+              <button
+                className="context-menu__item"
+                onClick={() => {
+                  setMenu(null);
+                  void openTableStructure(menuTableSource.schema, menuTableSource.table);
+                }}
+              >
+                View structure
+              </button>
+              <button
+                className="context-menu__item"
+                onClick={() => {
+                  setMenu(null);
+                  void openErDiagram(menuTableSource.schema, menuTableSource.table);
+                }}
+              >
+                View ER diagram
+              </button>
               <div className="context-menu__sep" />
             </>
           )}
           {/* Stays visible but disabled when it can't act, so the reason
-              ("open a cubby first", "save this query first") is discoverable
+              ("open a cubby to add", "save this query first") is discoverable
               rather than the menu just appearing empty. */}
           <button
             className="context-menu__item"

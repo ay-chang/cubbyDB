@@ -429,7 +429,7 @@ function useWorkspaceShortcuts(toggleSidebar: () => void) {
       if (matchesKeybinding(e, bindings["workspace.addToCubby"])) {
         e.preventDefault();
         if (!activeCubby) {
-          showToast("Open a cubby first", "error");
+          showToast("Open a cubby to add", "error");
         } else {
           const activeTab = tabs.find((t) => t.id === activeTabId);
           const entry = activeTab ? tabCubbyEntry(activeTab) : null;
