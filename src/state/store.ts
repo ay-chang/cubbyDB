@@ -308,7 +308,12 @@ export const THEME_MODE: Record<Theme, ThemeMode> = {
 /** The settings modal's top-level tabs — kept here (not in `SettingsDialog`)
  *  since `openSettings` needs to name one as a one-shot "jump to this
  *  section" directive. */
-export type SettingsSection = "general" | "appearance" | "aiAssistant" | "shortcuts";
+export type SettingsSection =
+  | "general"
+  | "connections"
+  | "appearance"
+  | "aiAssistant"
+  | "shortcuts";
 
 /** The accent color used for buttons, active states, and SQL keyword
  *  highlighting. Persisted across launches. */
@@ -1134,12 +1139,21 @@ interface AppStore {
    *  takeover, since a background refresh of already-loaded data shouldn't
    *  read as a brand new, cancelable query. */
   silentRefreshTabId: string | null;
-  /** Session id the "edit connection" overlay is open for, if any — lifted
-   *  out of `TopBar` (which still renders the overlay) so other UI, like the
-   *  AI panel's "this connection isn't saved" nudge, can open it too. */
+  /** Session id the "edit connection" overlay is open for, if any — in the
+   *  store so other UI, like the AI panel's "this connection isn't saved"
+   *  nudge or Settings → Connections, can open it too. */
   editConnectionSessionId: string | null;
   openEditConnection: (sessionId: string) => void;
   closeEditConnection: () => void;
+  /** The add/manage-connection overlay (the top bar's "+", or Settings →
+   *  Connections), `null` when closed. `savedConnectionId` preloads that
+   *  saved connection into the form for editing. */
+  connectionPanel: { savedConnectionId: string | null } | null;
+  openConnectionPanel: (savedConnectionId?: string) => void;
+  closeConnectionPanel: () => void;
+  /** Deletes a saved connection after a confirmation. Any live session
+   *  opened from it stays connected, just no longer linked to a record. */
+  deleteSavedConnection: (id: string) => Promise<void>;
 
   // --- lifecycle ---
   initialize: () => Promise<void>;
@@ -2781,6 +2795,7 @@ export const useStore = create<AppStore>((set, get) => {
     settingsSection: null,
     silentRefreshTabId: null,
     editConnectionSessionId: null,
+    connectionPanel: null,
 
     async initialize() {
       if (didInitialize) return;
@@ -5331,6 +5346,27 @@ export const useStore = create<AppStore>((set, get) => {
 
     closeEditConnection() {
       set({ editConnectionSessionId: null });
+    },
+
+    openConnectionPanel(savedConnectionId) {
+      set({ connectionPanel: { savedConnectionId: savedConnectionId ?? null } });
+    },
+
+    closeConnectionPanel() {
+      set({ connectionPanel: null });
+    },
+
+    async deleteSavedConnection(id) {
+      const conn = get().savedConnections.find((c) => c.id === id);
+      if (!conn) return;
+      const ok = await requestConfirm(`Delete the saved connection "${conn.name}"?`, "Delete");
+      if (!ok) return;
+      try {
+        await api.deleteConnection(id);
+        await get().loadSavedConnections();
+      } catch (err) {
+        get().showToast(`Couldn't delete "${conn.name}": ${errorMessage(err)}`, "error");
+      }
     },
   };
 });

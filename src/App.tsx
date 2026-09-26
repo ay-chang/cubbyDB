@@ -5,6 +5,7 @@ import { DeleteImpactDialog } from "./components/common/DeleteImpactDialog";
 import { ErrorBoundary } from "./components/common/ErrorBoundary";
 import { SettingsDialog } from "./components/common/SettingsDialog";
 import { Spinner } from "./components/common/Spinner";
+import { ConnectionDialogs } from "./components/connection/ConnectionDialogs";
 import { ConnectionScreen } from "./components/connection/ConnectionScreen";
 import { Workspace } from "./components/workspace/Workspace";
 import { matchesKeybinding, useKeybindingStore } from "./lib/keybindings";
@@ -58,6 +59,7 @@ export function App() {
           <Workspace />
         </ErrorBoundary>
       )}
+      <ConnectionDialogs />
       <ConfirmDialog />
       <DeleteImpactDialog />
       <SettingsDialog />

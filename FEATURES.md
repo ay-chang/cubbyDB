@@ -29,6 +29,11 @@ code comments or AGENTS.md's architecture section.
 - **Duplicate** a saved card (⧉ icon, next to Delete) to clone it into a new
   saved connection pre-loaded in the form, ready to tweak (e.g. cloning a
   prod connection to make a staging one)
+- **Settings → Connections** is a dedicated place to manage them: every open
+  connection (Edit, Disconnect) and every saved one (Connect, Edit, Delete —
+  delete asks first), plus Add connection. Edit opens the same connection
+  panel as the top bar's "+", with that connection already loaded — it works
+  from the connect screen too, not just the workspace
 - **Multiple connections at once**: connecting never closes another live
   connection — the "+" in the top bar's connection switcher (or
   Cmd/Ctrl+Shift+N) opens a form for an *additional* database. Every open
@@ -413,11 +418,6 @@ code comments or AGENTS.md's architecture section.
   check-constraint text comes straight from Postgres's own `pg_indexes` /
   `pg_get_constraintdef` rather than being reconstructed by hand, so it's
   always accurate
-- Deliberately does **not** generate a full `CREATE TABLE` statement — storage
-  params, partitioning, and generated/identity columns make a faithful
-  reconstruction genuinely complex; the structured columns/indexes/constraints
-  view covers the common "what does this table look like" need instead
-- Also shows **triggers** (full `CREATE TRIGGER` text, straight from
 - Each index has an **Explain** toggle that breaks its definition down into
   plain English — unique/composite semantics, what its access method (B-tree,
   GIN, GiST, hash, BRIN, SP-GiST) is actually good for, a functional/
@@ -426,6 +426,11 @@ code comments or AGENTS.md's architecture section.
   index's own `CREATE INDEX` text — no AI call, so it's instant and never
   wrong about what the statement says. Hidden for the rare definition shape
   it doesn't recognize, rather than guessing
+- Deliberately does **not** generate a full `CREATE TABLE` statement — storage
+  params, partitioning, and generated/identity columns make a faithful
+  reconstruction genuinely complex; the structured columns/indexes/constraints
+  view covers the common "what does this table look like" need instead
+- Also shows **triggers** (full `CREATE TRIGGER` text, straight from
   `pg_get_triggerdef` — internal triggers backing FK constraints are
   filtered out) and **row-level security**: whether RLS is enabled at all,
   and if so, every policy's permissive/restrictive mode, command, roles, and
@@ -820,9 +825,9 @@ code comments or AGENTS.md's architecture section.
 
 ## Settings
 
-Four top-level tabs: **General** (behavior), **Appearance** (with
-**Interface** / **Table** / **Sidebar** / **Editor** sub-tabs), **AI Assistant**, and
-**Keyboard Shortcuts**.
+Five top-level tabs: **General** (behavior), **Connections**, **Appearance**
+(with **Interface** / **Table** / **Sidebar** / **Editor** sub-tabs), **AI
+Assistant**, and **Keyboard Shortcuts**.
 Every setting applies live and is persisted (no restart needed for anything in
 here — it's all frontend-only). Open Settings from the top-bar gear or with
 the fixed, platform-standard Cmd/Ctrl+, shortcut. While Settings is open,
@@ -839,6 +844,8 @@ Cmd/Ctrl+W closes the dialog rather than the database tab behind it.
   starter SQL template, auto-refresh schema on connect, confirm destructive
   statements, query-history display limit, CSV export delimiter, row-copy
   delimiter
+- **Connections**: open connections (Edit, Disconnect) and saved connections
+  (Connect, Edit, Delete), plus Add connection — see Connections above
 - **Appearance → Interface**: theme (8 presets — 2 light: Light, Paper; 6
   dark: Dark, Midnight, Charcoal, Slate, and two lifted from popular editor
   themes, One Dark and Dracula), accent color (20 presets — Green, Indigo,

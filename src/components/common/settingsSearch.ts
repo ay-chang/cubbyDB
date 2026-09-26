@@ -22,6 +22,7 @@ export const SETTINGS_SECTIONS: Array<{
   description: string;
 }> = [
   { id: "general", label: "General", description: "Application behavior and data formats" },
+  { id: "connections", label: "Connections", description: "Open and saved database connections" },
   { id: "appearance", label: "Appearance", description: "Interface, table, sidebar, and editor appearance" },
   { id: "aiAssistant", label: "AI Assistant", description: "Provider, credentials, model, and reasoning" },
   { id: "shortcuts", label: "Keyboard Shortcuts", description: "Review and customize keyboard commands" },
@@ -111,6 +112,15 @@ export const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
     section: "general",
     targetId: "general.version",
     keywords: ["release", "upgrade"],
+  },
+  {
+    id: "connections.saved",
+    label: "Saved connections",
+    description: "Edit, connect to, or delete saved database connections.",
+    path: "Connections",
+    section: "connections",
+    targetId: "connections.saved",
+    keywords: ["database", "edit", "delete", "manage", "postgres"],
   },
   {
     id: "appearance.theme",

@@ -497,6 +497,70 @@
   padding-top: 16px;
   border-top: 1px solid var(--border);
 }
+/* --- Settings → Connections list --- */
+.settings-conn-list {
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  overflow: hidden;
+}
+.settings-conn-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+}
+.settings-conn-row:not(:last-child) {
+  border-bottom: 1px solid var(--border);
+}
+.settings-conn-row__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-ghost);
+  flex: none;
+}
+.settings-conn-row__dot--live {
+  background: var(--success);
+}
+.settings-conn-row__text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.settings-conn-row__name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-conn-row__sub {
+  font-size: 11px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-conn-row__action {
+  flex: none;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  padding: 3px 8px;
+  border-radius: var(--radius-control);
+  transition: color var(--transition), background var(--transition);
+}
+.settings-conn-row__action:hover {
+  color: var(--text);
+  background: var(--border-faint);
+}
+.settings-conn-row__action--danger:hover {
+  color: var(--error);
+}
 [data-setting-id] {
   scroll-margin: 20px;
 }

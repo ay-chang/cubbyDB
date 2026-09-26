@@ -152,8 +152,9 @@ function deriveName(form: FormState): string {
   return "connection";
 }
 
-function savedSubtitle(conn: SavedConnection): string {
-  const { params } = conn;
+/** One-line "where does this point" summary (password masked) for a
+ *  connection card or list row. */
+export function connectionSubtitle(params: ConnectionParams): string {
   const base = params.host
     ? `${params.host}:${params.port ?? 5432}`
     : params.connectionString
@@ -218,13 +219,17 @@ function paramsEqual(a: ConnectionParams, b: ConnectionParams): boolean {
  * "Reconnect" — applying the edit to that same session (same tabs/schema
  * slot) rather than adding another connection. Save/Update still manage its
  * saved record, if any, independently.
+ *
+ * `initialSavedId` preloads that saved connection into the form, exactly as
+ * clicking its card would — how Settings → Connections' "Edit" lands here.
  */
 export function ConnectionScreen(props: {
   embedded?: boolean;
   onConnected?: () => void;
   editSessionId?: string;
+  initialSavedId?: string;
 } = {}) {
-  const { embedded, onConnected, editSessionId } = props;
+  const { embedded, onConnected, editSessionId, initialSavedId } = props;
   const connectBinding = useKeybindingStore(
     (s) => s.bindings["connection.connect"],
   );
@@ -242,24 +247,35 @@ export function ConnectionScreen(props: {
   const [editSlot] = useState(() =>
     editSessionId ? useStore.getState().connections[editSessionId] ?? null : null,
   );
+  const [initialSaved] = useState(() =>
+    initialSavedId ? savedConnections.find((c) => c.id === initialSavedId) ?? null : null,
+  );
 
-  // Prefill from: the session being edited, if any; else the first
-  // connection that was open last launch (e.g. after every auto-reconnect
-  // failed) so getting back in is one click — but not when embedded as an
-  // "add another connection" modal, where prefilling with whatever's already
-  // connected would be confusing rather than convenient.
+  // Prefill from: the session being edited, if any; else a requested saved
+  // connection; else the first connection that was open last launch (e.g.
+  // after every auto-reconnect failed) so getting back in is one click — but
+  // not when embedded as an "add another connection" modal, where prefilling
+  // with whatever's already connected would be confusing rather than
+  // convenient.
   const [form, setForm] = useState<FormState>(() => {
     if (editSlot) return paramsToForm(editSlot.params, editSlot.current.name);
+    if (initialSaved) return paramsToForm(initialSaved.params, initialSaved.name);
     if (!embedded && openConnections[0]) return paramsToForm(openConnections[0].params);
     return EMPTY_FORM;
   });
   const [selectedId, setSelectedId] = useState<string | null>(
-    editSlot?.current.connectionId ?? null,
+    editSlot?.current.connectionId ?? initialSaved?.id ?? null,
   );
-  const [color, setColor] = useState<AccentColor | null>(editSlot?.color ?? null);
-  const [colorStyle, setColorStyle] = useState<ConnectionColorStyle>(
-    editSlot?.colorStyle ?? DEFAULT_CONNECTION_COLOR_STYLE,
-  );
+  const [color, setColor] = useState<AccentColor | null>(() => {
+    if (editSlot) return editSlot.color;
+    return isAccentColor(initialSaved?.color) ? initialSaved.color : null;
+  });
+  const [colorStyle, setColorStyle] = useState<ConnectionColorStyle>(() => {
+    if (editSlot) return editSlot.colorStyle;
+    return isConnectionColorStyle(initialSaved?.colorStyle)
+      ? initialSaved.colorStyle
+      : DEFAULT_CONNECTION_COLOR_STYLE;
+  });
   const [formTab, setFormTab] = useState<"connection" | "safety" | "ssh" | "color">("connection");
   const [test, setTest] = useState<TestState>({ kind: "idle" });
   const [connectError, setConnectError] = useState<string | null>(null);
@@ -1004,7 +1020,7 @@ export function ConnectionScreen(props: {
                     />
                     {conn.name}
                   </span>
-                  <span className="conn-card__sub mono">{savedSubtitle(conn)}</span>
+                  <span className="conn-card__sub mono">{connectionSubtitle(conn.params)}</span>
                   <span className="conn-card__actions">
                     <span
                       className="conn-card__connect"

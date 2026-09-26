@@ -19,8 +19,9 @@ import {
   type KeybindingId,
   useKeybindingStore,
 } from "../../lib/keybindings";
-import { useStore } from "../../state/store";
+import { isAccentColor, useStore } from "../../state/store";
 import type { Delimiter, SettingsSection, TableFont, Theme } from "../../state/store";
+import { connectionSubtitle } from "../connection/ConnectionScreen";
 import type { AiModelInfo, AiProvider, AiReasoningEffort } from "../../types";
 import { Toggle } from "./Toggle";
 import {
@@ -291,6 +292,7 @@ export function SettingsDialog() {
           )}
 
           {section === "general" && <GeneralSection />}
+          {section === "connections" && <ConnectionsSection />}
           {section === "appearance" && appearanceSub === "interface" && (
             <InterfaceSection />
           )}
@@ -477,6 +479,143 @@ function GeneralSection() {
           </div>
         </div>
         <UpdateCheckButton />
+      </div>
+    </div>
+  );
+}
+
+/** Manages connections in one place: what's open now, and every saved
+ *  record. Editing reuses the same connection panel as the top bar's "+" —
+ *  Settings closes first so that panel isn't stacked under it. */
+function ConnectionsSection() {
+  const connections = useStore((s) => s.connections);
+  const savedConnections = useStore((s) => s.savedConnections);
+  const closeSettings = useStore((s) => s.closeSettings);
+  const openConnectionPanel = useStore((s) => s.openConnectionPanel);
+  const openEditConnection = useStore((s) => s.openEditConnection);
+  const connectTo = useStore((s) => s.connectTo);
+  const disconnect = useStore((s) => s.disconnect);
+  const deleteSavedConnection = useStore((s) => s.deleteSavedConnection);
+  const showToast = useStore((s) => s.showToast);
+  const openSlots = Object.values(connections);
+
+  const connectSaved = async (id: string) => {
+    const conn = savedConnections.find((c) => c.id === id);
+    if (!conn) return;
+    try {
+      await connectTo({ params: conn.params, name: conn.name, id: conn.id });
+      closeSettings();
+    } catch (err) {
+      showToast(`Couldn't connect to "${conn.name}": ${errorMessage(err)}`, "error");
+    }
+  };
+
+  return (
+    <div className="settings-section">
+      <div className="settings-field settings-toggle-row">
+        <div>
+          <div className="settings-field__label">New connection</div>
+          <div className="settings-field__desc">
+            Open another database alongside the ones already connected.
+          </div>
+        </div>
+        <button
+          className="btn btn--outline"
+          onClick={() => {
+            closeSettings();
+            openConnectionPanel();
+          }}
+        >
+          Add connection
+        </button>
+      </div>
+
+      <div className="settings-field settings-field--spaced">
+        <div className="settings-field__label">Open now</div>
+        {openSlots.length === 0 ? (
+          <div className="settings-field__desc">No connections are open.</div>
+        ) : (
+          <div className="settings-conn-list">
+            {openSlots.map((slot) => (
+              <div key={slot.sessionId} className="settings-conn-row">
+                <span
+                  className="settings-conn-row__dot settings-conn-row__dot--live"
+                  style={slot.color ? { background: ACCENT_COLOR_SWATCH[slot.color] } : undefined}
+                />
+                <div className="settings-conn-row__text">
+                  <span className="settings-conn-row__name">{slot.current.name}</span>
+                  <span className="settings-conn-row__sub mono">
+                    {connectionSubtitle(slot.params)} · Postgres {slot.current.info.serverVersion}
+                  </span>
+                </div>
+                <button
+                  className="settings-conn-row__action"
+                  onClick={() => {
+                    closeSettings();
+                    openEditConnection(slot.sessionId);
+                  }}
+                >
+                  Edit
+                </button>
+                <button
+                  className="settings-conn-row__action settings-conn-row__action--danger"
+                  onClick={() => void disconnect(slot.sessionId)}
+                >
+                  Disconnect
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="settings-field settings-field--spaced" data-setting-id="connections.saved">
+        <div className="settings-field__label">Saved</div>
+        {savedConnections.length === 0 ? (
+          <div className="settings-field__desc">
+            No saved connections yet. Add one and press Save.
+          </div>
+        ) : (
+          <div className="settings-conn-list">
+            {savedConnections.map((conn) => (
+              <div key={conn.id} className="settings-conn-row">
+                <span
+                  className="settings-conn-row__dot"
+                  style={
+                    isAccentColor(conn.color)
+                      ? { background: ACCENT_COLOR_SWATCH[conn.color] }
+                      : undefined
+                  }
+                />
+                <div className="settings-conn-row__text">
+                  <span className="settings-conn-row__name">{conn.name}</span>
+                  <span className="settings-conn-row__sub mono">{connectionSubtitle(conn.params)}</span>
+                </div>
+                <button
+                  className="settings-conn-row__action"
+                  onClick={() => void connectSaved(conn.id)}
+                >
+                  Connect
+                </button>
+                <button
+                  className="settings-conn-row__action"
+                  onClick={() => {
+                    closeSettings();
+                    openConnectionPanel(conn.id);
+                  }}
+                >
+                  Edit
+                </button>
+                <button
+                  className="settings-conn-row__action settings-conn-row__action--danger"
+                  onClick={() => void deleteSavedConnection(conn.id)}
+                >
+                  Delete
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

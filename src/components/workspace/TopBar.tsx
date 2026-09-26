@@ -6,7 +6,6 @@ import {
   matchesKeybinding,
   useKeybindingStore,
 } from "../../lib/keybindings";
-import { ConnectionScreen } from "../connection/ConnectionScreen";
 import { Spinner } from "../common/Spinner";
 import {
   CheckIcon,
@@ -98,7 +97,7 @@ export function TopBar() {
   const compactTopBar = useStore((s) => s.compactTopBar);
   const editSessionId = useStore((s) => s.editConnectionSessionId);
   const openEditConnection = useStore((s) => s.openEditConnection);
-  const closeEditConnection = useStore((s) => s.closeEditConnection);
+  const openConnectionPanel = useStore((s) => s.openConnectionPanel);
   const settingsOpen = useStore((s) => s.settingsOpen);
   const refreshBinding = useKeybindingStore(
     (s) => s.bindings["workspace.refresh"],
@@ -115,7 +114,6 @@ export function TopBar() {
   const settingsBinding = useKeybindingStore(
     (s) => s.bindings["workspace.openSettings"],
   );
-  const [addOpen, setAddOpen] = useState(false);
   const [pillMenuSessionId, setPillMenuSessionId] = useState<string | null>(null);
   const schemaLoading = useActiveSchemaLoading();
 
@@ -132,11 +130,11 @@ export function TopBar() {
       }
       event.preventDefault();
       event.stopPropagation();
-      setAddOpen(true);
+      openConnectionPanel();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [editSessionId, newConnectionBinding, settingsOpen]);
+  }, [editSessionId, newConnectionBinding, openConnectionPanel, settingsOpen]);
   // Flashed briefly after a refresh completes, so a fast reload (the common
   // case) still gives visible confirmation instead of the spinner just
   // blinking past too quickly to register.
@@ -245,7 +243,7 @@ export function TopBar() {
           ))}
           <button
             className="conn-switcher__add"
-            onClick={() => setAddOpen(true)}
+            onClick={() => openConnectionPanel()}
             title={formatShortcutTitle("Add another connection", newConnectionBinding)}
             aria-label="Add another connection"
           >
@@ -358,59 +356,6 @@ export function TopBar() {
         </button>
       </div>
 
-      {addOpen && (
-        <div className="settings-overlay" onClick={() => setAddOpen(false)}>
-          <div
-            className="add-connection-card"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Add connection"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="settings-panel__head">
-              <span className="settings-panel__title">Add connection</span>
-              <button
-                className="settings-panel__close"
-                onClick={() => setAddOpen(false)}
-                title="Close"
-                aria-label="Close"
-              >
-                ×
-              </button>
-            </div>
-            <ConnectionScreen embedded onConnected={() => setAddOpen(false)} />
-          </div>
-        </div>
-      )}
-
-      {editSessionId && (
-        <div className="settings-overlay" onClick={closeEditConnection}>
-          <div
-            className="add-connection-card"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Edit connection"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="settings-panel__head">
-              <span className="settings-panel__title">Edit connection</span>
-              <button
-                className="settings-panel__close"
-                onClick={closeEditConnection}
-                title="Close"
-                aria-label="Close"
-              >
-                ×
-              </button>
-            </div>
-            <ConnectionScreen
-              embedded
-              editSessionId={editSessionId}
-              onConnected={closeEditConnection}
-            />
-          </div>
-        </div>
-      )}
     </div>
   );
 }
