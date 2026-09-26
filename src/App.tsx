@@ -13,7 +13,7 @@ import { useStore } from "./state/store";
 export function App() {
   const view = useStore((s) => s.view);
   const reconnecting = useStore((s) => s.reconnecting);
-  const lastConnection = useStore((s) => s.lastConnection);
+  const openConnections = useStore((s) => s.openConnections);
   const initialize = useStore((s) => s.initialize);
   const openSettings = useStore((s) => s.openSettings);
   const settingsBinding = useKeybindingStore(
@@ -41,8 +41,8 @@ export function App() {
       <div className="splash">
         <Spinner />
         <span>
-          {lastConnection
-            ? `Reconnecting to ${lastConnection.name}…`
+          {openConnections.length > 0
+            ? `Reconnecting to ${openConnections.map((c) => c.name).join(", ")}…`
             : "Starting CubbyDB…"}
         </span>
       </div>

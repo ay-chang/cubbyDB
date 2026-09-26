@@ -260,8 +260,7 @@ fn masked_api_key_hint(key: &str) -> String {
     format!("{prefix}••••{suffix}")
 }
 
-/// Reads/writes the single AI-config record — a singleton file, same shape
-/// as `connections.rs`'s `LastConnectionStore`.
+/// Reads/writes the single AI-config record — a singleton file.
 pub struct AiConfigStore {
     path: PathBuf,
 }

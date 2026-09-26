@@ -29,7 +29,7 @@ import type {
   DbError,
   DeleteImpact,
   HistoryEntry,
-  LastConnection,
+  OpenConnection,
   QueryResult,
   SavedConnection,
   SavedQuery,
@@ -976,9 +976,13 @@ interface AppStore {
   view: View;
   /** True while attempting to auto-reconnect on launch. */
   reconnecting: boolean;
-  /** Params of the last connection, used to prefill the connect form. */
-  lastConnection: LastConnection | null;
-  /** Message shown when auto-reconnect failed on launch. */
+  /** Every connection open when the app last quit, read once at launch —
+   *  used for the "Reconnecting to…" splash and, if every one of them fails
+   *  to reconnect, to prefill the connect form. */
+  openConnections: OpenConnection[];
+  /** Message shown when auto-reconnect failed on launch (only set when
+   *  *none* of `openConnections` could be reconnected — a partial failure
+   *  instead lands in the workspace with a toast per failure). */
   reconnectError: string | null;
 
   savedConnections: SavedConnection[];
@@ -1190,8 +1194,8 @@ interface AppStore {
    *  live. Becomes the active (visible) slot. */
   connectTo: (
     connection: Pick<SavedConnection, "params" | "name"> & { id?: string },
-    /** Pass `false` when re-establishing the connection that was *just read*
-     *  from the last-connection store (launch's own auto-reconnect) — no
+    /** Pass `false` when re-establishing a connection that was *just read*
+     *  from the open-connections store (launch's own auto-reconnect) — no
      *  need to write the identical record straight back to disk. Defaults to
      *  `true` for every other caller (a real, possibly new, user-initiated
      *  connect). */
@@ -1535,7 +1539,12 @@ function makeTab(opts?: {
   };
 }
 
-const TABS_KEY = "cubbydb:openTabs";
+// Bumped from the pre-multi-connection "cubbydb:openTabs" key — that one
+// held a single `{ activeIndex, tabs }` blob for whichever connection was
+// visible; this one is keyed by session id so every open connection's tabs
+// survive a restart, not just the frontmost one. A leftover value under the
+// old key is simply never read again.
+const TABS_KEY = "cubbydb:openTabsBySession";
 const THEME_KEY = "cubbydb:theme";
 const ACCENT_COLOR_KEY = "cubbydb:accentColor";
 const TABLE_FONT_KEY = "cubbydb:tableFont";
@@ -2311,67 +2320,68 @@ function removeRowsFromTab(t: QueryTab, rowIndices: number[]): QueryTab {
   };
 }
 
-/** Persist just enough to restore the open tabs (not their results). */
-/** Only the fields listed here survive a reload — `schemaCompare` tabs are
+/** Fields of a tab that survive a reload — `schemaCompare` tabs are
  *  deliberately excluded by omission: `compare.targetSessionId` is an
  *  ephemeral per-connect id that can't be resolved after a restart, unlike
- *  the schema/table *names* every other tab kind persists. */
-function persistTabs(tabs: QueryTab[], activeTabId: string | null) {
+ *  the schema/table *names* every other tab kind persists. Shared by
+ *  `persistAllTabs` and `loadAllPersistedTabs` so the two can't drift apart
+ *  on which fields round-trip. */
+function persistableTabFields(t: QueryTab) {
+  return {
+    kind: t.kind,
+    title: t.title,
+    sql: t.sql,
+    source: t.source,
+    objectRef: t.objectRef,
+    filter: t.filter,
+    page: t.page,
+    savedQueryId: t.savedQueryId,
+    erd: t.erd,
+    sortColumn: t.sortColumn,
+    sortDesc: t.sortDesc,
+    isBranch: t.isBranch,
+  };
+}
+
+/** Persist every open connection's tabs (not their results), keyed by
+ *  session id, so each can be matched back up with its own tabs after a
+ *  restart even though every connection restores, not just the one that
+ *  happens to be visible when the app quits. */
+function persistAllTabs(connections: Record<string, ConnectionSlot>) {
   try {
-    const activeIndex = Math.max(
-      0,
-      tabs.findIndex((t) => t.id === activeTabId),
-    );
-    const payload = {
-      activeIndex,
-      tabs: tabs.map((t) => ({
-        kind: t.kind,
-        title: t.title,
-        sql: t.sql,
-        source: t.source,
-        objectRef: t.objectRef,
-        filter: t.filter,
-        page: t.page,
-        savedQueryId: t.savedQueryId,
-        erd: t.erd,
-        sortColumn: t.sortColumn,
-        sortDesc: t.sortDesc,
-        isBranch: t.isBranch,
-      })),
-    };
+    const payload: Record<string, { activeIndex: number; tabs: unknown[] }> = {};
+    for (const [sessionId, slot] of Object.entries(connections)) {
+      payload[sessionId] = {
+        activeIndex: Math.max(0, slot.tabs.findIndex((t) => t.id === slot.activeTabId)),
+        tabs: slot.tabs.map(persistableTabFields),
+      };
+    }
     localStorage.setItem(TABS_KEY, JSON.stringify(payload));
   } catch {
     // Storage unavailable (e.g. non-Tauri context) — non-fatal.
   }
 }
 
-/** Rebuild open tabs from storage with fresh ids. */
-function loadPersistedTabs(): { tabs: QueryTab[]; activeTabId: string } | null {
+/** Rebuild every persisted connection's open tabs from storage (fresh tab
+ *  ids), keyed by the session id it was persisted under. */
+function loadAllPersistedTabs(): Record<string, { tabs: QueryTab[]; activeTabId: string }> {
   try {
     const raw = localStorage.getItem(TABS_KEY);
-    if (!raw) return null;
-    const payload = JSON.parse(raw);
-    if (!Array.isArray(payload.tabs) || payload.tabs.length === 0) return null;
-    const tabs: QueryTab[] = payload.tabs.map((t: Partial<QueryTab>) =>
-      makeTab({
-        kind: t.kind,
-        title: t.title,
-        sql: t.sql,
-        source: t.source,
-        objectRef: t.objectRef,
-        filter: t.filter,
-        page: t.page,
-        savedQueryId: t.savedQueryId,
-        erd: t.erd,
-        sortColumn: t.sortColumn,
-        sortDesc: t.sortDesc,
-        isBranch: t.isBranch,
-      }),
-    );
-    const active = tabs[payload.activeIndex] ?? tabs[0];
-    return { tabs, activeTabId: active.id };
+    if (!raw) return {};
+    const all = JSON.parse(raw);
+    const result: Record<string, { tabs: QueryTab[]; activeTabId: string }> = {};
+    for (const [sessionId, payload] of Object.entries<{
+      activeIndex: number;
+      tabs: Partial<QueryTab>[];
+    }>(all)) {
+      if (!Array.isArray(payload.tabs) || payload.tabs.length === 0) continue;
+      const tabs = payload.tabs.map((t) => makeTab(t));
+      const active = tabs[payload.activeIndex] ?? tabs[0];
+      result[sessionId] = { tabs, activeTabId: active.id };
+    }
+    return result;
   } catch {
-    return null;
+    return {};
   }
 }
 
@@ -2717,7 +2727,7 @@ export const useStore = create<AppStore>((set, get) => {
   return {
     view: "connection",
     reconnecting: true,
-    lastConnection: null,
+    openConnections: [],
     reconnectError: null,
     savedConnections: [],
     savedQueries: [],
@@ -2804,67 +2814,83 @@ export const useStore = create<AppStore>((set, get) => {
         })
         .catch((err) => console.error("failed to subscribe to AI activity:", errorMessage(err)));
 
-      // Try to reconnect to the last-used database so the user doesn't have to
-      // re-enter it every launch. Remember its params either way, to prefill the
-      // form if the auto-connect fails.
-      let last: LastConnection | null = null;
+      // Try to reconnect to every database that was still open when the app
+      // last quit (a normal quit, or a relaunch for an update — both go
+      // through the same "session can't survive a restart, but its
+      // parameters can" path) so the user doesn't have to re-open them one
+      // by one. Remember them either way, to prefill the form if every
+      // reconnect fails.
+      let openConns: OpenConnection[] = [];
       try {
-        last = await api.getLastConnection();
+        openConns = await api.getOpenConnections();
       } catch (err) {
-        console.error("failed to read last connection:", errorMessage(err));
+        console.error("failed to read open connections:", errorMessage(err));
       }
-      set({ lastConnection: last });
+      set({ openConnections: openConns });
 
-      if (!last) {
+      if (openConns.length === 0) {
         set({ reconnecting: false });
         return;
       }
 
-      try {
-        // Read the persisted tabs *before* connecting: `connectTo` below
-        // seeds the new slot with a single blank tab and, via the
-        // `connections`-change subscriber further down this file, that
-        // immediately overwrites `TABS_KEY` in storage — clobbering the very
-        // tabs (including table tabs) this is about to restore if read any
-        // later than this.
-        const pendingRestore =
-          get().restoreTabsOnLaunch ? loadPersistedTabs() : null;
+      // Read every persisted tab set *before* connecting anything: each
+      // `connectTo` below seeds its new slot with a single blank tab and,
+      // via the `connections`-change subscriber further down this file,
+      // that immediately rewrites `TABS_KEY` from the current (still
+      // partially-restored) `connections` — clobbering entries for
+      // connections this loop hasn't reconnected yet if read any later than
+      // this.
+      const pendingRestoreBySessionId = get().restoreTabsOnLaunch
+        ? loadAllPersistedTabs()
+        : {};
 
-        await get().connectTo(
-          { params: last.params, name: last.name, id: last.id ?? undefined },
-          { rememberAsLast: false },
-        );
+      const failures: { name: string; message: string }[] = [];
+      for (const conn of openConns) {
+        try {
+          await get().connectTo(
+            { params: conn.params, name: conn.name, id: conn.id ?? undefined },
+            { rememberAsLast: false },
+          );
 
-        // Restore the tabs that were open last time (without their stale
-        // results), unless the user has opted out. Only this one
-        // auto-restored connection gets its tabs restored — connections
-        // added manually during a session start empty (the workspace's
-        // empty-state prompt) and don't persist across a restart.
-        const connectionId = get().activeConnectionId;
-        if (connectionId && pendingRestore) {
-          set((s) => ({
-            connections: patchSlot(s.connections, connectionId, {
-              tabs: pendingRestore.tabs,
-              activeTabId: pendingRestore.activeTabId,
-            }),
-          }));
-          // Re-populate restored table tabs (they hold their select-top SQL
-          // but no results yet), one at a time. Query tabs keep their SQL
-          // and wait for the user to run.
-          for (const tab of get().connections[connectionId]?.tabs ?? []) {
-            if (tab.kind === "table" && !tab.result && !tab.error && !tab.running) {
-              await get().runTab(tab.id);
+          // Restore the tabs this connection had open last time (without
+          // their stale results), unless the user has opted out.
+          const sessionId = get().activeConnectionId;
+          const pendingRestore = pendingRestoreBySessionId[conn.sessionId];
+          if (sessionId && pendingRestore) {
+            set((s) => ({
+              connections: patchSlot(s.connections, sessionId, {
+                tabs: pendingRestore.tabs,
+                activeTabId: pendingRestore.activeTabId,
+              }),
+            }));
+            // Re-populate restored table tabs (they hold their select-top
+            // SQL but no results yet), one at a time. Query tabs keep their
+            // SQL and wait for the user to run.
+            for (const tab of get().connections[sessionId]?.tabs ?? []) {
+              if (tab.kind === "table" && !tab.result && !tab.error && !tab.running) {
+                await get().runTab(tab.id);
+              }
             }
           }
+        } catch (err) {
+          // This one connection failed (server down, creds changed, ...) —
+          // keep trying the rest rather than losing all of them over one.
+          console.error(`auto-reconnect failed for "${conn.name}":`, errorMessage(err));
+          failures.push({ name: conn.name, message: errorMessage(err) });
         }
-      } catch (err) {
-        // Auto-reconnect failed (server down, creds changed, ...). Fall back to
-        // the connect screen, pre-filled, with the reason shown.
-        console.error("auto-reconnect failed:", errorMessage(err));
-        set({ view: "connection", reconnectError: errorMessage(err) });
-      } finally {
-        set({ reconnecting: false });
       }
+
+      if (Object.keys(get().connections).length === 0) {
+        // Every reconnect failed — fall back to the connect screen,
+        // pre-filled from the first one, with the reason shown.
+        set({ view: "connection", reconnectError: failures[0]?.message ?? null });
+      } else {
+        for (const failure of failures) {
+          get().showToast(`Couldn't reconnect to "${failure.name}": ${failure.message}`, "error");
+        }
+      }
+
+      set({ reconnecting: false });
     },
 
     async loadSavedConnections() {
@@ -5483,23 +5509,12 @@ export function useActiveSchemaError(): string | null {
   );
 }
 
-// Persist the visible connection's open tabs whenever they (or which
-// connection is visible) change, so they can be restored on the next
-// launch. Per the scope decision on multi-connection tab persistence (see
-// `initialize`), only ever the one connection that gets auto-restored on
-// launch actually reads this back — but it's simplest to always keep it in
-// sync with whatever's currently visible.
+// Persist every open connection's tabs whenever any of them change, so all
+// of them can be restored on the next launch — not just whichever one is
+// visible when the app quits (see `initialize`).
 let lastConnections = useStore.getState().connections;
-let lastActiveConnectionId = useStore.getState().activeConnectionId;
 useStore.subscribe((state) => {
-  if (
-    state.connections === lastConnections &&
-    state.activeConnectionId === lastActiveConnectionId
-  ) {
-    return;
-  }
+  if (state.connections === lastConnections) return;
   lastConnections = state.connections;
-  lastActiveConnectionId = state.activeConnectionId;
-  const slot = state.activeConnectionId ? state.connections[state.activeConnectionId] : null;
-  if (slot) persistTabs(slot.tabs, slot.activeTabId);
+  persistAllTabs(state.connections);
 });

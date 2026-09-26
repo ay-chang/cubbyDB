@@ -26,7 +26,7 @@ use crate::db::{ConnectionParams, DbError, DbErrorKind, Engine};
 use crate::keychain;
 
 const FILE_NAME: &str = "connections.json";
-const LAST_FILE_NAME: &str = "last_connection.json";
+const OPEN_FILE_NAME: &str = "open_connections.json";
 
 /// A user-saved connection record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,12 +135,20 @@ impl ConnectionStore {
     }
 }
 
-/// The most recently connected database, remembered so the app can reconnect
-/// automatically on the next launch instead of asking again. A live session
-/// can't survive a restart, but its parameters can.
+/// A currently-open database connection, remembered so the app can reconnect
+/// to it automatically on the next launch instead of asking again. A live
+/// session can't survive a restart, but its parameters can. One entry exists
+/// per open connection — the app supports several at once (see
+/// `AppState::active`) and restores all of them, not just the most recent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LastConnection {
+pub struct OpenConnection {
+    /// This connection's session id for the run that persisted it. A fresh
+    /// session id is allocated on every restart, so this only ever matters
+    /// as the key `connect`/`reconnect_session`/`disconnect` use to find
+    /// (and the frontend uses to restore) *this* entry again before the app
+    /// exits — never across a restart.
+    pub session_id: String,
     pub name: String,
     #[serde(default)]
     pub engine: Engine,
@@ -155,57 +163,71 @@ pub struct LastConnection {
     pub id: Option<String>,
 }
 
-/// Reads/writes the single "last connection" record.
-pub struct LastConnectionStore {
+/// Reads/writes the set of currently-open connections, keyed by session id.
+pub struct OpenConnectionsStore {
     path: PathBuf,
 }
 
-impl LastConnectionStore {
+impl OpenConnectionsStore {
     pub fn new(data_dir: &Path) -> Self {
         Self {
-            path: data_dir.join(LAST_FILE_NAME),
+            path: data_dir.join(OPEN_FILE_NAME),
         }
     }
 
-    pub fn get(&self) -> Result<Option<LastConnection>, DbError> {
+    /// Every persisted open connection. Missing or corrupt file means none —
+    /// a corrupt file shouldn't wedge startup.
+    pub fn list(&self) -> Result<Vec<OpenConnection>, DbError> {
         if !self.path.exists() {
-            return Ok(None);
+            return Ok(Vec::new());
         }
         let bytes = fs::read(&self.path).map_err(io_err)?;
-        // A corrupt file shouldn't wedge startup — treat it as "no last".
-        let mut last: Option<LastConnection> = serde_json::from_slice(&bytes).ok();
-        if let Some(last) = &mut last {
-            if pull_back_from_keychain(LAST_CONNECTION_ACCOUNT, &mut last.params) {
-                self.set(last)?;
+        let mut list: Vec<OpenConnection> = serde_json::from_slice(&bytes).unwrap_or_default();
+        // At most one legacy keychain entry could ever exist (the old,
+        // single-connection version of this app never had more than one
+        // "last connection" to begin with), so migrate it into the first
+        // entry still missing a password and stop.
+        for conn in &mut list {
+            if pull_back_from_keychain(LEGACY_LAST_CONNECTION_ACCOUNT, &mut conn.params) {
+                self.write(&list)?;
+                break;
             }
         }
-        Ok(last)
+        Ok(list)
     }
 
-    pub fn set(&self, last: &LastConnection) -> Result<(), DbError> {
+    /// Insert or update one entry by session id — called on `connect` (new
+    /// entry) and `reconnect_session` (params/name changed in place).
+    pub fn upsert(&self, entry: OpenConnection) -> Result<(), DbError> {
+        let mut list = self.list()?;
+        list.retain(|c| c.session_id != entry.session_id);
+        list.push(entry);
+        self.write(&list)
+    }
+
+    /// Removes one entry — called on `disconnect`.
+    pub fn remove(&self, session_id: &str) -> Result<(), DbError> {
+        let mut list = self.list()?;
+        list.retain(|c| c.session_id != session_id);
+        self.write(&list)
+    }
+
+    fn write(&self, list: &[OpenConnection]) -> Result<(), DbError> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(io_err)?;
         }
         let json =
-            serde_json::to_vec_pretty(last).map_err(|e| DbError::internal(e.to_string()))?;
+            serde_json::to_vec_pretty(list).map_err(|e| DbError::internal(e.to_string()))?;
         fs::write(&self.path, json).map_err(io_err)?;
         restrict_permissions(&self.path);
         Ok(())
     }
-
-    pub fn clear(&self) -> Result<(), DbError> {
-        keychain::delete_password(LAST_CONNECTION_ACCOUNT);
-        match fs::remove_file(&self.path) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(io_err(e)),
-        }
-    }
 }
 
-/// Fixed account key for `LastConnectionStore`, which is a singleton with no
-/// id of its own.
-const LAST_CONNECTION_ACCOUNT: &str = "__last_connection__";
+/// Fixed account key the pre-multi-connection version of this app stored its
+/// single "last connection" password under, kept only for `list`'s one-time
+/// keychain pull-back.
+const LEGACY_LAST_CONNECTION_ACCOUNT: &str = "__last_connection__";
 
 fn io_err(e: std::io::Error) -> DbError {
     DbError::new(DbErrorKind::Internal, format!("File error: {e}"))

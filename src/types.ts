@@ -94,7 +94,14 @@ export interface ActiveConnectionInfo {
   info: ConnectionInfo;
 }
 
-export interface LastConnection {
+/** One connection that was still open when the app last quit — one of
+ *  possibly several, all restored on the next launch (see `initialize` in
+ *  `store.ts`). */
+export interface OpenConnection {
+  /** This connection's session id from the run that persisted it — only
+   *  used to match it back up with its own persisted tabs; the restored
+   *  connection gets a fresh session id of its own. */
+  sessionId: string;
   name: string;
   engine: Engine;
   params: ConnectionParams;

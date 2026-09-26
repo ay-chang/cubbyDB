@@ -102,7 +102,7 @@ CubbyDB stores everything under the OS app-data directory
 (`~/Library/Application Support/com.cubbydb.app` on macOS):
 
 - `connections.json` — saved connections
-- `last_connection.json` — last connection, for auto-reconnect
+- `open_connections.json` — currently-open connections, for auto-reconnect
 - `history.jsonl` — query history
 - `saved_queries.json` — saved queries
 - `cubbies.json` — cubbies

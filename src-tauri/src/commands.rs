@@ -12,7 +12,7 @@ use tauri::State;
 use crate::ai::chats::{AiChatSummary, AiChatThread};
 use crate::ai::config::{AiConfigStatus, AiProvider};
 use crate::ai::{ActiveTableRef, AiChatResult, ChatMessage, ModelInfo, ReasoningEffort};
-use crate::connections::{LastConnection, SavedConnection};
+use crate::connections::{OpenConnection, SavedConnection};
 use crate::cubbies::Cubby;
 use crate::db::{
     driver_for, schema_diff, ColumnValue, ConnectionInfo, ConnectionParams, DbError, DbErrorKind,
@@ -233,11 +233,12 @@ pub async fn trust_ssh_host_key(
 /// Open a new session and add it to the pool — never overwrites an existing
 /// one, so connecting to a second database leaves the first live.
 ///
-/// `remember_as_last` defaults to `true` (persist this as the connection to
-/// auto-reconnect to next launch). The one exception is launch's own
-/// auto-reconnect: it just *read* this exact connection from the last-used
-/// file to get here, so writing the identical record straight back would be
-/// a pure, avoidable disk write.
+/// `remember_as_last` defaults to `true` (persist this as one of the
+/// connections to auto-reconnect to next launch, alongside any others
+/// already open). The one exception is launch's own auto-reconnect: it just
+/// *read* this exact connection from the open-connections file to get here,
+/// so writing the identical record straight back would be a pure, avoidable
+/// disk write.
 #[tauri::command]
 pub async fn connect(
     state: State<'_, AppState>,
@@ -251,20 +252,21 @@ pub async fn connect(
     let driver = driver_for(engine);
     let session = driver.connect(&params, state.data_dir()).await?;
     let info = session.info().clone();
+    let session_id = new_session_id();
 
     if remember_as_last.unwrap_or(true) {
         // Remember this connection so the next launch can reconnect automatically.
-        if let Err(e) = state.last_connection_store().set(&LastConnection {
+        if let Err(e) = state.open_connections_store().upsert(OpenConnection {
+            session_id: session_id.clone(),
             name: name.clone(),
             engine,
             params: params.clone(),
             id: connection_id.clone(),
         }) {
-            eprintln!("[cubbydb] failed to persist last connection: {e}");
+            eprintln!("[cubbydb] failed to persist open connection: {e}");
         }
     }
 
-    let session_id = new_session_id();
     state
         .canceller
         .lock()
@@ -317,13 +319,14 @@ pub async fn reconnect_session(
     let session = driver.connect(&params, state.data_dir()).await?;
     let info = session.info().clone();
 
-    if let Err(e) = state.last_connection_store().set(&LastConnection {
+    if let Err(e) = state.open_connections_store().upsert(OpenConnection {
+        session_id: session_id.clone(),
         name: name.clone(),
         engine,
         params: params.clone(),
         id: connection_id.clone(),
     }) {
-        eprintln!("[cubbydb] failed to persist last connection: {e}");
+        eprintln!("[cubbydb] failed to persist open connection: {e}");
     }
 
     state
@@ -505,14 +508,11 @@ pub async fn set_session_read_only(
 pub async fn disconnect(state: State<'_, AppState>, session_id: String) -> Result<(), DbError> {
     state.active.lock().await.remove(&session_id);
     state.canceller.lock().await.remove(&session_id);
-    // An explicit disconnect opts out of launch auto-reconnect only once every
-    // connection is closed — a still-live connection should keep being the
-    // auto-reconnect target rather than losing it because a *different*
-    // session was disconnected.
-    if state.active.lock().await.is_empty() {
-        if let Err(e) = state.last_connection_store().clear() {
-            eprintln!("[cubbydb] failed to clear last connection: {e}");
-        }
+    // An explicit disconnect opts this one connection out of launch
+    // auto-reconnect — any other connections stay in the open-connections
+    // file untouched, since each is tracked independently.
+    if let Err(e) = state.open_connections_store().remove(&session_id) {
+        eprintln!("[cubbydb] failed to remove open connection: {e}");
     }
     Ok(())
 }
@@ -531,12 +531,13 @@ pub async fn cancel_query(state: State<'_, AppState>, session_id: String) -> Res
     }
 }
 
-/// The last connection's parameters, for auto-reconnect on launch.
+/// Every connection that was still open when the app last quit, for
+/// auto-reconnect on launch.
 #[tauri::command]
-pub async fn get_last_connection(
+pub async fn get_open_connections(
     state: State<'_, AppState>,
-) -> Result<Option<LastConnection>, DbError> {
-    state.last_connection_store().get()
+) -> Result<Vec<OpenConnection>, DbError> {
+    state.open_connections_store().list()
 }
 
 // --- Schema / query --------------------------------------------------------

@@ -32,7 +32,7 @@ import type {
   DeleteImpact,
   FunctionDefinition,
   HistoryEntry,
-  LastConnection,
+  OpenConnection,
   QueryResult,
   SavedConnection,
   SavedQuery,
@@ -141,8 +141,8 @@ export function reconnectSession(
   });
 }
 
-export function getLastConnection(): Promise<LastConnection | null> {
-  return invoke("get_last_connection");
+export function getOpenConnections(): Promise<OpenConnection[]> {
+  return invoke("get_open_connections");
 }
 
 export function fetchSchema(sessionId: string): Promise<SchemaNode[]> {

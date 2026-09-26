@@ -13,7 +13,7 @@ use tokio::sync::Mutex;
 
 use crate::ai::chats::AiChatStore;
 use crate::ai::config::AiConfigStore;
-use crate::connections::{ConnectionStore, LastConnectionStore};
+use crate::connections::{ConnectionStore, OpenConnectionsStore};
 use crate::cubbies::CubbyStore;
 use crate::db::{ConnectionParams, DbSession, Engine, QueryCanceller};
 use crate::history::HistoryStore;
@@ -86,8 +86,8 @@ impl AppState {
         SshKnownHostsStore::new(&self.data_dir)
     }
 
-    pub fn last_connection_store(&self) -> LastConnectionStore {
-        LastConnectionStore::new(&self.data_dir)
+    pub fn open_connections_store(&self) -> OpenConnectionsStore {
+        OpenConnectionsStore::new(&self.data_dir)
     }
 
     pub fn saved_query_store(&self) -> SavedQueryStore {

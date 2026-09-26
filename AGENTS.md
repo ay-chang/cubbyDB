@@ -87,11 +87,12 @@ src-tauri/src/
                     nothing here talks to Postgres, so it's unit-tested
                     without a live database. Never executes its own output.
     error.rs        DbError { message, code, hint, position, kind }
-  connections.rs    saved connections + "last connection" (JSON, 0600 on unix)
+  connections.rs    saved connections + open connections, for auto-reconnect
+                    (JSON, 0600 on unix)
   ssh_known_hosts.rs  trust-on-first-use store for SSH bastion host keys
                       (JSON, 0600 on unix) — same shape as connections.rs
   history.rs        query history log (JSONL, size-capped)
-  state.rs          Tauri-managed AppState (ONE active session at a time)
+  state.rs          Tauri-managed AppState (every open session, keyed by id)
   commands.rs       the #[tauri::command] surface; also the auto-reconnect retry
   lib.rs / main.rs  app wiring + entry point
 
@@ -219,10 +220,14 @@ clearly and get sign-off before breaking it.
   the params so it can rebuild. Preserve this — it's what makes reconnect seamless.
 - **StrictMode**: `store.initialize()` is guarded by a module-level `didInitialize`
   flag so React's dev double-invoke doesn't open two connections.
-- **Auto-reconnect on launch**: the last successful connection is saved to
-  `last_connection.json`; on launch the app reconnects automatically and restores
-  open tabs (table tabs re-run their query; query tabs restore SQL only).
-  Explicit Disconnect clears the last connection (opts out).
+- **Auto-reconnect on launch**: every currently-open connection is saved to
+  `open_connections.json`, keyed by session id; on launch the app reconnects
+  each one independently and restores its own open tabs (table tabs re-run
+  their query; query tabs restore SQL only) — one failing doesn't block the
+  others. This is what makes an update's quit-and-relaunch (`UpdateBanner` /
+  `appUpdate.ts`'s `relaunch()`) transparent instead of dropping whatever was
+  open. Explicit Disconnect removes just that one connection's entry (opts
+  it out); the others stay targeted for next launch.
 - **TLS**: native-tls with sslmode=prefer — TLS when the server offers it,
   plaintext otherwise. No extra system deps.
 - **SSH tunneling**: `russh` (pure Rust, tokio-native — chosen to match the
@@ -239,7 +244,7 @@ clearly and get sign-off before breaking it.
   `russh`'s `Signer` itself, so agent auth needs a small hand-written
   bridge that wasn't verified against a live agent).
 - **Passwords are stored in plaintext** in `connections.json` /
-  `last_connection.json` (0600), by deliberate, permanent design — not a gap
+  `open_connections.json` (0600), by deliberate, permanent design — not a gap
   to fix. An earlier version stored them in the OS keychain instead; every OS
   keychain treats each lookup *and* store as its own access request with its
   own auth prompt, so a saved connection or even a plain restart could mean
@@ -255,7 +260,7 @@ clearly and get sign-off before breaking it.
 
 `~/Library/Application Support/com.cubbydb.app/` (macOS):
 - `connections.json` — saved connections
-- `last_connection.json` — last connection, for auto-reconnect
+- `open_connections.json` — currently-open connections, for auto-reconnect
 - `history.jsonl` — query history (capped to ~1000 recent entries)
 - `ssh_known_hosts.json` — trusted SSH bastion host-key fingerprints
 

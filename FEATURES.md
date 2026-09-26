@@ -37,9 +37,9 @@ code comments or AGENTS.md's architecture section.
   instantly (no reconnect). Each pill has its
   own "×" to close just that connection without switching to it first, and
   the top bar's Disconnect button closes whichever one is currently visible.
-  Only the most-recently-used connection is restored automatically on
-  launch — additional connections from a previous session aren't reopened
-  and start fresh each time
+  Every connection still open when the app quits — including a quit to
+  install an update — is restored automatically on the next launch, each
+  with its own tabs, not just the one that happened to be visible
 - **Edit the connection you're on** — a ✎ icon on each pill in the switcher
   opens the same form pre-filled with that session's actual name and
   connection details (works even if it was never saved). Hitting **Reconnect**
@@ -48,8 +48,10 @@ code comments or AGENTS.md's architecture section.
   If it came from a saved connection, that saved record is kept in sync too;
   if it didn't (an ad-hoc connection typed in directly), **Save** persists it
   as a new saved connection independently of reconnecting
-- Auto-reconnect on launch to the last-used connection; if it fails, the
-  connect screen opens pre-filled with the reason
+- Auto-reconnect on launch to every connection that was open; a connection
+  that fails to reconnect doesn't block the others — a toast reports it and
+  the rest still open normally. The connect screen only appears, pre-filled
+  with the reason, if every one of them failed
 - If a query or schema fetch follows four minutes without database activity,
   CubbyDB checks the connection on demand before sending the real operation.
   A stale serverless connection (for example, after a Neon compute suspends)
@@ -58,9 +60,8 @@ code comments or AGENTS.md's architecture section.
   idle serverless computes can still scale to zero. Unexpected connection
   drops still reconnect and retry once automatically
 - Cmd/Ctrl+Enter connects from the form
-- Disconnecting a connection clears the launch auto-reconnect target only
-  once every connection is closed — closing one of several open connections
-  leaves the others as the target for next launch
+- Disconnecting a connection removes just that one from the launch
+  auto-reconnect set — the others stay targeted independently
 - **Passwords are stored in plaintext** in the saved-connections JSON file
   (`0600` permissions on Unix, the only real protection). An earlier version
   stored them in the OS keychain instead, but every OS keychain treats each
@@ -251,7 +252,7 @@ code comments or AGENTS.md's architecture section.
   vs prod), the same reasoning Cmd+K quick-jump already searches across
   every open connection
 - Distinct from the existing "restore tabs on launch": that's an unnamed,
-  un-curated snapshot of whatever tabs happened to be open, for the one
+  un-curated snapshot of whatever tabs happened to be open on each
   auto-reconnected connection. This is explicit and named — you choose what
   to save, and it's there in the **Saved** panel regardless of which
   connection you're on

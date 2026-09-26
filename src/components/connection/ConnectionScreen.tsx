@@ -232,7 +232,7 @@ export function ConnectionScreen(props: {
   const loadSavedConnections = useStore((s) => s.loadSavedConnections);
   const connectTo = useStore((s) => s.connectTo);
   const reconnectSession = useStore((s) => s.reconnectSession);
-  const lastConnection = useStore((s) => s.lastConnection);
+  const openConnections = useStore((s) => s.openConnections);
   const reconnectError = useStore((s) => s.reconnectError);
   const renameLiveConnection = useStore((s) => s.renameLiveConnection);
   const setConnectionColor = useStore((s) => s.setConnectionColor);
@@ -243,14 +243,14 @@ export function ConnectionScreen(props: {
     editSessionId ? useStore.getState().connections[editSessionId] ?? null : null,
   );
 
-  // Prefill from: the session being edited, if any; else the last connection
-  // (e.g. after a failed auto-reconnect) so getting back in is one click —
-  // but not when embedded as an "add another connection" modal, where
-  // prefilling with whatever's already connected would be confusing rather
-  // than convenient.
+  // Prefill from: the session being edited, if any; else the first
+  // connection that was open last launch (e.g. after every auto-reconnect
+  // failed) so getting back in is one click — but not when embedded as an
+  // "add another connection" modal, where prefilling with whatever's already
+  // connected would be confusing rather than convenient.
   const [form, setForm] = useState<FormState>(() => {
     if (editSlot) return paramsToForm(editSlot.params, editSlot.current.name);
-    if (!embedded && lastConnection) return paramsToForm(lastConnection.params);
+    if (!embedded && openConnections[0]) return paramsToForm(openConnections[0].params);
     return EMPTY_FORM;
   });
   const [selectedId, setSelectedId] = useState<string | null>(

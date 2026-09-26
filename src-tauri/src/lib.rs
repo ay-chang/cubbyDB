@@ -57,7 +57,7 @@ pub fn run() {
             commands::reconnect_session,
             commands::set_session_read_only,
             commands::disconnect,
-            commands::get_last_connection,
+            commands::get_open_connections,
             commands::fetch_schema,
             commands::run_query,
             commands::cancel_query,
