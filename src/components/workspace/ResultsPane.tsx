@@ -1973,13 +1973,24 @@ function ResultsGrid({
   // own width no longer adds to the distance required — lower this to make
   // reordering trigger sooner.
   const SWAP_TRIGGER = 0.5;
+  // Holding a dragged column within this many pixels of the grid's left or
+  // right edge (or past it) scrolls the grid that way, so a column can travel
+  // across a table wider than the viewport in one drag. Speed ramps with how
+  // deep into the zone the pointer is, capped once it's well past the edge.
+  const AUTO_SCROLL_EDGE = 48;
+  const AUTO_SCROLL_MAX_STEP = 36;
   const onHeaderMouseDown = (pos: number, colIndex: number) => (e: React.MouseEvent) => {
     e.preventDefault();
     const startX = e.clientX;
     const startY = e.clientY;
+    const scroller = scrollRef.current;
     let dragging = false;
     let starts: number[] = [];
     let dispWidths: number[] = [];
+    let totalWidth = 0;
+    let startScroll = 0;
+    let lastClientX = startX;
+    let autoScrollFrame: number | null = null;
 
     const beginDrag = () => {
       dispWidths = order.map((i) => widths[i]);
@@ -1989,20 +2000,48 @@ function ResultsGrid({
         starts.push(acc);
         acc += w;
       }
+      totalWidth = acc;
+      startScroll = scroller?.scrollLeft ?? 0;
       dragging = true;
       document.body.style.userSelect = "none";
       setDrag({ fromPos: pos, dx: 0, targetPos: pos });
+      autoScrollFrame = requestAnimationFrame(autoScroll);
     };
 
-    const onMove = (ev: MouseEvent) => {
-      const dx = ev.clientX - startX;
-      if (!dragging) {
-        if (Math.abs(dx) < DRAG_THRESHOLD && Math.abs(ev.clientY - startY) < DRAG_THRESHOLD) {
-          return;
-        }
-        beginDrag();
-      }
+    const autoScroll = () => {
+      autoScrollFrame = requestAnimationFrame(autoScroll);
+      if (!scroller) return;
+      const rect = scroller.getBoundingClientRect();
+      // The row-number gutter is sticky, so the data area starts past it.
+      const leftZone = rect.left + GUTTER_W + AUTO_SCROLL_EDGE;
+      const rightZone = rect.right - AUTO_SCROLL_EDGE;
+      const depth =
+        lastClientX < leftZone ? lastClientX - leftZone
+        : lastClientX > rightZone ? lastClientX - rightZone
+        : 0;
+      if (depth === 0) return;
+      const step =
+        Math.sign(depth) *
+        Math.ceil(Math.min(Math.abs(depth) / AUTO_SCROLL_EDGE, 1) * AUTO_SCROLL_MAX_STEP);
+      const before = scroller.scrollLeft;
+      scroller.scrollLeft = before + step;
+      if (scroller.scrollLeft !== before) retarget();
+    };
+
+    // Recomputes the drop position from the pointer *and* how far the grid
+    // has scrolled since the drag began, so the column stays under the
+    // pointer while auto-scroll moves the content beneath it.
+    const retarget = () => {
+      const scrolled = (scroller?.scrollLeft ?? 0) - startScroll;
       const draggedWidth = dispWidths[pos];
+      // Clamped to the table's own width: the header is inside the scroller,
+      // so a transform past the last column would widen the scrollable area
+      // and let auto-scroll run on forever.
+      const dx = clamp(
+        lastClientX - startX + scrolled,
+        -starts[pos],
+        totalWidth - draggedWidth - starts[pos],
+      );
       let target = pos;
       // Dragging right: swap once the dragged column's right edge reaches
       // partway into the next column.
@@ -2022,9 +2061,24 @@ function ResultsGrid({
       }
       setDrag({ fromPos: pos, dx, targetPos: target });
     };
+
+    const onMove = (ev: MouseEvent) => {
+      lastClientX = ev.clientX;
+      if (!dragging) {
+        if (
+          Math.abs(ev.clientX - startX) < DRAG_THRESHOLD &&
+          Math.abs(ev.clientY - startY) < DRAG_THRESHOLD
+        ) {
+          return;
+        }
+        beginDrag();
+      }
+      retarget();
+    };
     const onUp = () => {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
+      if (autoScrollFrame !== null) cancelAnimationFrame(autoScrollFrame);
       if (!dragging) {
         // No drag happened — treat as a click to cycle the sort.
         cycleSort(colIndex);

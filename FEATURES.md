@@ -339,6 +339,10 @@ code comments or AGENTS.md's architecture section.
 
 - Any query's result set: resizable columns, drag-to-reorder columns,
   per-column sort (click a header, cycles ascending → descending → none)
+- Dragging a column header near (or past) the grid's left or right edge
+  scrolls the grid that way, faster the further out you go — so a column can
+  travel across a table wider than the window in one drag (e.g. the 20th
+  column straight to first) instead of dropping, scrolling, and dragging again
 - Starting column widths are measured from the header and the first rows'
   real rendered text, in whichever font and size the grid is actually set to
   (Settings → Appearance → Table) — so raising the table font size widens
