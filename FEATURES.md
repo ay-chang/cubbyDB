@@ -418,6 +418,14 @@ code comments or AGENTS.md's architecture section.
   reconstruction genuinely complex; the structured columns/indexes/constraints
   view covers the common "what does this table look like" need instead
 - Also shows **triggers** (full `CREATE TRIGGER` text, straight from
+- Each index has an **Explain** toggle that breaks its definition down into
+  plain English — unique/composite semantics, what its access method (B-tree,
+  GIN, GiST, hash, BRIN, SP-GiST) is actually good for, a functional/
+  expression index's exact expression, `INCLUDE` (covering) columns, and a
+  partial index's `WHERE` condition. Parsed deterministically from the
+  index's own `CREATE INDEX` text — no AI call, so it's instant and never
+  wrong about what the statement says. Hidden for the rare definition shape
+  it doesn't recognize, rather than guessing
   `pg_get_triggerdef` — internal triggers backing FK constraints are
   filtered out) and **row-level security**: whether RLS is enabled at all,
   and if so, every policy's permissive/restrictive mode, command, roles, and

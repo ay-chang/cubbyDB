@@ -4174,6 +4174,12 @@
   flex-direction: column;
   gap: 4px;
 }
+.structure-list__item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
 .structure-list__name {
   font-size: 11.5px;
   font-weight: 500;
@@ -4185,6 +4191,29 @@
   color: var(--text-muted);
   white-space: pre-wrap;
   word-break: break-word;
+}
+.structure-list__explain-toggle {
+  flex: none;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-faint);
+  padding: 1px 7px;
+  border-radius: var(--radius-control);
+  transition: color var(--transition), background var(--transition);
+}
+.structure-list__explain-toggle:hover {
+  color: var(--accent);
+  background: var(--accent-tint);
+}
+.structure-list__explain {
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  line-height: 1.5;
 }
 
 /* --- Schema Compare pane --- */

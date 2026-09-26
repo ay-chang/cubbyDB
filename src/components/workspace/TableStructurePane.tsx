@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { errorMessage, getTableStructure } from "../../api/backend";
+import { explainIndexDefinition } from "../../lib/explainIndex";
 import type { QueryTab } from "../../state/store";
 import { useActiveSchema, useStore } from "../../state/store";
-import type { TableStructure } from "../../types";
+import type { IndexDetail, TableStructure } from "../../types";
 
 type LoadState =
   | { kind: "loading" }
@@ -172,10 +173,7 @@ export function TableStructurePane({ tab }: { tab: QueryTab }) {
               ) : (
                 <div className="structure-list">
                   {state.structure.indexes.map((idx) => (
-                    <div key={idx.name} className="structure-list__item">
-                      <span className="structure-list__name mono">{idx.name}</span>
-                      <code className="structure-list__def">{idx.definition}</code>
-                    </div>
+                    <IndexListItem key={idx.name} idx={idx} />
                   ))}
                 </div>
               )}
@@ -254,6 +252,41 @@ export function TableStructurePane({ tab }: { tab: QueryTab }) {
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/** One index card, with a toggleable "Explain" breakdown of what it actually
+ *  does — parsed deterministically from the index's own definition text (see
+ *  `explainIndex.ts`), not guessed or sent to the AI. Hidden entirely when
+ *  the definition doesn't match a shape the parser understands, rather than
+ *  showing an empty or wrong explanation. */
+function IndexListItem({ idx }: { idx: IndexDetail }) {
+  const [open, setOpen] = useState(false);
+  const explanation = useMemo(() => explainIndexDefinition(idx.definition), [idx.definition]);
+
+  return (
+    <div className="structure-list__item">
+      <div className="structure-list__item-head">
+        <span className="structure-list__name mono">{idx.name}</span>
+        {explanation && (
+          <button
+            type="button"
+            className="structure-list__explain-toggle"
+            onClick={() => setOpen((o) => !o)}
+          >
+            {open ? "Hide explain" : "Explain"}
+          </button>
+        )}
+      </div>
+      <code className="structure-list__def">{idx.definition}</code>
+      {open && explanation && (
+        <ul className="structure-list__explain">
+          {explanation.map((line, i) => (
+            <li key={i}>{line}</li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
