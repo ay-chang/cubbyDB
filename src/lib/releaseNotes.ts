@@ -33,6 +33,35 @@ export interface ReleaseNotesEntry {
 
 export const RELEASE_NOTES: ReleaseNotesEntry[] = [
   {
+    version: "0.1.20",
+    date: "2026-09-29",
+    sections: [
+      {
+        heading: "CubbyDB is now a paid app",
+        items: [
+          "CubbyDB now costs a one-time price, with every future update included. Your 14-day free trial starts today, and the top bar shows how many days are left.",
+          "Buy from cubbydb.com/pricing, then paste your license key into Settings → License. One key works on up to 3 of your computers.",
+          "Nothing is lost if your trial runs out: your connections, saved queries, cubbies and history are all still there once you activate.",
+        ],
+      },
+      {
+        heading: "Connections",
+        items: [
+          "Every connection you had open comes back when you relaunch, not just the last one.",
+          "Settings has a new Connections section: connect, edit, disconnect or delete any connection in one place.",
+        ],
+      },
+      {
+        heading: "Tables",
+        items: [
+          "Right-click a table tab to open its structure or ER diagram.",
+          "The Table Structure pane explains each index in plain English.",
+          "Dragging a column past the edge of the results grid scrolls the grid along with it.",
+        ],
+      },
+    ],
+  },
+  {
     version: "0.1.19",
     date: "2026-09-14",
     sections: [
