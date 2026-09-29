@@ -1,13 +1,19 @@
 name: release
 
 # Builds installers for macOS (universal), Windows, and Linux, and publishes
-# them — plus the updater manifest (`latest.json`) — to a GitHub Release.
+# them — plus the updater manifest (`latest.json`) — to a GitHub Release on
+# the public `ay-chang/cubbyDB-releases` repo, not this one: this source repo
+# is private, and the in-app updater and download links need release assets
+# anyone can fetch. Publishing there needs `RELEASES_TOKEN`, a fine-grained
+# token with Contents read/write on that repo (this job's own GITHUB_TOKEN
+# can't write to another repo).
 # Trigger a release with:
 #   node scripts/set-version.mjs X.Y.Z && git commit -am "Release vX.Y.Z"
 #   git tag vX.Y.Z && git push origin main vX.Y.Z
 #
 # Runs as a draft release first (see `releaseDraft` below) so it can be
-# reviewed before publishing — hit "Publish release" on GitHub when ready.
+# reviewed before publishing — hit "Publish release" on cubbyDB-releases
+# when ready.
 on:
   push:
     tags:
@@ -74,7 +80,7 @@ jobs:
       - name: Build and release
         uses: tauri-apps/tauri-action@v0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.RELEASES_TOKEN }}
           # Signs the update payload so the in-app updater can verify it —
           # required on every platform, unrelated to OS code signing below.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -92,7 +98,12 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
+          owner: ay-chang
+          repo: cubbyDB-releases
           tagName: ${{ github.ref_name }}
+          # This repo's commit doesn't exist in the releases repo, so tag
+          # that repo's own branch instead.
+          releaseCommitish: main
           releaseName: "CubbyDB ${{ github.ref_name }}"
           releaseBody: "See the assets below to download and install."
           releaseDraft: true

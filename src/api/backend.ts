@@ -28,6 +28,7 @@ import type {
   ConnectionInfo,
   ConnectionParams,
   Cubby,
+  LicenseStatus,
   DbError,
   DeleteImpact,
   FunctionDefinition,
@@ -454,6 +455,26 @@ export function clearAiAuditLog(): Promise<void> {
 }
 
 // --- AI assistant ------------------------------------------------------------
+
+export function getLicense(): Promise<LicenseStatus> {
+  return invoke("get_license");
+}
+
+export function refreshLicense(): Promise<LicenseStatus> {
+  return invoke("refresh_license");
+}
+
+export function activateLicense(key: string): Promise<LicenseStatus> {
+  return invoke("activate_license", { key });
+}
+
+export function removeLicense(): Promise<LicenseStatus> {
+  return invoke("remove_license");
+}
+
+export function openPurchasePage(): Promise<void> {
+  return invoke("open_purchase_page");
+}
 
 export function getAiConfig(): Promise<AiConfigStatus> {
   return invoke("get_ai_config");

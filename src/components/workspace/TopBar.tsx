@@ -6,6 +6,7 @@ import {
   matchesKeybinding,
   useKeybindingStore,
 } from "../../lib/keybindings";
+import { BrandMark } from "../common/BrandMark";
 import { Spinner } from "../common/Spinner";
 import {
   CheckIcon,
@@ -99,6 +100,7 @@ export function TopBar() {
   const openEditConnection = useStore((s) => s.openEditConnection);
   const openConnectionPanel = useStore((s) => s.openConnectionPanel);
   const settingsOpen = useStore((s) => s.settingsOpen);
+  const license = useStore((s) => s.license);
   const refreshBinding = useKeybindingStore(
     (s) => s.bindings["workspace.refresh"],
   );
@@ -166,25 +168,7 @@ export function TopBar() {
       data-tauri-drag-region
     >
       <div className="topbar__left">
-        {showBrandMark && (
-          /* The app logo itself, drawn from the same geometry as the bundled
-             icon (`app-icon.png`, generated from the handoff's
-             `icon-green.svg`) rather than the rounded-square-plus-inner-square
-             CSS that used to approximate it — that approximation predates the
-             current mark. The slot is a painted white shape, not a knockout,
-             so the mark reads the same here as it does in the Dock instead of
-             letting the top bar show through its middle. */
-          <svg className="brand-mark" viewBox="0 0 100 100" aria-hidden>
-            <path
-              fill="currentColor"
-              d="M28 4h44a24 24 0 0 1 24 24v44a24 24 0 0 1-24 24H28A24 24 0 0 1 4 72V28A24 24 0 0 1 28 4Z"
-            />
-            <path
-              fill="#fff"
-              d="M35 36h30a10 10 0 0 1 10 10v8a10 10 0 0 1-10 10H35a10 10 0 0 1-10-10v-8a10 10 0 0 1 10-10Z"
-            />
-          </svg>
-        )}
+        {showBrandMark && <BrandMark className="brand-mark" />}
         <div className="conn-switcher">
           {slots.map((slot) => (
             <div
@@ -253,6 +237,17 @@ export function TopBar() {
       </div>
 
       <div className="topbar__right">
+        {/* Trial countdown, gone once a key is activated. Past the trial the
+            whole app is replaced by `LicenseGate`, so this never shows 0. */}
+        {license && !license.licensed && (
+          <button
+            className="topbar__btn topbar__btn--unlicensed"
+            onClick={() => openSettings("license")}
+            data-tip="Buy CubbyDB or enter a license key"
+          >
+            Trial: {license.trialDaysLeft} {license.trialDaysLeft === 1 ? "day" : "days"} left
+          </button>
+        )}
         {/* Leads the cluster rather than sitting inside it: it's the one
             plain-text action here, and wedged between icons it read as though
             it belonged to them. There's no conventional icon for "ask an AI"

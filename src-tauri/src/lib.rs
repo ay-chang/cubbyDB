@@ -9,12 +9,14 @@
 //! - [`commands`]   — the command surface exposed to the frontend
 
 mod ai;
+mod browser;
 mod commands;
 mod connections;
 mod cubbies;
 mod db;
 mod history;
 mod keychain;
+mod license;
 mod repos;
 mod saved_queries;
 mod ssh_known_hosts;
@@ -34,7 +36,8 @@ pub fn run() {
             // The data directory holds connections.json and history.jsonl.
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
-            app.manage(AppState::new(data_dir));
+            let cache_dir = app.path().app_cache_dir()?;
+            app.manage(AppState::new(data_dir, cache_dir));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -53,6 +56,11 @@ pub fn run() {
             commands::test_connection,
             commands::probe_ssh_host_key,
             commands::trust_ssh_host_key,
+            commands::get_license,
+            commands::refresh_license,
+            commands::activate_license,
+            commands::remove_license,
+            commands::open_purchase_page,
             commands::connect,
             commands::reconnect_session,
             commands::set_session_read_only,

@@ -16,6 +16,7 @@ import type {
   AiAuditEntry,
   AiChatSummary,
   AiConfigStatus,
+  LicenseStatus,
   AiFilterResult,
   AiMessage,
   AiProvider,
@@ -313,6 +314,7 @@ export type SettingsSection =
   | "connections"
   | "appearance"
   | "aiAssistant"
+  | "license"
   | "shortcuts";
 
 /** The accent color used for buttons, active states, and SQL keyword
@@ -1038,6 +1040,8 @@ interface AppStore {
   /** Which provider is active and whether each has a key saved — never the
    *  real keys. `null` until `loadAiConfig` has fetched it at least once. */
   aiConfig: AiConfigStatus | null;
+  /** `null` until `loadLicense` has run once at launch. */
+  license: LicenseStatus | null;
   /** Whether the AI panel is showing the saved-chats list instead of the
    *  active conversation — a UI mode, not per-connection data, so it lives
    *  here rather than on `ConnectionSlot`. */
@@ -1439,6 +1443,12 @@ interface AppStore {
   /** Abandons the in-flight turn and re-enables the input. */
   stopAiMessage: () => void;
   loadAiConfig: () => Promise<void>;
+  loadLicense: () => Promise<void>;
+  /** Rejects with the backend's message when Polar refuses the key, for the
+   *  License section to show inline. */
+  activateLicense: (key: string) => Promise<void>;
+  removeLicense: () => Promise<void>;
+  openPurchasePage: () => void;
   saveAiProvider: (provider: AiProvider) => Promise<void>;
   saveAiConfig: (provider: AiProvider, apiKey: string) => Promise<void>;
   clearAiConfig: (provider: AiProvider) => Promise<void>;
@@ -2759,6 +2769,7 @@ export const useStore = create<AppStore>((set, get) => {
     recentDatabaseObjects: [],
     aiPanelOpen: false,
     aiConfig: null,
+    license: null,
     aiHistoryView: false,
     commandPaletteOpen: false,
     pendingColumnHighlight: null,
@@ -2800,6 +2811,16 @@ export const useStore = create<AppStore>((set, get) => {
     async initialize() {
       if (didInitialize) return;
       didInitialize = true;
+
+      // First, so a locked (trial-ended) install shows its lock screen
+      // before anything else loads. The weekly re-check with Polar runs
+      // after, in the background, and only ever changes state if Polar
+      // rejects the key.
+      await get().loadLicense();
+      void api
+        .refreshLicense()
+        .then((license) => set({ license }))
+        .catch((err) => console.error("failed to re-check license:", errorMessage(err)));
 
       await get().loadSavedConnections();
       await get().loadSavedQueries();
@@ -4549,6 +4570,38 @@ export const useStore = create<AppStore>((set, get) => {
           }),
         }));
       }
+    },
+
+    async loadLicense() {
+      try {
+        set({ license: await api.getLicense() });
+      } catch (err) {
+        console.error("failed to load license:", errorMessage(err));
+      }
+    },
+
+    async activateLicense(key) {
+      set({ license: await api.activateLicense(key) });
+      get().showToast("Thanks for buying CubbyDB!", "success");
+    },
+
+    async removeLicense() {
+      const ok = await requestConfirm(
+        "Remove the license from this computer? This frees its slot so you can use the key on another computer.",
+        "Remove license",
+      );
+      if (!ok) return;
+      try {
+        set({ license: await api.removeLicense() });
+      } catch (err) {
+        get().showToast(errorMessage(err), "error");
+      }
+    },
+
+    openPurchasePage() {
+      api
+        .openPurchasePage()
+        .catch((err) => get().showToast(errorMessage(err), "error"));
     },
 
     async loadAiConfig() {

@@ -241,7 +241,8 @@ pub async fn start_login(data_dir: &Path) -> Result<(), DbError> {
         .get("authUrl")
         .and_then(Value::as_str)
         .ok_or_else(|| internal("Codex did not return a ChatGPT sign-in URL."))?;
-    open_browser(auth_url)?;
+    crate::browser::open(auth_url)
+        .map_err(|error| internal(format!("Could not open the ChatGPT sign-in page: {error}")))?;
 
     // The local OAuth callback belongs to this app-server process, so keep it
     // alive after the Tauri command returns. Settings polls `account/read`
@@ -535,24 +536,6 @@ fn codex_candidates() -> Vec<PathBuf> {
         paths.push(home.join(".npm-global/bin/codex"));
     }
     paths
-}
-
-fn open_browser(url: &str) -> Result<(), DbError> {
-    #[cfg(target_os = "macos")]
-    let mut command = std::process::Command::new("open");
-    #[cfg(target_os = "linux")]
-    let mut command = std::process::Command::new("xdg-open");
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = std::process::Command::new("cmd");
-        command.args(["/C", "start", ""]);
-        command
-    };
-    command
-        .arg(url)
-        .spawn()
-        .map_err(|error| internal(format!("Could not open the ChatGPT sign-in page: {error}")))?;
-    Ok(())
 }
 
 fn parse_codex_version(user_agent: &str) -> Option<String> {

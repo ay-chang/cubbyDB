@@ -511,6 +511,17 @@ export interface AiActivityStep {
   elapsedMs: number | null;
 }
 
+// --- License -----------------------------------------------------------------
+
+/** Mirrors `license::LicenseStatus` — never carries the full key. */
+export interface LicenseStatus {
+  licensed: boolean;
+  displayKey: string | null;
+  email: string | null;
+  /** Whole days of trial left; 0 means an unlicensed app is locked. */
+  trialDaysLeft: number;
+}
+
 // --- AI assistant ------------------------------------------------------------
 
 export type AiProvider = "anthropic" | "openai" | "codex" | "claudeCode";

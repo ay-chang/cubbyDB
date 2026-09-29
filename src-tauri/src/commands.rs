@@ -20,6 +20,7 @@ use crate::db::{
     SchemaSnapshot, SequenceDetails, TableStructure, PAGE_SIZE,
 };
 use crate::history::{now_millis, HistoryEntry};
+use crate::license::LicenseStatus;
 use crate::repos::AttachedRepo;
 use crate::saved_queries::SavedQuery;
 use crate::state::{ActiveSession, AppState};
@@ -228,6 +229,37 @@ pub async fn trust_ssh_host_key(
     state
         .ssh_known_hosts_store()
         .trust(&bastion_host, bastion_port, &fingerprint)
+}
+
+#[tauri::command]
+pub async fn get_license(state: State<'_, AppState>) -> Result<LicenseStatus, DbError> {
+    state.license_store().status()
+}
+
+#[tauri::command]
+pub async fn refresh_license(state: State<'_, AppState>) -> Result<LicenseStatus, DbError> {
+    state.license_store().refresh().await
+}
+
+#[tauri::command]
+pub async fn activate_license(
+    state: State<'_, AppState>,
+    key: String,
+) -> Result<LicenseStatus, DbError> {
+    state.license_store().activate(&key).await
+}
+
+#[tauri::command]
+pub async fn remove_license(state: State<'_, AppState>) -> Result<LicenseStatus, DbError> {
+    let store = state.license_store();
+    store.remove().await?;
+    store.status()
+}
+
+#[tauri::command]
+pub async fn open_purchase_page() -> Result<(), DbError> {
+    crate::browser::open(crate::license::PURCHASE_URL)
+        .map_err(|e| DbError::internal(format!("Could not open the purchase page: {e}")))
 }
 
 /// Open a new session and add it to the pool — never overwrites an existing

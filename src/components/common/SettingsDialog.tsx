@@ -23,6 +23,7 @@ import { isAccentColor, useStore } from "../../state/store";
 import type { Delimiter, SettingsSection, TableFont, Theme } from "../../state/store";
 import { connectionSubtitle } from "../connection/ConnectionScreen";
 import type { AiModelInfo, AiProvider, AiReasoningEffort } from "../../types";
+import { LicenseKeyForm } from "./LicenseGate";
 import { Toggle } from "./Toggle";
 import {
   ACCENT_COLOR_LABELS,
@@ -300,6 +301,7 @@ export function SettingsDialog() {
           {section === "appearance" && appearanceSub === "sidebar" && <SidebarSection />}
           {section === "appearance" && appearanceSub === "editor" && <EditorSection />}
           {section === "aiAssistant" && <AiAssistantSection />}
+          {section === "license" && <LicenseSection />}
           {section === "shortcuts" && <ShortcutsSection />}
         </div>
       </div>
@@ -482,6 +484,67 @@ function GeneralSection() {
       </div>
     </div>
   );
+}
+
+/** Where a purchased key is entered (activated for this computer with
+ *  Polar, then kept locally) or removed, and where the trial's status shows. */
+function LicenseSection() {
+  const license = useStore((s) => s.license);
+  const removeLicense = useStore((s) => s.removeLicense);
+
+  return (
+    <div className="settings-section">
+      <div className="settings-field" data-setting-id="license.key">
+        <div className="settings-field__label">License key</div>
+        <div className="settings-field__desc">
+          One purchase covers up to 3 of your computers and includes every future update.
+        </div>
+        {license?.licensed ? (
+          <div className="ai-credential-status ai-credential-status--set">
+            <span className="ai-credential-status__dot" aria-hidden />
+            <div className="ai-credential-status__body">
+              <div className="ai-credential-status__primary">
+                <span>Licensed</span>
+                {license.email && (
+                  <>
+                    <span className="ai-credential-status__separator">to</span>
+                    <span className="ai-credential-status__email mono">{license.email}</span>
+                  </>
+                )}
+              </div>
+              <div className="ai-credential-status__meta mono">{license.displayKey}</div>
+            </div>
+            <button
+              className="btn btn--outline ai-credential-status__logout"
+              onClick={() => void removeLicense()}
+            >
+              Remove
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="ai-credential-status">
+              <span className="ai-credential-status__dot" aria-hidden />
+              <div className="ai-credential-status__body">
+                <div className="ai-credential-status__primary">
+                  {trialLabel(license?.trialDaysLeft ?? 0)}
+                </div>
+                <div className="ai-credential-status__meta">
+                  Paste the key from your purchase email.
+                </div>
+              </div>
+            </div>
+            <LicenseKeyForm withBuy />
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function trialLabel(daysLeft: number): string {
+  if (daysLeft <= 0) return "Trial ended";
+  return `Free trial: ${daysLeft} ${daysLeft === 1 ? "day" : "days"} left`;
 }
 
 /** Manages connections in one place: what's open now, and every saved
@@ -1293,9 +1356,10 @@ function InterfaceSection() {
       >
         <div className="settings-field__label">Command palette selection</div>
         <div className="settings-field__desc">
-          How the highlighted row is marked in Cmd/Ctrl+K. Either way it's drawn
-          in that row's connection color, so you can tell which environment a
-          result belongs to before you open it.
+          How the highlighted row is marked in Cmd/Ctrl+K (and in a cell's
+          right-click list of related tables). Either way it's drawn in that
+          row's connection color, so you can tell which environment a result
+          belongs to before you open it.
         </div>
         <div className="settings-select-row">
           <select

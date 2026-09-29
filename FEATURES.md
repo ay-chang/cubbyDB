@@ -373,7 +373,11 @@ code comments or AGENTS.md's architecture section.
     list, Enter jumps to whichever is highlighted. Works while typing in the
     filter box (arrows/Enter are intercepted there rather than moving the
     text cursor) and, for the rare menu with only one unfiltered target and
-    no filter box at all, via a window-level fallback
+    no filter box at all, via a window-level fallback. The highlighted table
+    is marked exactly like the Cmd/Ctrl+K palette's selected result — a
+    tinted row with an accent ring by default, or a solid fill if Settings →
+    Appearance → Interface → Command palette selection is set to Fill — and
+    hovering a row moves that highlight, so only one row is ever marked
 - CSV export, with a configurable field delimiter
 - **Find in results** (Cmd/Ctrl+F): a query box scoped to the active grid,
   matching case-insensitively against every existing-row cell. Matches are
@@ -531,9 +535,10 @@ code comments or AGENTS.md's architecture section.
   since that's what an unset draft cell already means on insert
 - **Remove row(s)**: deletes one or more selected existing rows (a single
   confirmation covers a multi-row selection) via a primary-key-scoped
-  `DELETE` — selected either via the gutter or by drag-selecting a block of
-  cells (see **Drag-select a range** below); either way, every row the
-  selection touches is removed regardless of which columns were involved
+  `DELETE` — selected via the gutter, by drag-selecting a block of cells
+  (see **Drag-select a range** below), or just by clicking any one cell,
+  which targets that cell's row; either way, every row the selection touches
+  is removed regardless of which columns were involved
 - **Cascading delete preview**: if other rows reference the one(s) you're
   deleting via a foreign key, deleting shows exactly what else would go
   instead of just failing with a raw constraint error — every dependent row,
@@ -794,9 +799,9 @@ code comments or AGENTS.md's architecture section.
 
 ## Installing & updating
 
-- Installers (macOS, Windows, Linux) are built and published to GitHub
-  Releases whenever a version tag is pushed; each release also carries a
-  signed update manifest for the in-app updater
+- Installers (macOS, Windows, Linux) are built and published to the public
+  `cubbyDB-releases` GitHub repo whenever a version tag is pushed; each
+  release also carries a signed update manifest for the in-app updater
 - On launch, CubbyDB silently checks for a newer release; if one exists, a
   dismissible top-of-window banner offers **Update** (downloads, installs,
   and relaunches) or **Later** (checks again next launch). A failed check
@@ -827,11 +832,37 @@ code comments or AGENTS.md's architecture section.
   the active connection once one exists, rather than at the very first
   splash screen
 
+## License
+
+- CubbyDB is a paid app with a **14-day free trial**, counted from the first
+  launch. During the trial everything works, and a quiet amber **Trial: N
+  days left** button at the left of the top bar's right-hand cluster opens
+  **Settings → License**
+- When the trial ends, the whole app is replaced by a lock screen offering
+  **Buy CubbyDB** and a license-key field; nothing is deleted, so activating
+  a key picks up exactly where the user left off. Deleting the app's trial
+  file doesn't restart the trial
+- A licensed copy quietly re-checks its key with Polar about once a week, in
+  the background. A key Polar no longer recognizes (revoked or refunded)
+  stops counting; being offline never does — the check just waits for the
+  next launch
+- **Settings → License** takes the key from the purchase email (sold through
+  Polar). **Activate** registers this computer with Polar, under its name, as
+  one of the key's limited activations (3 computers per key) and remembers it,
+  so the app never needs the network to stay licensed. A rejected key shows
+  why inline (unrecognized, revoked, already on the maximum number of
+  computers, or the license server unreachable)
+- Once licensed, the section shows who it's licensed to and the masked key,
+  with **Remove**, which frees this computer's slot so the key can move to
+  another one (buyers can also free slots from Polar's customer portal).
+  **Buy CubbyDB** opens the pricing page on cubbydb.com in the browser
+- A license covers the whole app, AI assistant included
+
 ## Settings
 
-Five top-level tabs: **General** (behavior), **Connections**, **Appearance**
+Six top-level tabs: **General** (behavior), **Connections**, **Appearance**
 (with **Interface** / **Table** / **Sidebar** / **Editor** sub-tabs), **AI
-Assistant**, and **Keyboard Shortcuts**.
+Assistant**, **License**, and **Keyboard Shortcuts**.
 Every setting applies live and is persisted (no restart needed for anything in
 here — it's all frontend-only). Open Settings from the top-bar gear or with
 the fixed, platform-standard Cmd/Ctrl+, shortcut. While Settings is open,

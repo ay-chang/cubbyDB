@@ -17,6 +17,7 @@ use crate::connections::{ConnectionStore, OpenConnectionsStore};
 use crate::cubbies::CubbyStore;
 use crate::db::{ConnectionParams, DbSession, Engine, QueryCanceller};
 use crate::history::HistoryStore;
+use crate::license::LicenseStore;
 use crate::repos::RepoStore;
 use crate::saved_queries::SavedQueryStore;
 use crate::ssh_known_hosts::SshKnownHostsStore;
@@ -40,6 +41,8 @@ pub struct ActiveSession {
 
 pub struct AppState {
     data_dir: PathBuf,
+    /// Holds only the license trial's second copy (see `license.rs`).
+    cache_dir: PathBuf,
     /// Every live session, keyed by session id (assigned in `connect`).
     pub active: Mutex<HashMap<String, ActiveSession>>,
     /// Per-session handles that can cancel whatever that session is
@@ -65,9 +68,10 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(data_dir: PathBuf) -> Self {
+    pub fn new(data_dir: PathBuf, cache_dir: PathBuf) -> Self {
         Self {
             data_dir,
+            cache_dir,
             active: Mutex::new(HashMap::new()),
             canceller: Mutex::new(HashMap::new()),
             ai_cancellers: Mutex::new(HashMap::new()),
@@ -100,6 +104,10 @@ impl AppState {
 
     pub fn repo_store(&self) -> RepoStore {
         RepoStore::new(&self.data_dir)
+    }
+
+    pub fn license_store(&self) -> LicenseStore {
+        LicenseStore::new(&self.data_dir, &self.cache_dir)
     }
 
     pub fn ai_config_store(&self) -> AiConfigStore {

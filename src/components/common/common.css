@@ -1259,6 +1259,155 @@ button.shortcut-binding:focus-visible {
 }
 
 /* --- Startup / reconnect splash --- */
+/* Replaces the whole app once an unlicensed trial has ended (LicenseGate). */
+.license-gate {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  overflow: hidden;
+  isolation: isolate;
+  background: var(--app-bg);
+}
+/* Dot grid that fades out toward the edges, with the accent glowing behind the card. */
+.license-gate::before,
+.license-gate::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+.license-gate::before {
+  background-image: radial-gradient(var(--border-strong) 1px, transparent 1.4px);
+  background-size: 22px 22px;
+  mask-image: radial-gradient(ellipse 70% 65% at 50% 45%, #000 20%, transparent 75%);
+}
+.license-gate::after {
+  background:
+    radial-gradient(ellipse 38% 34% at 50% 48%, var(--accent-glow), transparent 70%),
+    radial-gradient(ellipse 70% 45% at 50% -5%, var(--accent-tint), transparent 70%);
+}
+.license-gate__card {
+  width: 100%;
+  max-width: 440px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 36px 32px 28px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow:
+    0 0 0 4px var(--accent-glow-soft),
+    0 30px 70px -30px rgba(20, 24, 40, 0.35);
+}
+.license-gate__mark {
+  width: 44px;
+  height: 44px;
+  color: var(--accent);
+  margin-bottom: 18px;
+  filter: drop-shadow(0 6px 14px var(--accent-glow));
+}
+.license-gate__title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.license-gate__lede {
+  margin: 8px 0 24px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+.license-gate__buy {
+  width: 100%;
+  height: 42px;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13.5px;
+  font-weight: 500;
+  box-shadow: 0 10px 22px -12px var(--accent);
+  transition: transform var(--transition), background var(--transition),
+    box-shadow var(--transition), opacity var(--transition);
+}
+.license-gate__buy:hover {
+  transform: translateY(-1px);
+  background: var(--accent-hover);
+  box-shadow: 0 14px 26px -12px var(--accent);
+}
+/* Buy is the primary action here, so Activate steps down to a tint. */
+.license-gate .btn--primary {
+  background: var(--accent-tint);
+  color: var(--accent-tint-text);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  box-shadow: none;
+}
+.license-gate .btn--primary:not(:disabled):hover {
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+}
+.license-gate__buy:active {
+  transform: translateY(0);
+  opacity: 0.9;
+}
+.license-gate__buy-arrow {
+  transition: transform var(--transition);
+}
+.license-gate__buy:hover .license-gate__buy-arrow {
+  transform: translateX(2px);
+}
+.license-gate__included {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 14px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+.license-gate__included li::before {
+  content: "✓";
+  margin-right: 5px;
+  color: var(--accent);
+}
+.license-gate__divider {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 26px 0 14px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+.license-gate__divider::before,
+.license-gate__divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+.license-gate .settings-select-row {
+  width: 100%;
+}
+.license-gate .settings-input {
+  flex: 1;
+  min-width: 0;
+}
+.license-gate .settings-field__desc--error {
+  margin-top: 8px;
+  text-align: left;
+  width: 100%;
+}
+
 .splash {
   flex: 1;
   display: flex;

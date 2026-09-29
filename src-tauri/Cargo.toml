@@ -3,7 +3,7 @@ name = "cubbydb"
 version = "0.1.19"
 description = "A modern, restrained desktop Postgres client."
 authors = ["CubbyDB contributors"]
-license = "MIT"
+license = "LicenseRef-Proprietary"
 repository = ""
 edition = "2021"
 # Bumped from 1.77 for the `russh` SSH-tunnel dependency, which needs it.

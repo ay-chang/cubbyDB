@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { ConfirmDialog } from "./components/common/ConfirmDialog";
 import { DeleteImpactDialog } from "./components/common/DeleteImpactDialog";
 import { ErrorBoundary } from "./components/common/ErrorBoundary";
+import { LicenseGate } from "./components/common/LicenseGate";
 import { SettingsDialog } from "./components/common/SettingsDialog";
 import { Spinner } from "./components/common/Spinner";
 import { ConnectionDialogs } from "./components/connection/ConnectionDialogs";
@@ -15,6 +16,7 @@ export function App() {
   const view = useStore((s) => s.view);
   const reconnecting = useStore((s) => s.reconnecting);
   const openConnections = useStore((s) => s.openConnections);
+  const license = useStore((s) => s.license);
   const initialize = useStore((s) => s.initialize);
   const openSettings = useStore((s) => s.openSettings);
   const settingsBinding = useKeybindingStore(
@@ -36,6 +38,15 @@ export function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [openSettings, reconnecting, settingsBinding]);
+
+  if (license && !license.licensed && license.trialDaysLeft <= 0) {
+    return (
+      <>
+        <LicenseGate />
+        <ConfirmDialog />
+      </>
+    );
+  }
 
   if (reconnecting) {
     return (

@@ -25,6 +25,7 @@ export const SETTINGS_SECTIONS: Array<{
   { id: "connections", label: "Connections", description: "Open and saved database connections" },
   { id: "appearance", label: "Appearance", description: "Interface, table, sidebar, and editor appearance" },
   { id: "aiAssistant", label: "AI Assistant", description: "Provider, credentials, model, and reasoning" },
+  { id: "license", label: "License", description: "Your CubbyDB license key" },
   { id: "shortcuts", label: "Keyboard Shortcuts", description: "Review and customize keyboard commands" },
 ];
 
@@ -165,7 +166,7 @@ export const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
   {
     id: "appearance.palette-selection",
     label: "Command palette selection",
-    description: "Outline or fill the highlighted row in Cmd/Ctrl+K.",
+    description: "Outline or fill the highlighted row in Cmd/Ctrl+K and the related-tables menu.",
     path: "Appearance · Interface",
     section: "appearance",
     appearanceSub: "interface",
@@ -291,6 +292,15 @@ export const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
     appearanceSub: "editor",
     targetId: "editor.line-wrap",
     keywords: ["code", "horizontal scroll"],
+  },
+  {
+    id: "license.key",
+    label: "License key",
+    description: "Enter or remove the license key from your CubbyDB purchase.",
+    path: "License",
+    section: "license",
+    targetId: "license.key",
+    keywords: ["buy", "purchase", "register", "activate", "Polar"],
   },
   {
     id: "ai.provider",

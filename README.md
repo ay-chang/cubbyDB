@@ -31,7 +31,9 @@ duplicate (and drift out of sync with) that list. Highlights:
 - **AI assistant** — schema-aware chat with Anthropic, OpenAI, or Codex/Claude
   Code subscription login; read-only by construction
 - Query history, keyboard-shortcut rebinding, 8 themes, and a signed
-  auto-updater with GitHub Releases
+  in-app auto-updater
+- **Paid app** — a 14-day free trial, then a one-time license key bought on
+  [cubbydb.com/pricing](https://cubbydb.com/pricing) (sold through Polar)
 
 ## Tech stack
 
@@ -108,6 +110,9 @@ CubbyDB stores everything under the OS app-data directory
 - `cubbies.json` — cubbies
 - `ai_config.json` — AI provider/model settings
 - `ai_chats.json` — saved AI conversations, per connection
+- `license.json` — the activated license key, if any
+- `trial.json` — when this install's 14-day trial started (also mirrored in
+  the OS cache directory, so deleting this file alone doesn't reset it)
 
 Query results, schema, and table row counts are **not** persisted — always
 read live from Postgres.
@@ -119,6 +124,63 @@ Gotchas section for why an OS-keychain round trip (multiple auth prompts per
 launch) wasn't worth the trade. Don't save credentials you wouldn't keep in a
 local dotfile.
 
+## Licensing (how the paywall works)
+
+CubbyDB is sold, not free. The logic lives in `src-tauri/src/license.rs`:
+
+- **Trial:** the first launch records a start date. For 14 days everything
+  works; the top bar shows "Trial: N days left". After that the whole app is
+  replaced by the lock screen (`LicenseGate`) until a key is activated.
+- **Buying:** Buy opens [cubbydb.com/pricing](https://cubbydb.com/pricing),
+  which links to the Polar checkout. Polar emails a `CUBBY-...` license key.
+- **Activating:** Settings → License (or the lock screen) sends the key to
+  Polar's public license API, which allows up to 3 activations per key. The
+  key and its activation id are saved to `license.json`.
+- **Re-checking:** about once a week the app re-validates the key with Polar
+  in the background. A revoked or refunded key goes back to unlicensed;
+  being offline never locks anyone out.
+- **Removing:** Settings → License → Remove deactivates the key with Polar,
+  freeing that computer's slot.
+- **Free keys** (friends, early users) are Polar checkouts with a 100%
+  discount code — there is no special case in the app.
+
+The Polar organization id and pricing URL are constants at the top of
+`license.rs`. The price itself lives only in Polar and on the website.
+
+## Releasing
+
+This repo is private, so installers can't be downloaded from it. CI builds
+every release and publishes it to the public
+[`ay-chang/cubbyDB-releases`](https://github.com/ay-chang/cubbyDB-releases)
+repo instead. That's where the in-app updater (`tauri.conf.json`'s updater
+endpoint) and the website's download buttons look for new versions.
+
+To ship a new version:
+
+1. Add a `RELEASE_NOTES` entry for the new version at the top of
+   `src/lib/releaseNotes.ts` (shown once in the app's What's New tab).
+2. Bump the version, commit, tag, and push:
+
+   ```bash
+   node scripts/set-version.mjs X.Y.Z
+   git commit -am "Release vX.Y.Z"
+   git tag vX.Y.Z
+   git push origin main vX.Y.Z
+   ```
+
+3. The `release` workflow builds macOS, Windows, and Linux installers and
+   creates a **draft** release on `cubbyDB-releases`. Review it there and
+   click **Publish release**. Only then do users get the update and the
+   website serve the new download.
+
+One-time setup (already done unless you're setting this up fresh): the
+workflow needs these secrets on this repo — `RELEASES_TOKEN` (a fine-grained
+GitHub token with Contents read/write on `cubbyDB-releases`), the Tauri
+updater signing key (`TAURI_SIGNING_PRIVATE_KEY`,
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`), and the Apple signing and
+notarization secrets (`APPLE_*`). See the header of
+`.github/workflows/release.yml`.
+
 ## Scope
 
 Explicitly out of scope: any database engine other than Postgres, and user
@@ -128,4 +190,4 @@ has one place to go stale, not two.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Proprietary — see [LICENSE](LICENSE).

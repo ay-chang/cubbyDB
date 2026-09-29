@@ -238,6 +238,9 @@
 .topbar__btn--loading {
   cursor: default;
 }
+.topbar__btn--unlicensed {
+  color: var(--amber-text);
+}
 /* The Cubby button only carries a label while a cubby is open, and that label
    is the cubby's name — user text of arbitrary length, so it needs its own cap
    rather than growing the top bar. Idle, the button renders as
