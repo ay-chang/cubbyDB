@@ -33,6 +33,36 @@ export interface ReleaseNotesEntry {
 
 export const RELEASE_NOTES: ReleaseNotesEntry[] = [
   {
+    version: "0.1.21",
+    date: "2026-09-30",
+    sections: [
+      {
+        heading: "Help & Feedback",
+        items: [
+          "Settings has a new Help & Feedback section. Email support opens a message with your CubbyDB version and system already filled in, for questions, ideas, and bug reports alike.",
+        ],
+      },
+      {
+        heading: "Results grid",
+        items: [
+          "Remove deletes the row of the cell you've selected, with no need to click its row number first.",
+          "The foreign-key jump menu marks its selected row the same way the command palette does, and moving the mouse over a row selects it.",
+          "Row numbers no longer show through the grid's top-left corner when you scroll.",
+        ],
+      },
+      {
+        heading: "Trial",
+        items: ["The free trial is now 7 days."],
+      },
+      {
+        heading: "Fixes",
+        items: [
+          "On Windows, links CubbyDB opens in your browser, like the ChatGPT sign-in page, no longer get cut off partway.",
+        ],
+      },
+    ],
+  },
+  {
     version: "0.1.20",
     date: "2026-09-29",
     sections: [
