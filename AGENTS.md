@@ -263,7 +263,8 @@ clearly and get sign-off before breaking it.
   so CI publishes installers and `latest.json` to `ay-chang/cubbyDB-releases`
   (see `release.yml`'s header), and the updater endpoint in
   `tauri.conf.json` points there. Don't point either back at this repo.
-  Releasing is: add a `releaseNotes.ts` entry, `node scripts/set-version.mjs
+  Releasing is: add a `releaseNotes.ts` entry (and the same one to
+  cubbydb-site's `src/lib/changelog.ts`), `node scripts/set-version.mjs
   X.Y.Z`, commit, tag `vX.Y.Z`, push; CI creates a draft release there to be
   published by hand (full steps in README's Releasing section).
 - **CubbyDB is paid.** Every launch goes through `license.rs`: a 14-day trial,

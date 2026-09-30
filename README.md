@@ -158,7 +158,9 @@ endpoint) and the website's download buttons look for new versions.
 To ship a new version:
 
 1. Add a `RELEASE_NOTES` entry for the new version at the top of
-   `src/lib/releaseNotes.ts` (shown once in the app's What's New tab).
+   `src/lib/releaseNotes.ts` (shown once in the app's What's New tab), and
+   the same entry at the top of `src/lib/changelog.ts` in the `cubbydb-site`
+   repo (the public cubbydb.com/changelog page).
 2. Bump the version, commit, tag, and push:
 
    ```bash
