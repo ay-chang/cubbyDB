@@ -1,6 +1,6 @@
 //! CubbyDB license, sold through Polar (polar.sh).
 //!
-//! A new install gets a 14-day trial, counted from its first launch; after
+//! A new install gets a 7-day trial, counted from its first launch; after
 //! that the app is locked until a license key is entered. The trial start is
 //! kept in two places (the data dir and the cache dir) and the earliest wins,
 //! so deleting one file doesn't restart it. Entering a key activates it with
@@ -29,7 +29,7 @@ const TRIAL_FILE_NAME: &str = "trial.json";
 const TRIAL_MIRROR_FILE_NAME: &str = ".install";
 const REVALIDATE_DAYS: u64 = 7;
 
-const TRIAL_DAYS: u64 = 14;
+const TRIAL_DAYS: u64 = 7;
 const DAY_MS: u64 = 24 * 60 * 60 * 1000;
 
 /// Polar organization that sells CubbyDB.
@@ -413,11 +413,11 @@ mod tests {
     #[test]
     fn trial_counts_down_whole_days_then_ends() {
         let start = 1_000_000;
-        assert_eq!(trial_days_left(start, start), 14);
-        assert_eq!(trial_days_left(start, start + 1), 14);
-        assert_eq!(trial_days_left(start, start + DAY_MS), 13);
-        assert_eq!(trial_days_left(start, start + 14 * DAY_MS - 1), 1);
-        assert_eq!(trial_days_left(start, start + 14 * DAY_MS), 0);
+        assert_eq!(trial_days_left(start, start), TRIAL_DAYS);
+        assert_eq!(trial_days_left(start, start + 1), TRIAL_DAYS);
+        assert_eq!(trial_days_left(start, start + DAY_MS), TRIAL_DAYS - 1);
+        assert_eq!(trial_days_left(start, start + TRIAL_DAYS * DAY_MS - 1), 1);
+        assert_eq!(trial_days_left(start, start + TRIAL_DAYS * DAY_MS), 0);
         assert_eq!(trial_days_left(start, start + 30 * DAY_MS), 0);
     }
 
@@ -427,7 +427,7 @@ mod tests {
         let first = store.trial_started_at();
         std::thread::sleep(std::time::Duration::from_millis(5));
         assert_eq!(store.trial_started_at(), first);
-        assert_eq!(store.status().unwrap().trial_days_left, 14);
+        assert_eq!(store.status().unwrap().trial_days_left, TRIAL_DAYS);
     }
 
     #[test]

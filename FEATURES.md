@@ -834,7 +834,7 @@ code comments or AGENTS.md's architecture section.
 
 ## License
 
-- CubbyDB is a paid app with a **14-day free trial**, counted from the first
+- CubbyDB is a paid app with a **7-day free trial**, counted from the first
   launch. During the trial everything works, and a quiet amber **Trial: N
   days left** button at the left of the top bar's right-hand cluster opens
   **Settings → License**

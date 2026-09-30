@@ -95,7 +95,7 @@ src-tauri/src/
   license.rs        Polar license key: activated per computer (limited
                     activations), then stored locally (JSON, 0600 on unix);
                     removing deactivates; weekly background re-check.
-                    Also the 14-day trial (`trial.json`, mirrored in the
+                    Also the 7-day trial (`trial.json`, mirrored in the
                     cache dir); past it, `App` shows `LicenseGate`
   browser.rs        open a backend-chosen URL in the default browser
   support.rs        the pre-filled support email behind Settings > Help &
@@ -269,7 +269,7 @@ clearly and get sign-off before breaking it.
   cubbydb-site's `src/lib/changelog.ts`), `node scripts/set-version.mjs
   X.Y.Z`, commit, tag `vX.Y.Z`, push; CI creates a draft release there to be
   published by hand (full steps in README's Releasing section).
-- **CubbyDB is paid.** Every launch goes through `license.rs`: a 14-day trial,
+- **CubbyDB is paid.** Every launch goes through `license.rs`: a 7-day trial,
   then `App` renders `LicenseGate` instead of the app until a Polar license
   key is activated (3 computers per key, re-validated weekly). Offline must
   never lock out a licensed user, and network errors during the weekly check
@@ -286,7 +286,7 @@ clearly and get sign-off before breaking it.
 - `history.jsonl` — query history (capped to ~1000 recent entries)
 - `ssh_known_hosts.json` — trusted SSH bastion host-key fingerprints
 - `license.json` — the activated license key, if any
-- `trial.json` — when this install's 14-day trial started
+- `trial.json` — when this install's 7-day trial started
 
 Query results, schema, and table row counts are **not** persisted — always read
 live from Postgres.

@@ -32,7 +32,7 @@ duplicate (and drift out of sync with) that list. Highlights:
   Code subscription login; read-only by construction
 - Query history, keyboard-shortcut rebinding, 8 themes, and a signed
   in-app auto-updater
-- **Paid app** — a 14-day free trial, then a one-time license key bought on
+- **Paid app** — a 7-day free trial, then a one-time license key bought on
   [cubbydb.com/pricing](https://cubbydb.com/pricing) (sold through Polar)
 
 ## Tech stack
@@ -111,7 +111,7 @@ CubbyDB stores everything under the OS app-data directory
 - `ai_config.json` — AI provider/model settings
 - `ai_chats.json` — saved AI conversations, per connection
 - `license.json` — the activated license key, if any
-- `trial.json` — when this install's 14-day trial started (also mirrored in
+- `trial.json` — when this install's 7-day trial started (also mirrored in
   the OS cache directory, so deleting this file alone doesn't reset it)
 
 Query results, schema, and table row counts are **not** persisted — always
@@ -128,7 +128,7 @@ local dotfile.
 
 CubbyDB is sold, not free. The logic lives in `src-tauri/src/license.rs`:
 
-- **Trial:** the first launch records a start date. For 14 days everything
+- **Trial:** the first launch records a start date. For 7 days everything
   works; the top bar shows "Trial: N days left". After that the whole app is
   replaced by the lock screen (`LicenseGate`) until a key is activated.
 - **Buying:** Buy opens [cubbydb.com/pricing](https://cubbydb.com/pricing),
