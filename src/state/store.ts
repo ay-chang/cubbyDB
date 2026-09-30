@@ -315,6 +315,7 @@ export type SettingsSection =
   | "appearance"
   | "aiAssistant"
   | "license"
+  | "support"
   | "shortcuts";
 
 /** The accent color used for buttons, active states, and SQL keyword
@@ -1449,6 +1450,7 @@ interface AppStore {
   activateLicense: (key: string) => Promise<void>;
   removeLicense: () => Promise<void>;
   openPurchasePage: () => void;
+  openSupportEmail: () => void;
   saveAiProvider: (provider: AiProvider) => Promise<void>;
   saveAiConfig: (provider: AiProvider, apiKey: string) => Promise<void>;
   clearAiConfig: (provider: AiProvider) => Promise<void>;
@@ -4601,6 +4603,12 @@ export const useStore = create<AppStore>((set, get) => {
     openPurchasePage() {
       api
         .openPurchasePage()
+        .catch((err) => get().showToast(errorMessage(err), "error"));
+    },
+
+    openSupportEmail() {
+      api
+        .openSupportEmail()
         .catch((err) => get().showToast(errorMessage(err), "error"));
     },
 

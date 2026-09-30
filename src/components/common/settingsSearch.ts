@@ -26,6 +26,7 @@ export const SETTINGS_SECTIONS: Array<{
   { id: "appearance", label: "Appearance", description: "Interface, table, sidebar, and editor appearance" },
   { id: "aiAssistant", label: "AI Assistant", description: "Provider, credentials, model, and reasoning" },
   { id: "license", label: "License", description: "Your CubbyDB license key" },
+  { id: "support", label: "Help & Feedback", description: "Contact support, send feedback, or report a bug" },
   { id: "shortcuts", label: "Keyboard Shortcuts", description: "Review and customize keyboard commands" },
 ];
 
@@ -301,6 +302,15 @@ export const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
     section: "license",
     targetId: "license.key",
     keywords: ["buy", "purchase", "register", "activate", "Polar"],
+  },
+  {
+    id: "support.contact",
+    label: "Contact support",
+    description: "Email support with a question, feedback, or a bug report.",
+    path: "Help & Feedback",
+    section: "support",
+    targetId: "support.contact",
+    keywords: ["help", "email", "bug", "report", "feedback", "feature request", "issue"],
   },
   {
     id: "ai.provider",

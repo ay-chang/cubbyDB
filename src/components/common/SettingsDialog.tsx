@@ -302,6 +302,7 @@ export function SettingsDialog() {
           {section === "appearance" && appearanceSub === "editor" && <EditorSection />}
           {section === "aiAssistant" && <AiAssistantSection />}
           {section === "license" && <LicenseSection />}
+          {section === "support" && <SupportSection />}
           {section === "shortcuts" && <ShortcutsSection />}
         </div>
       </div>
@@ -537,6 +538,30 @@ function LicenseSection() {
             <LicenseKeyForm withBuy />
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+// Mirrors SUPPORT_EMAIL in src-tauri/src/support.rs, which builds the email.
+const SUPPORT_EMAIL = "support@cubbydb.com";
+
+function SupportSection() {
+  const openSupportEmail = useStore((s) => s.openSupportEmail);
+
+  return (
+    <div className="settings-section">
+      <div className="settings-field settings-toggle-row" data-setting-id="support.contact">
+        <div>
+          <div className="settings-field__label">Contact support</div>
+          <div className="settings-field__desc">
+            Questions, feedback, or a bug to report. Or email{" "}
+            <span className="mono support-email">{SUPPORT_EMAIL}</span>
+          </div>
+        </div>
+        <button className="btn btn--primary" onClick={openSupportEmail}>
+          Email support
+        </button>
       </div>
     </div>
   );

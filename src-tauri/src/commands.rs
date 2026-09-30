@@ -262,6 +262,17 @@ pub async fn open_purchase_page() -> Result<(), DbError> {
         .map_err(|e| DbError::internal(format!("Could not open the purchase page: {e}")))
 }
 
+#[tauri::command]
+pub async fn open_support_email(app: tauri::AppHandle) -> Result<(), DbError> {
+    let version = app.package_info().version.to_string();
+    crate::browser::open(&crate::support::mailto(&version)).map_err(|e| {
+        DbError::internal(format!(
+            "Could not open your email app ({e}). Write to {} instead.",
+            crate::support::SUPPORT_EMAIL
+        ))
+    })
+}
+
 /// Open a new session and add it to the pool — never overwrites an existing
 /// one, so connecting to a second database leaves the first live.
 ///

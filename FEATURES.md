@@ -858,11 +858,20 @@ code comments or AGENTS.md's architecture section.
   **Buy CubbyDB** opens the pricing page on cubbydb.com in the browser
 - A license covers the whole app, AI assistant included
 
+## Help & feedback
+
+- **Settings → Help & Feedback** has **Email support**, which opens a new
+  email to support@cubbydb.com in the default mail app, with the app's
+  version and operating system already filled in at the bottom — for
+  questions, feedback, and bug reports alike. The address is shown next to it
+  (selectable) for anyone who'd rather write from another email account
+- Searchable from Settings search and Cmd/Ctrl+K ("bug", "feedback", "help")
+
 ## Settings
 
-Six top-level tabs: **General** (behavior), **Connections**, **Appearance**
+Seven top-level tabs: **General** (behavior), **Connections**, **Appearance**
 (with **Interface** / **Table** / **Sidebar** / **Editor** sub-tabs), **AI
-Assistant**, **License**, and **Keyboard Shortcuts**.
+Assistant**, **License**, **Help & Feedback**, and **Keyboard Shortcuts**.
 Every setting applies live and is persisted (no restart needed for anything in
 here — it's all frontend-only). Open Settings from the top-bar gear or with
 the fixed, platform-standard Cmd/Ctrl+, shortcut. While Settings is open,

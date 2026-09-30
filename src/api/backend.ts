@@ -476,6 +476,11 @@ export function openPurchasePage(): Promise<void> {
   return invoke("open_purchase_page");
 }
 
+/** Opens a pre-filled email to support in the user's mail app. */
+export function openSupportEmail(): Promise<void> {
+  return invoke("open_support_email");
+}
+
 export function getAiConfig(): Promise<AiConfigStatus> {
   return invoke("get_ai_config");
 }

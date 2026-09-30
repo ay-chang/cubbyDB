@@ -98,6 +98,8 @@ src-tauri/src/
                     Also the 14-day trial (`trial.json`, mirrored in the
                     cache dir); past it, `App` shows `LicenseGate`
   browser.rs        open a backend-chosen URL in the default browser
+  support.rs        the pre-filled support email behind Settings > Help &
+                    Feedback
   state.rs          Tauri-managed AppState (every open session, keyed by id)
   commands.rs       the #[tauri::command] surface; also the auto-reconnect retry
   lib.rs / main.rs  app wiring + entry point

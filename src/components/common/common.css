@@ -1260,6 +1260,11 @@ button.shortcut-binding:focus-visible {
 
 /* --- Startup / reconnect splash --- */
 /* Replaces the whole app once an unlicensed trial has ended (LicenseGate). */
+.support-email {
+  color: var(--text);
+  user-select: text;
+}
+
 .license-gate {
   position: relative;
   flex: 1;

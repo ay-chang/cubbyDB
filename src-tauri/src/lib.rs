@@ -21,6 +21,7 @@ mod repos;
 mod saved_queries;
 mod ssh_known_hosts;
 mod state;
+mod support;
 
 use tauri::Manager;
 
@@ -61,6 +62,7 @@ pub fn run() {
             commands::activate_license,
             commands::remove_license,
             commands::open_purchase_page,
+            commands::open_support_email,
             commands::connect,
             commands::reconnect_session,
             commands::set_session_read_only,
