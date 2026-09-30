@@ -624,6 +624,7 @@ function ResultsGrid({
 }) {
   const openTableWithFilter = useStore((s) => s.openTableWithFilter);
   const nullDisplay = useStore((s) => s.nullDisplay);
+  const paletteSelectionStyle = useStore((s) => s.paletteSelectionStyle);
   const nullText = NULL_DISPLAY_LABELS[nullDisplay];
   const rowCopyDelimiter = useStore((s) => s.rowCopyDelimiter);
   const tableRowHeight = useStore((s) => s.tableRowHeight);
@@ -2307,7 +2308,15 @@ function ResultsGrid({
       setRange(null);
       return;
     }
-    if (rowSel.length === 0) return;
+    if (rowSel.length === 0) {
+      // A single clicked cell stands in for its row, so there's no need to
+      // go back and click the row number first.
+      if (selected) {
+        void deleteExistingRows(tab.id, [selected.r]);
+        setSelected(null);
+      }
+      return;
+    }
     // Discard any selected draft rows locally (highest index first so earlier
     // ones don't shift), then delete the selected existing rows with one confirm.
     const newIdxs = rowSel
@@ -2706,6 +2715,9 @@ function ResultsGrid({
                   : `${ref.schema}.${ref.table}.${ref.column}`
               }
               onClick={() => openFkRef(ref)}
+              // Move, not enter: the menu opens under the pointer, and a row
+              // that merely appeared beneath it shouldn't steal the selection.
+              onMouseMove={() => setFkMenuSelected(globalIndex)}
             >
               <span className="context-menu__fk-name">{ref.table}</span>
               <span className="context-menu__sub mono">
@@ -2726,7 +2738,11 @@ function ResultsGrid({
           return (
             <div
               ref={fkMenuRef}
-              className={"context-menu" + (hasFk ? " context-menu--fk" : "")}
+              className={
+                "context-menu" +
+                (hasFk ? " context-menu--fk" : "") +
+                (paletteSelectionStyle === "fill" ? " context-menu--select-fill" : "")
+              }
               style={{
                 ...fkMenuStyle(fkMenu.x, fkMenu.y),
                 ...(fkMenuWidth ? { width: fkMenuWidth } : {}),
@@ -3040,14 +3056,16 @@ function ResultsGrid({
             />
             <button
               className="table-toolbar__btn table-toolbar__btn--danger"
-              disabled={rowSel.length === 0 && !rangeRowSet?.size}
+              disabled={rowSel.length === 0 && !rangeRowSet?.size && !selected}
               onClick={handleRemoveRow}
               title={
                 rangeRowSet?.size
                   ? `Remove the ${rangeRowSet.size} dragged-over row${rangeRowSet.size > 1 ? "s" : ""}`
                   : rowSel.length > 0
                     ? `Remove the selected row${rowSel.length > 1 ? "s" : ""}`
-                    : "Select a row (click its number), or drag across cells, to remove it"
+                    : selected
+                      ? "Remove the selected cell's row"
+                      : "Select a cell or row, or drag across cells, to remove it"
               }
             >
               － Remove{" "}

@@ -743,7 +743,9 @@
   font-size: 12.5px;
   color: var(--text);
 }
-.context-menu__item:hover {
+/* The FK jump rows are excluded: they're selected like palette rows instead
+   (see `.context-menu__item--active`). */
+.context-menu__item:not(.context-menu__item--fk):hover {
   background: var(--accent);
   color: #fff;
 }
@@ -757,20 +759,25 @@
   background: none;
   color: var(--text-ghost);
 }
-.context-menu__item:hover .mono {
+.context-menu__item:not(.context-menu__item--fk):hover .mono {
   color: #fff;
 }
-/* Keyboard-highlighted item (ArrowUp/ArrowDown in the FK jump menu) — same
-   fill as `:hover`, so what Enter is about to do always matches what's
-   visibly selected, whether or not the pointer is anywhere near the list. */
+/* The FK jump list is filterable and arrow-key driven like the command
+   palette, so its selected row matches the palette's: a tint and an accent
+   ring by default, or a solid fill when Settings > Appearance > Interface
+   picks "Fill" (`.context-menu--select-fill`). Hovering a row moves the
+   selection itself, so pointer and keyboard never highlight two rows. */
 .context-menu__item--active {
+  background: var(--accent-tint);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+.context-menu--select-fill .context-menu__item--active {
   background: var(--accent);
   color: #fff;
+  box-shadow: none;
 }
-.context-menu__item--active .mono {
-  color: #fff;
-}
-.context-menu__item--active .context-menu__sub {
+.context-menu--select-fill .context-menu__item--active .context-menu__sub {
   color: rgba(255, 255, 255, 0.75);
 }
 .context-menu__sep {
@@ -805,9 +812,6 @@
   white-space: nowrap;
   font-size: 10.5px;
   color: var(--text-faint);
-}
-.context-menu__item--fk:hover .context-menu__sub {
-  color: rgba(255, 255, 255, 0.75);
 }
 /* Stuck to the top of the menu's own scroll region — the list beneath it is
    the same one that can run to dozens of entries, so the filter has to stay
@@ -1942,7 +1946,10 @@
   display: grid;
   position: sticky;
   top: 0;
-  z-index: 1;
+  /* Above the rows' sticky gutters (z-index 1): those come later in the DOM,
+     so at an equal level a row number scrolled up under the header would
+     paint over its blank top-left corner. */
+  z-index: 2;
   height: 30px;
   border-bottom: 1px solid var(--border);
   /* The gradient is a flat black wash at `--table-head-shade` alpha (0 by
