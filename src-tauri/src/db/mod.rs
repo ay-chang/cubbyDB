@@ -382,6 +382,9 @@ pub struct ColumnValue {
 #[serde(rename_all = "camelCase")]
 pub struct ResultColumn {
     pub name: String,
+    /// Postgres type name (e.g. `int4`, `text[]`); `None` unless the caller
+    /// asked for column types and they could be determined.
+    pub data_type: Option<String>,
 }
 
 /// Rows in one other table that reference the row(s) about to be deleted,
@@ -495,8 +498,16 @@ pub trait DbSession: Send + Sync {
     /// `READ ONLY` transaction, while still paging exactly as the
     /// non-read-only path does — unlike `run_read_only_query`, which always
     /// reads from the start, this still has to honor `page` since it backs
-    /// the editor's Next/Prev, not a one-shot export.
-    async fn run_query(&self, sql: &str, page: u32, read_only: bool) -> Result<QueryResult, DbError>;
+    /// the editor's Next/Prev, not a one-shot export. `with_types` fills in
+    /// each result column's `data_type`, at the cost of describing the
+    /// statement too, so callers only ask when the types are shown.
+    async fn run_query(
+        &self,
+        sql: &str,
+        page: u32,
+        read_only: bool,
+        with_types: bool,
+    ) -> Result<QueryResult, DbError>;
 
     /// Run a single SELECT-family statement read-only — used by the AI
     /// assistant for model-generated SQL. The driver must enforce both a

@@ -17,6 +17,7 @@ import {
 } from "./topBarIcons";
 import {
   accentPaletteFor,
+  type AccentColor,
   THEME_MODE,
   useActiveCubby,
   useActiveSchemaLoading,
@@ -80,6 +81,15 @@ export function useIsFullscreen(): boolean {
 export function TopBar() {
   const isFullscreen = useIsFullscreen();
   const theme = useStore((s) => s.theme);
+  // A tagged pill's underline, and its tint and border once selected.
+  const connTagStyle = (color: AccentColor): React.CSSProperties => {
+    const palette = accentPaletteFor(color, THEME_MODE[theme]);
+    return {
+      "--conn-tag-color": palette.accent,
+      "--conn-tag-tint": palette.accentTint,
+      "--conn-tag-glow-soft": palette.accentGlowSoft,
+    } as React.CSSProperties;
+  };
   const connections = useStore((s) => s.connections);
   const activeConnectionId = useStore((s) => s.activeConnectionId);
   const switchConnection = useStore((s) => s.switchConnection);
@@ -179,11 +189,7 @@ export function TopBar() {
                 (slot.color ? " conn-pill--tagged" : "")
               }
               style={
-                slot.color
-                  ? ({
-                      "--conn-tag-color": accentPaletteFor(slot.color, THEME_MODE[theme]).accent,
-                    } as React.CSSProperties)
-                  : undefined
+                slot.color ? connTagStyle(slot.color) : undefined
               }
               onClick={() => switchConnection(slot.sessionId)}
               onContextMenu={(e) => {

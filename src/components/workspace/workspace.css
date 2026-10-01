@@ -46,6 +46,14 @@
   align-items: center;
   gap: 8px;
 }
+/* With many connections open the pills shrink (names ellipsize) rather than
+   wrapping or pushing the right-hand buttons off the bar. */
+.topbar__left {
+  min-width: 0;
+}
+.topbar__right {
+  flex: none;
+}
 
 /* The logo is a single filled path with the cubby slot cut out of it (see
    `TopBar.tsx`), so its own artwork supplies the rounded square — no
@@ -86,10 +94,20 @@
 .conn-pill__name {
   font-size: 12.5px;
   font-weight: 500;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .conn-pill__meta {
   font-size: 11px;
   color: var(--text-faint);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Gives way well before the name does. */
+  flex-shrink: 8;
 }
 
 /* Connection switcher: one pill per live connection, the visible one
@@ -100,9 +118,11 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
 }
 .conn-pill--switch {
   position: relative;
+  min-width: 0;
   cursor: pointer;
   opacity: 0.6;
   border: 1px solid transparent;
@@ -116,6 +136,16 @@
   opacity: 1;
   background: var(--accent-tint);
   border-color: var(--accent-glow-soft);
+}
+/* A tagged connection's pill is selected in its own color, not the accent —
+   same soft tint + faint border as an untagged one, so the underline (which
+   only marks the tag) would double up and is dropped. */
+.conn-pill--active.conn-pill--tagged {
+  background: var(--conn-tag-tint);
+  border-color: var(--conn-tag-glow-soft);
+}
+.conn-pill--active.conn-pill--tagged::after {
+  content: none;
 }
 /* A tagged connection (set in its own edit form, opened by right-clicking
    the pill) gets a thin colored underline rather than recoloring the whole
@@ -134,6 +164,7 @@
   background: var(--conn-tag-color);
 }
 .conn-pill__close {
+  flex: none;
   color: var(--text-ghost);
   font-size: 13px;
   line-height: 1;
@@ -197,6 +228,7 @@
   box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--accent);
 }
 .conn-switcher__add {
+  flex: none;
   width: 22px;
   height: 22px;
   display: flex;
@@ -1072,8 +1104,9 @@
   --accent-glow: var(--conn-color-glow);
   --accent-glow-soft: var(--conn-color-glow-soft);
 }
-/* The paging/row-action bar is app chrome, not data: it stays the theme's
-   own color so the fill reads as "this connection's rows". */
+/* The WHERE bar and the paging/row-action bar are app chrome, not data: they
+   stay the theme's own color so the fill reads as "this connection's rows". */
+.results--conn-fill .results__header,
 .results--conn-fill .table-toolbar {
   --surface: var(--theme-surface);
   --surface-raised: var(--theme-surface-raised);
@@ -2006,6 +2039,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
+}
+/* The column's data type, after its name (Settings > Table). */
+.grid__htype {
+  margin-left: 6px;
+  color: var(--text-faint);
 }
 .grid__sort {
   flex: none;

@@ -1091,6 +1091,9 @@ interface AppStore {
    *  column) is drawn in a tagged connection's own color instead of the app
    *  accent, so it matches that connection's border or fill. */
   tableSelectionConnColor: boolean;
+  /** Whether results-grid headers show each column's Postgres type. Off
+   *  skips asking the backend for types, which costs a round trip. */
+  tableShowColumnTypes: boolean;
   /** Whether long cell text wraps instead of truncating with an ellipsis. */
   tableWrapText: boolean;
   /** How SQL NULL renders in results-grid cells. */
@@ -1497,6 +1500,7 @@ interface AppStore {
   setTableCellBorders: (enabled: boolean) => void;
   setTableHeaderShade: (enabled: boolean) => void;
   setTableSelectionConnColor: (enabled: boolean) => void;
+  setTableShowColumnTypes: (enabled: boolean) => void;
   setTableWrapText: (enabled: boolean) => void;
   setNullDisplay: (display: NullDisplay) => void;
   setEditorFont: (font: TableFont) => void;
@@ -1586,6 +1590,7 @@ const TABLE_ZEBRA_KEY = "cubbydb:tableZebra";
 const TABLE_CELL_BORDERS_KEY = "cubbydb:tableCellBorders";
 const TABLE_HEADER_SHADE_KEY = "cubbydb:tableHeaderShade";
 const TABLE_SELECTION_CONN_COLOR_KEY = "cubbydb:tableSelectionConnColor";
+const TABLE_SHOW_COLUMN_TYPES_KEY = "cubbydb:tableShowColumnTypes";
 const TABLE_WRAP_TEXT_KEY = "cubbydb:tableWrapText";
 const NULL_DISPLAY_KEY = "cubbydb:nullDisplay";
 const EDITOR_FONT_KEY = "cubbydb:editorFont";
@@ -1864,6 +1869,23 @@ function loadTableSelectionConnColor(): boolean {
 function saveTableSelectionConnColor(enabled: boolean) {
   try {
     localStorage.setItem(TABLE_SELECTION_CONN_COLOR_KEY, String(enabled));
+  } catch {
+    // Storage unavailable — non-fatal.
+  }
+}
+
+/** Read the saved show-column-types preference, defaulting to off. */
+function loadTableShowColumnTypes(): boolean {
+  try {
+    return localStorage.getItem(TABLE_SHOW_COLUMN_TYPES_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function saveTableShowColumnTypes(enabled: boolean) {
+  try {
+    localStorage.setItem(TABLE_SHOW_COLUMN_TYPES_KEY, String(enabled));
   } catch {
     // Storage unavailable — non-fatal.
   }
@@ -2813,6 +2835,7 @@ export const useStore = create<AppStore>((set, get) => {
     tableCellBorders: loadTableCellBorders(),
     tableHeaderShade: loadTableHeaderShade(),
     tableSelectionConnColor: loadTableSelectionConnColor(),
+    tableShowColumnTypes: loadTableShowColumnTypes(),
     tableWrapText: loadTableWrapText(),
     nullDisplay: loadNullDisplay(),
     editorFont: loadEditorFont(),
@@ -3385,7 +3408,12 @@ export const useStore = create<AppStore>((set, get) => {
       if (!slot) return;
 
       try {
-        const result = await api.runQuery(slot.sessionId, sqlToRun, page);
+        const result = await api.runQuery(
+          slot.sessionId,
+          sqlToRun,
+          page,
+          get().tableShowColumnTypes,
+        );
         set((s) => ({
           connections: mapSlotTabs(s.connections, connectionId, (tabs) =>
             tabs.map((t) =>
@@ -5329,6 +5357,11 @@ export const useStore = create<AppStore>((set, get) => {
     setTableSelectionConnColor(enabled) {
       saveTableSelectionConnColor(enabled);
       set({ tableSelectionConnColor: enabled });
+    },
+
+    setTableShowColumnTypes(enabled) {
+      saveTableShowColumnTypes(enabled);
+      set({ tableShowColumnTypes: enabled });
     },
 
     setTableWrapText(enabled) {

@@ -1441,6 +1441,8 @@ function TableSection() {
   const setTableHeaderShade = useStore((s) => s.setTableHeaderShade);
   const tableSelectionConnColor = useStore((s) => s.tableSelectionConnColor);
   const setTableSelectionConnColor = useStore((s) => s.setTableSelectionConnColor);
+  const tableShowColumnTypes = useStore((s) => s.tableShowColumnTypes);
+  const setTableShowColumnTypes = useStore((s) => s.setTableShowColumnTypes);
   const tableWrapText = useStore((s) => s.tableWrapText);
   const setTableWrapText = useStore((s) => s.setTableWrapText);
   const nullDisplay = useStore((s) => s.nullDisplay);
@@ -1577,6 +1579,23 @@ function TableSection() {
         <Toggle
           on={tableHeaderShade}
           onToggle={() => setTableHeaderShade(!tableHeaderShade)}
+        />
+      </div>
+
+      <div
+        className="settings-field settings-field--spaced settings-toggle-row"
+        data-setting-id="table.column-types"
+      >
+        <div>
+          <div className="settings-field__label">Show column types</div>
+          <div className="settings-field__desc">
+            Show each column's data type next to its name in the header, for
+            results of queries run after this is turned on.
+          </div>
+        </div>
+        <Toggle
+          on={tableShowColumnTypes}
+          onToggle={() => setTableShowColumnTypes(!tableShowColumnTypes)}
         />
       </div>
 

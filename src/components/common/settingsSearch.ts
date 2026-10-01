@@ -235,6 +235,16 @@ export const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
     keywords: ["columns", "grid", "heading"],
   },
   {
+    id: "table.column-types",
+    label: "Show column types",
+    description: "Show each column's data type in the results-grid header.",
+    path: "Appearance · Table",
+    section: "appearance",
+    appearanceSub: "table",
+    targetId: "table.column-types",
+    keywords: ["data type", "datatype", "int", "text", "header", "schema"],
+  },
+  {
     id: "table.selection-conn-color",
     label: "Selection in connection color",
     description: "Draw the grid selection in a tagged connection's color.",

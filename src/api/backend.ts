@@ -10,6 +10,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
+import { normalizeBooleanText } from "../lib/booleanText";
+
 import type {
   ActiveConnectionInfo,
   AiAuditEntry,
@@ -151,20 +153,22 @@ export function fetchSchema(sessionId: string): Promise<SchemaNode[]> {
 }
 
 /** `page` is zero-based; the driver appends LIMIT/OFFSET for a pageable
- *  statement. Omitted means the first page. */
-export function runQuery(
+ *  statement. Omitted means the first page. `withTypes` reports each
+ *  column's Postgres type, at the cost of an extra round trip. */
+export async function runQuery(
   sessionId: string,
   sql: string,
   page = 0,
+  withTypes = false,
 ): Promise<QueryResult> {
-  return invoke("run_query", { sessionId, sql, page });
+  return normalizeBooleanText(await invoke("run_query", { sessionId, sql, page, withTypes }));
 }
 
 /** Re-run a statement the assistant already ran, to export its full result.
  *  Goes through the same read-only, always-rolled-back path the AI's own
  *  tools use — the SQL came from the model, so it keeps those guarantees. */
-export function runReadonlyQuery(sessionId: string, sql: string): Promise<QueryResult> {
-  return invoke("run_readonly_query", { sessionId, sql });
+export async function runReadonlyQuery(sessionId: string, sql: string): Promise<QueryResult> {
+  return normalizeBooleanText(await invoke("run_readonly_query", { sessionId, sql }));
 }
 
 /** Ask the server to interrupt whatever's currently running on this session.

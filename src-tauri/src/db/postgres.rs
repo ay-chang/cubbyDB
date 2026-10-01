@@ -73,6 +73,29 @@ struct PostgresSession {
     _tunnel: Option<SshTunnelHandle>,
 }
 
+impl PostgresSession {
+    /// Fill in `columns`' Postgres type names by preparing (never executing)
+    /// `sql`. Only call this for text that just ran as exactly one statement:
+    /// preparing anything else could fail, and a failure inside the user's
+    /// open transaction block would abort it. Best-effort — leaves the
+    /// columns untyped on any error.
+    async fn fill_column_types(&self, sql: &str, columns: &mut [ResultColumn]) {
+        let Ok(statement) = self.client.prepare(sql).await else {
+            return;
+        };
+        if statement.columns().len() != columns.len() {
+            return;
+        }
+        for (column, described) in columns.iter_mut().zip(statement.columns()) {
+            let ty = described.type_();
+            column.data_type = Some(match ty.kind() {
+                tokio_postgres::types::Kind::Array(inner) => format!("{}[]", inner.name()),
+                _ => ty.name().to_string(),
+            });
+        }
+    }
+}
+
 #[async_trait]
 impl DbSession for PostgresSession {
     fn info(&self) -> &ConnectionInfo {
@@ -267,44 +290,59 @@ impl DbSession for PostgresSession {
         Ok(schemas)
     }
 
-    async fn run_query(&self, sql: &str, page: u32, read_only: bool) -> Result<QueryResult, DbError> {
+    async fn run_query(
+        &self,
+        sql: &str,
+        page: u32,
+        read_only: bool,
+        with_types: bool,
+    ) -> Result<QueryResult, DbError> {
         let (final_sql, bounding) = apply_paging(
             sql,
             Some(super::PAGE_SIZE),
             page * super::PAGE_SIZE,
         );
 
-        if !read_only {
+        let (messages, elapsed_ms) = if !read_only {
             let start = Instant::now();
             let messages = self
                 .client
                 .simple_query(&final_sql)
                 .await
                 .map_err(map_query_err)?;
+            (messages, start.elapsed().as_millis() as u64)
+        } else {
+            // Read-only connection: same allowlist + rolled-back transaction
+            // `run_read_only_query` enforces below, but keeping this path's own
+            // paging (`page * PAGE_SIZE`, not always-offset-0) since this still
+            // backs the editor's Next/Prev through a large result.
+            super::validate_read_only_statement(sql)?;
+            self.client
+                .batch_execute("BEGIN READ ONLY")
+                .await
+                .map_err(map_query_err)?;
+
+            let start = Instant::now();
+            let result = self.client.simple_query(&final_sql).await;
             let elapsed_ms = start.elapsed().as_millis() as u64;
-            return Ok(simple_query_messages_to_result(sql, messages, elapsed_ms, bounding));
+
+            // Always rolled back, even on success — see `run_read_only_query`
+            // below for why this is best-effort and doesn't itself get `?`'d.
+            let _ = self.client.batch_execute("ROLLBACK").await;
+
+            (result.map_err(map_query_err)?, elapsed_ms)
+        };
+
+        let single_statement = messages
+            .iter()
+            .filter(|m| matches!(m, SimpleQueryMessage::CommandComplete(_)))
+            .count()
+            == 1;
+        let mut result = simple_query_messages_to_result(sql, messages, elapsed_ms, bounding);
+        if with_types && single_statement && !result.columns.is_empty() {
+            self.fill_column_types(&final_sql, &mut result.columns).await;
         }
-
-        // Read-only connection: same allowlist + rolled-back transaction
-        // `run_read_only_query` enforces below, but keeping this path's own
-        // paging (`page * PAGE_SIZE`, not always-offset-0) since this still
-        // backs the editor's Next/Prev through a large result.
-        super::validate_read_only_statement(sql)?;
-        self.client
-            .batch_execute("BEGIN READ ONLY")
-            .await
-            .map_err(map_query_err)?;
-
-        let start = Instant::now();
-        let result = self.client.simple_query(&final_sql).await;
-        let elapsed_ms = start.elapsed().as_millis() as u64;
-
-        // Always rolled back, even on success — see `run_read_only_query`
-        // below for why this is best-effort and doesn't itself get `?`'d.
-        let _ = self.client.batch_execute("ROLLBACK").await;
-
-        let messages = result.map_err(map_query_err)?;
-        Ok(simple_query_messages_to_result(sql, messages, elapsed_ms, bounding))
+        Ok(result)
     }
 
     async fn run_read_only_query(
@@ -1108,6 +1146,7 @@ fn simple_query_messages_to_result(
                     .iter()
                     .map(|c| ResultColumn {
                         name: c.name().to_string(),
+                        data_type: None,
                     })
                     .collect();
             }
@@ -2223,13 +2262,27 @@ mod tests {
         );
 
         // Unbounded SELECT gets bounded to one page.
-        let result = session.run_query("SELECT 1 AS n", 0, false).await.expect("run_query");
+        let result = session.run_query("SELECT 1 AS n", 0, false, false).await.expect("run_query");
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][0].as_deref(), Some("1"));
+        assert_eq!(result.columns[0].data_type, None);
+
+        // Column types, only when asked — and never for multiple statements.
+        let typed = session
+            .run_query("SELECT 1 AS n, ARRAY['a'] AS tags, true AS ok", 0, false, true)
+            .await
+            .expect("typed run_query");
+        let types: Vec<_> = typed.columns.iter().map(|c| c.data_type.as_deref()).collect();
+        assert_eq!(types, vec![Some("int4"), Some("text[]"), Some("bool")]);
+        let multi = session
+            .run_query("SELECT 1; SELECT 2 AS m", 0, false, true)
+            .await
+            .expect("multi-statement run_query");
+        assert_eq!(multi.columns[0].data_type, None);
 
         // A bad query surfaces a structured error with a SQLSTATE.
         let err = session
-            .run_query("SELECT nope FROM does_not_exist", 0, false)
+            .run_query("SELECT nope FROM does_not_exist", 0, false, false)
             .await
             .expect_err("expected query error");
         assert!(err.code.is_some(), "expected a SQLSTATE code");
@@ -2239,7 +2292,7 @@ mod tests {
         // sends the column list before any row data, so this must not regress
         // to looking like a non-row-returning statement (a real prior bug).
         let empty = session
-            .run_query("SELECT 1 AS n WHERE false", 0, false)
+            .run_query("SELECT 1 AS n WHERE false", 0, false, false)
             .await
             .expect("run_query on zero-row select");
         assert_eq!(empty.rows.len(), 0);
@@ -2259,15 +2312,15 @@ mod tests {
         // int4), a value containing a single quote (the classic
         // injection/escaping footgun), and the zero-match error path.
         session
-            .run_query("DROP TABLE IF EXISTS cubbydb_edit_test", 0, false)
+            .run_query("DROP TABLE IF EXISTS cubbydb_edit_test", 0, false, false)
             .await
             .expect("drop any leftover scratch table");
         session
-            .run_query("CREATE TABLE cubbydb_edit_test (id int PRIMARY KEY, note text)", 0, false)
+            .run_query("CREATE TABLE cubbydb_edit_test (id int PRIMARY KEY, note text)", 0, false, false)
             .await
             .expect("create scratch table");
         session
-            .run_query("INSERT INTO cubbydb_edit_test (id, note) VALUES (1, 'original')", 0, false)
+            .run_query("INSERT INTO cubbydb_edit_test (id, note) VALUES (1, 'original')", 0, false, false)
             .await
             .expect("seed row");
 
@@ -2290,7 +2343,7 @@ mod tests {
             .expect("update_row with a numeric PK and a quote in the value");
 
         let check = session
-            .run_query("SELECT note FROM cubbydb_edit_test WHERE id = 1", 0, false)
+            .run_query("SELECT note FROM cubbydb_edit_test WHERE id = 1", 0, false, false)
             .await
             .expect("read back");
         assert_eq!(check.rows[0][0].as_deref(), Some("O'Brien's edit"));
@@ -2311,7 +2364,7 @@ mod tests {
             .await
             .expect("update_row setting a column to NULL");
         let nulled = session
-            .run_query("SELECT note, note IS NULL AS is_null FROM cubbydb_edit_test WHERE id = 1", 0, false)
+            .run_query("SELECT note, note IS NULL AS is_null FROM cubbydb_edit_test WHERE id = 1", 0, false, false)
             .await
             .expect("read back nulled column");
         assert_eq!(nulled.rows[0][0], None, "expected an actual SQL NULL");
@@ -2356,12 +2409,12 @@ mod tests {
 
         // If the seeded `widgets` table (1200 rows) is present, page through it.
         if let Ok(page0) = session
-            .run_query(&session.select_top_sql("public", "widgets", None, 500, 0, None), 0, false)
+            .run_query(&session.select_top_sql("public", "widgets", None, 500, 0, None), 0, false, false)
             .await
         {
             assert_eq!(page0.rows.len(), 500, "first page should be full");
             let page2 = session
-                .run_query(&session.select_top_sql("public", "widgets", None, 500, 1000, None), 0, false)
+                .run_query(&session.select_top_sql("public", "widgets", None, 500, 1000, None), 0, false, false)
                 .await
                 .expect("third page");
             assert_eq!(page2.rows.len(), 200, "last page should hold the remainder");
@@ -2374,13 +2427,14 @@ mod tests {
 
         // --- insert_row / delete_row ---
         session
-            .run_query("DROP TABLE IF EXISTS cubbydb_rowops_test", 0, false)
+            .run_query("DROP TABLE IF EXISTS cubbydb_rowops_test", 0, false, false)
             .await
             .expect("drop leftover rowops table");
         session
             .run_query(
                 "CREATE TABLE cubbydb_rowops_test (id serial PRIMARY KEY, note text, qty int DEFAULT 7)",
                 0,
+                false,
                 false,
             )
             .await
@@ -2404,7 +2458,7 @@ mod tests {
             .await
             .expect("insert explicit row");
         let after_insert = session
-            .run_query("SELECT id, note, qty FROM cubbydb_rowops_test ORDER BY id", 0, false)
+            .run_query("SELECT id, note, qty FROM cubbydb_rowops_test ORDER BY id", 0, false, false)
             .await
             .expect("read inserted rows");
         assert_eq!(after_insert.rows.len(), 2);
@@ -2427,7 +2481,7 @@ mod tests {
             .await
             .expect("delete_row");
         let after_delete = session
-            .run_query("SELECT count(*) FROM cubbydb_rowops_test", 0, false)
+            .run_query("SELECT count(*) FROM cubbydb_rowops_test", 0, false, false)
             .await
             .expect("count after delete");
         assert_eq!(after_delete.rows[0][0].as_deref(), Some("1"));
@@ -2444,12 +2498,12 @@ mod tests {
         eprintln!("delete_row ok; missing-row error path: {}", del_err.message);
 
         session
-            .run_query("DROP TABLE cubbydb_rowops_test", 0, false)
+            .run_query("DROP TABLE cubbydb_rowops_test", 0, false, false)
             .await
             .expect("clean up rowops table");
 
         session
-            .run_query("DROP TABLE cubbydb_edit_test", 0, false)
+            .run_query("DROP TABLE cubbydb_edit_test", 0, false, false)
             .await
             .expect("clean up scratch table");
     }
@@ -2490,7 +2544,7 @@ mod tests {
         let query_session = session.clone();
         let query_task = tokio::spawn(async move {
             let start = Instant::now();
-            let result = query_session.run_query("SELECT pg_sleep(15)", 0, false).await;
+            let result = query_session.run_query("SELECT pg_sleep(15)", 0, false, false).await;
             (result, start.elapsed())
         });
 
@@ -2524,7 +2578,7 @@ mod tests {
         // The session must still be usable afterward — cancelling one query
         // shouldn't poison the connection for the next one.
         let after = session
-            .run_query("SELECT 1 AS n", 0, false)
+            .run_query("SELECT 1 AS n", 0, false, false)
             .await
             .expect("session should still work after a cancelled query");
         assert_eq!(after.rows[0][0].as_deref(), Some("1"));
@@ -2555,7 +2609,7 @@ mod tests {
         let session = driver.connect(&params, &std::env::temp_dir()).await.expect("connect");
 
         session
-            .run_query("DROP TABLE IF EXISTS cubbydb_structure_test", 0, false)
+            .run_query("DROP TABLE IF EXISTS cubbydb_structure_test", 0, false, false)
             .await
             .expect("drop leftover structure table");
         session
@@ -2568,11 +2622,12 @@ mod tests {
                 )",
                 0,
                 false,
+                false,
             )
             .await
             .expect("create structure table");
         session
-            .run_query("CREATE INDEX cubbydb_structure_test_name_idx ON cubbydb_structure_test (name)", 0, false)
+            .run_query("CREATE INDEX cubbydb_structure_test_name_idx ON cubbydb_structure_test (name)", 0, false, false)
             .await
             .expect("create secondary index");
 
@@ -2629,7 +2684,7 @@ mod tests {
         assert!(structure.check_constraints[0].definition.contains(">="));
 
         session
-            .run_query("DROP TABLE cubbydb_structure_test", 0, false)
+            .run_query("DROP TABLE cubbydb_structure_test", 0, false, false)
             .await
             .expect("clean up structure table");
     }
@@ -2660,10 +2715,10 @@ mod tests {
             "DROP TABLE IF EXISTS cubbydb_cascade_orders",
             "DROP TABLE IF EXISTS cubbydb_cascade_customers",
         ] {
-            session.run_query(stmt, 0, false).await.expect("drop leftover cascade tables");
+            session.run_query(stmt, 0, false, false).await.expect("drop leftover cascade tables");
         }
         session
-            .run_query("CREATE TABLE cubbydb_cascade_customers (id serial PRIMARY KEY, name text)", 0, false)
+            .run_query("CREATE TABLE cubbydb_cascade_customers (id serial PRIMARY KEY, name text)", 0, false, false)
             .await
             .expect("create customers");
         session
@@ -2673,6 +2728,7 @@ mod tests {
                     customer_id int NOT NULL REFERENCES cubbydb_cascade_customers(id)
                 )",
                 0,
+                false,
                 false,
             )
             .await
@@ -2685,22 +2741,24 @@ mod tests {
                 )",
                 0,
                 false,
+                false,
             )
             .await
             .expect("create order_items");
 
         session
-            .run_query("INSERT INTO cubbydb_cascade_customers (id, name) VALUES (1, 'Alice')", 0, false)
+            .run_query("INSERT INTO cubbydb_cascade_customers (id, name) VALUES (1, 'Alice')", 0, false, false)
             .await
             .expect("insert customer");
         session
-            .run_query("INSERT INTO cubbydb_cascade_orders (id, customer_id) VALUES (10, 1), (11, 1)", 0, false)
+            .run_query("INSERT INTO cubbydb_cascade_orders (id, customer_id) VALUES (10, 1), (11, 1)", 0, false, false)
             .await
             .expect("insert orders");
         session
             .run_query(
                 "INSERT INTO cubbydb_cascade_items (id, order_id) VALUES (100, 10), (101, 10), (102, 11)",
                 0,
+                false,
                 false,
             )
             .await
@@ -2742,7 +2800,7 @@ mod tests {
         assert_eq!(deleted, 1 + 2 + 3, "1 customer + 2 orders + 3 items");
 
         let remaining = session
-            .run_query("SELECT count(*) FROM cubbydb_cascade_items", 0, false)
+            .run_query("SELECT count(*) FROM cubbydb_cascade_items", 0, false, false)
             .await
             .expect("count remaining items");
         assert_eq!(remaining.rows[0][0].as_deref(), Some("0"));
@@ -2752,7 +2810,7 @@ mod tests {
             "DROP TABLE cubbydb_cascade_orders",
             "DROP TABLE cubbydb_cascade_customers",
         ] {
-            session.run_query(stmt, 0, false).await.expect("clean up cascade tables");
+            session.run_query(stmt, 0, false, false).await.expect("clean up cascade tables");
         }
     }
 
@@ -2782,15 +2840,15 @@ mod tests {
         let session = driver.connect(&params, &std::env::temp_dir()).await.expect("connect");
 
         session
-            .run_query("DROP TABLE IF EXISTS cubbydb_readonly_test", 0, false)
+            .run_query("DROP TABLE IF EXISTS cubbydb_readonly_test", 0, false, false)
             .await
             .expect("drop leftover readonly table");
         session
-            .run_query("CREATE TABLE cubbydb_readonly_test (id int PRIMARY KEY, note text)", 0, false)
+            .run_query("CREATE TABLE cubbydb_readonly_test (id int PRIMARY KEY, note text)", 0, false, false)
             .await
             .expect("create readonly table");
         session
-            .run_query("INSERT INTO cubbydb_readonly_test (id, note) VALUES (1, 'a'), (2, 'b')", 0, false)
+            .run_query("INSERT INTO cubbydb_readonly_test (id, note) VALUES (1, 'a'), (2, 'b')", 0, false, false)
             .await
             .expect("seed readonly table");
 
@@ -2798,7 +2856,7 @@ mod tests {
         // read-only path can't just delegate to `run_read_only_query`
         // (which always reads from offset 0).
         let page0 = session
-            .run_query("SELECT id FROM cubbydb_readonly_test ORDER BY id", 0, true)
+            .run_query("SELECT id FROM cubbydb_readonly_test ORDER BY id", 0, true, false)
             .await
             .expect("read-only page 0");
         assert_eq!(page0.rows.len(), 2);
@@ -2810,6 +2868,7 @@ mod tests {
                 "INSERT INTO cubbydb_readonly_test (id, note) VALUES (3, 'c')",
                 0,
                 true,
+                false,
             )
             .await;
         assert!(write.is_err(), "a write must be rejected on a read-only run");
@@ -2818,13 +2877,13 @@ mod tests {
         // rolled-back READ ONLY transaction is the real enforcement. Confirm
         // the table genuinely still has only the two seeded rows.
         let after = session
-            .run_query("SELECT count(*) FROM cubbydb_readonly_test", 0, false)
+            .run_query("SELECT count(*) FROM cubbydb_readonly_test", 0, false, false)
             .await
             .expect("count after read-only attempt");
         assert_eq!(after.rows[0][0].as_deref(), Some("2"));
 
         session
-            .run_query("DROP TABLE cubbydb_readonly_test", 0, false)
+            .run_query("DROP TABLE cubbydb_readonly_test", 0, false, false)
             .await
             .expect("clean up readonly table");
     }

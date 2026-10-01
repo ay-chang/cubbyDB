@@ -45,12 +45,6 @@ export function ResultsPane({ tab }: { tab: QueryTab }) {
     [result],
   );
 
-  // Same inference approach, for displaying Postgres's `t`/`f` boolean text
-  // form as `true`/`false` — see `inferBooleanColumns`'s doc comment.
-  const booleanCols = useMemo(
-    () => (result ? inferBooleanColumns(result) : []),
-    [result],
-  );
 
   // For table tabs, map each result column to its foreign keys in both
   // directions (from the schema): outgoing (this cell points at another row) and
@@ -210,7 +204,6 @@ export function ResultsPane({ tab }: { tab: QueryTab }) {
           <TransposedGrid
             result={result}
             numericCols={numericCols}
-            booleanCols={booleanCols}
             nullText={nullText}
           />
         ) : (
@@ -218,7 +211,6 @@ export function ResultsPane({ tab }: { tab: QueryTab }) {
             tab={tab}
             result={result}
             numericCols={numericCols}
-            booleanCols={booleanCols}
             navByColumn={navByColumn}
             editable={editability?.editable ?? false}
             pkColIndices={pkColIndices}
@@ -571,14 +563,13 @@ function colAt(starts: number[], x: number): number {
 function TransposedGrid({
   result,
   numericCols,
-  booleanCols,
   nullText,
 }: {
   result: QueryResult;
   numericCols: boolean[];
-  booleanCols: boolean[];
   nullText: string;
 }) {
+  const showColumnTypes = useStore((s) => s.tableShowColumnTypes);
   return (
     <div className="transpose-scroll">
       <table className="transpose-table">
@@ -595,15 +586,14 @@ function TransposedGrid({
         <tbody>
           {result.columns.map((col, colIndex) => (
             <tr key={col.name}>
-              <th className="transpose-table__colname mono">{col.name}</th>
+              <th className="transpose-table__colname mono">
+                {col.name}
+                {showColumnTypes && col.dataType && (
+                  <span className="grid__htype">{col.dataType}</span>
+                )}
+              </th>
               {result.rows.map((row, r) => {
                 const value = row[colIndex];
-                const display =
-                  booleanCols[colIndex] && value === "t"
-                    ? "true"
-                    : booleanCols[colIndex] && value === "f"
-                      ? "false"
-                      : value;
                 return (
                   <td
                     key={r}
@@ -612,9 +602,9 @@ function TransposedGrid({
                       (numericCols[colIndex] ? " mono transpose-table__cell--num" : "") +
                       (value === null ? " transpose-table__cell--null" : "")
                     }
-                    title={display ?? "NULL"}
+                    title={value ?? "NULL"}
                   >
-                    {display === null ? nullText : display}
+                    {value === null ? nullText : value}
                   </td>
                 );
               })}
@@ -630,7 +620,6 @@ function ResultsGrid({
   tab,
   result,
   numericCols,
-  booleanCols,
   navByColumn,
   editable,
   pkColIndices,
@@ -640,7 +629,6 @@ function ResultsGrid({
   tab: QueryTab;
   result: QueryResult;
   numericCols: boolean[];
-  booleanCols: boolean[];
   navByColumn: ColNav[] | null;
   editable: boolean;
   pkColIndices: Set<number>;
@@ -649,6 +637,7 @@ function ResultsGrid({
 }) {
   const openTableWithFilter = useStore((s) => s.openTableWithFilter);
   const nullDisplay = useStore((s) => s.nullDisplay);
+  const showColumnTypes = useStore((s) => s.tableShowColumnTypes);
   const paletteSelectionStyle = useStore((s) => s.paletteSelectionStyle);
   const nullText = NULL_DISPLAY_LABELS[nullDisplay];
   const rowCopyDelimiter = useStore((s) => s.rowCopyDelimiter);
@@ -2623,6 +2612,9 @@ function ResultsGrid({
             >
               <span className="grid__hlabel">
                 {result.columns[colIndex].name}
+                {showColumnTypes && result.columns[colIndex].dataType && (
+                  <span className="grid__htype">{result.columns[colIndex].dataType}</span>
+                )}
               </span>
               {sort?.col === colIndex && (
                 <span className="grid__sort">
@@ -2663,7 +2655,6 @@ function ResultsGrid({
               rowStyle={rowStyle}
               order={visibleOrder}
               numericCols={numericCols}
-              booleanCols={booleanCols}
               navByColumn={navByColumn}
               pkColIndices={pkColIndices}
               nullText={nullText}
@@ -3261,9 +3252,6 @@ interface GridCellProps {
   isFk: boolean;
   nav: ColNav | undefined;
   numeric: boolean;
-  /** True if every non-null value in this column is Postgres's canonical
-   *  boolean text form (`t`/`f`) — displayed as `true`/`false` instead. */
-  isBoolean: boolean;
   editable: boolean;
   nullText: string;
   isEditing: boolean;
@@ -3298,7 +3286,6 @@ const GridCell = memo(function GridCell({
   isFk,
   nav,
   numeric,
-  isBoolean,
   editable,
   nullText,
   isEditing,
@@ -3340,13 +3327,6 @@ const GridCell = memo(function GridCell({
     );
   }
 
-  // `t`/`f` is Postgres's canonical boolean text form, not something a user
-  // would recognize at a glance — shown as `true`/`false` instead. Only the
-  // display changes; the underlying value (what editing operates on) is
-  // untouched.
-  const displayValue =
-    isBoolean && value === "t" ? "true" : isBoolean && value === "f" ? "false" : value;
-
   return (
     <div
       data-cell={`${r}-${colIndex}`}
@@ -3370,7 +3350,7 @@ const GridCell = memo(function GridCell({
           ? fkTooltip(nav!)
           : isPk && editable
             ? "Primary key — double-click to edit (changes the row's key)"
-            : displayValue ?? "NULL"
+            : value ?? "NULL"
       }
       onMouseDown={(e) => onCellMouseDown(e, r, colIndex)}
       onClick={(e) => onCellClick(e, r, colIndex)}
@@ -3386,11 +3366,11 @@ const GridCell = memo(function GridCell({
       }}
     >
       <span className="grid__cell-text">
-        {displayValue === null
+        {value === null
           ? nullText
           : findOpen && findQuery.trim()
-            ? highlightMatches(displayValue, findQuery, isActiveFindMatch)
-            : displayValue}
+            ? highlightMatches(value, findQuery, isActiveFindMatch)
+            : value}
       </span>
     </div>
   );
@@ -3407,7 +3387,6 @@ interface GridRowProps {
   /** The *windowed* display order — only the columns currently on screen. */
   order: number[];
   numericCols: boolean[];
-  booleanCols: boolean[];
   navByColumn: ColNav[] | null;
   pkColIndices: Set<number>;
   nullText: string;
@@ -3467,7 +3446,6 @@ const GridRow = memo(function GridRow({
   rowStyle,
   order,
   numericCols,
-  booleanCols,
   navByColumn,
   pkColIndices,
   nullText,
@@ -3571,7 +3549,6 @@ const GridRow = memo(function GridRow({
             isFk={isFk}
             nav={nav}
             numeric={numericCols[colIndex]}
-            isBoolean={booleanCols[colIndex]}
             editable={editable}
             nullText={nullText}
             isEditing={isEditing}
@@ -3839,9 +3816,12 @@ function measuredWidths(
   const fonts = gridFonts();
   const sample = result.rows.slice(0, WIDTH_SAMPLE_ROWS);
   return result.columns.map((col, i) => {
+    // Includes the type whenever the result carries one — it only does if
+    // the header showed types when the query ran.
+    const head = col.dataType ? `${col.name} ${col.dataType}` : col.name;
     let maxPx =
-      textWidth(col.name, fonts.head) +
-      col.name.length * HEAD_LETTER_SPACING * HEAD_FONT_SIZE +
+      textWidth(head, fonts.head) +
+      head.length * HEAD_LETTER_SPACING * HEAD_FONT_SIZE +
       HEAD_EXTRA;
     for (const row of sample) {
       const v = row[i];
@@ -3977,26 +3957,6 @@ function inferNumericColumns(result: QueryResult): boolean[] {
       if (v == null || v === "") continue;
       seen = true;
       if (!NUMERIC_RE.test(v)) return false;
-    }
-    return seen;
-  });
-}
-
-/** Same "infer from the actual values" approach as `inferNumericColumns` —
- *  and for the same reason: `simple_query` doesn't give us column types.
- *  `t`/`f` is Postgres's canonical boolean text form (`SELECT true` comes
- *  back as the single character `t`) and nothing else in Postgres
- *  serializes to a bare `t`/`f`, so "every non-null value in this column is
- *  exactly `t` or `f`" is a reliable signal — and, unlike a schema lookup,
- *  works for ad-hoc query results too, not just table-browse tabs. */
-function inferBooleanColumns(result: QueryResult): boolean[] {
-  return result.columns.map((_, i) => {
-    let seen = false;
-    for (const row of result.rows) {
-      const v = row[i];
-      if (v == null || v === "") continue;
-      seen = true;
-      if (v !== "t" && v !== "f") return false;
     }
     return seen;
   });

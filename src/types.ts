@@ -199,6 +199,9 @@ export interface SequenceDetails {
 
 export interface ResultColumn {
   name: string;
+  /** Postgres type name (e.g. `int4`, `text[]`) — only reported when the
+   *  query asked for types (Settings > Table > Show column types). */
+  dataType: string | null;
 }
 
 /** Rows in one other table that reference the row(s) about to be deleted,

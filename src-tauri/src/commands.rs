@@ -616,8 +616,11 @@ pub async fn run_query(
     sql: String,
     // Zero-based page of the result; omitted means the first page.
     page: Option<u32>,
+    // Whether to report each result column's type (Settings > Table).
+    with_types: Option<bool>,
 ) -> Result<QueryResult, DbError> {
     let page = page.unwrap_or(0);
+    let with_types = with_types.unwrap_or(false);
     let mut active = state.active.lock().await;
     prepare_session_after_idle(&mut active, &session_id, &state).await?;
     let connection_name = active
@@ -635,14 +638,14 @@ pub async fn run_query(
         .get(&session_id)
         .ok_or_else(DbError::not_connected)?
         .session
-        .run_query(&sql, page, read_only)
+        .run_query(&sql, page, read_only, with_types)
         .await;
 
     // If the connection had silently dropped, reconnect once and retry.
     if matches!(&result, Err(e) if e.kind == DbErrorKind::Connection) {
         if let Ok(()) = reconnect_in_place(&mut active, &session_id, &state).await {
             if let Some(session) = active.get(&session_id) {
-                result = session.session.run_query(&sql, page, read_only).await;
+                result = session.session.run_query(&sql, page, read_only, with_types).await;
             }
         }
     }

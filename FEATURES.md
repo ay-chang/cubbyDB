@@ -39,7 +39,10 @@ code comments or AGENTS.md's architecture section.
   Cmd/Ctrl+Shift+N) opens a form for an *additional* database. Every open
   connection's session, tabs, and schema tree stay alive in the background;
   a row of pills in the top bar lets you jump between their workspaces
-  instantly (no reconnect). Each pill has its
+  instantly (no reconnect). With more connections open than fit, the pills
+  shrink and their names truncate rather than wrapping onto a second line.
+  A color-tagged connection's pill is drawn in that color when selected.
+  Each pill has its
   own "×" to close just that connection without switching to it first, and
   the top bar's Disconnect button closes whichever one is currently visible.
   Every connection still open when the app quits — including a quit to
@@ -387,6 +390,12 @@ code comments or AGENTS.md's architecture section.
 - Font, font size, row height, zebra striping, cell borders (gridlines),
   header-row shading, text wrap-vs-truncate, and how NULL renders (literal
   text / dash / blank) are all configurable (Settings → Appearance → Table)
+- **Show column types** (Settings → Appearance → Table, off by default): each
+  column header shows its Postgres data type (`int4`, `timestamptz`,
+  `text[]`, ...) after its name, for queries run while it's on
+- Booleans always read `true`/`false` — in the grid, the cell editor, copy,
+  export, and the transposed view — never Postgres's terse `t`/`f`, so what
+  you see is also what you'd type back
 
 ## Table browsing (no SQL required)
 
@@ -789,8 +798,9 @@ code comments or AGENTS.md's architecture section.
   same way everywhere. Untagged connections keep the plain accent
 - A tagged connection's results pane gets either a thin colored border or a
   full tint fill (chosen per connection in its edit form). With fill, the
-  bottom paging/Add row/Remove row bar keeps the theme's normal color —
-  the tint marks that connection's data, not the app's controls
+  WHERE bar and the bottom paging/Add row/Remove row bar keep the theme's
+  normal color — the tint marks that connection's data, not the app's
+  controls
 - **Selection in connection color** (Settings → Appearance → Table, off by
   default): on a tagged connection, the grid draws its selected cell, row,
   range, and column in that connection's color instead of the app accent, so
@@ -916,8 +926,8 @@ Cmd/Ctrl+W closes the dialog rather than the database tab behind it.
   palette), compact top bar
 - **Appearance → Table**: font, font size, row height, zebra striping, cell
   borders, header-row shading (a subtle darkening so the column-header row
-  stands out from the data below), selection in connection color,
-  wrap-vs-truncate long text, NULL display style
+  stands out from the data below), selection in connection color, column
+  data types in headers, wrap-vs-truncate long text, NULL display style
 - **Appearance → Sidebar**: schema-tree row height
 - **Appearance → Editor**: font, font size, line-wrap
 - **AI Assistant**: provider, separate API-key settings, current Codex

@@ -50,7 +50,16 @@ export const RELEASE_NOTES: ReleaseNotesEntry[] = [
           "Row numbers no longer show through the grid's top-left corner when you scroll.",
           "Switching to another tab and back keeps the grid where you left it: the same scroll position and the same selected cell, rows, or range.",
           "New setting, Selection in connection color (Settings → Appearance → Table): on a color-tagged connection, the selection is drawn in that connection's color instead of the accent color.",
-          "On a connection with a color fill, the bottom bar with paging and Add row/Remove row keeps the normal theme color.",
+          "On a connection with a color fill, the WHERE bar and the bottom bar with paging and Add row/Remove row keep the normal theme color.",
+          "New setting, Show column types (Settings → Appearance → Table): each column header shows its data type, like int4 or timestamptz, next to its name.",
+          "Booleans read true and false everywhere, including when you edit a cell, copy, or export, instead of t and f.",
+        ],
+      },
+      {
+        heading: "Connections",
+        items: [
+          "With many connections open, their tabs in the top bar shrink to fit instead of wrapping onto a second line.",
+          "A color-tagged connection's tab in the top bar is highlighted in that connection's color when selected.",
         ],
       },
       {
