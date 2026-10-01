@@ -168,9 +168,14 @@ export function ResultsPane({ tab }: { tab: QueryTab }) {
   const connStyle = connPalette
     ? ({
         "--conn-color": connPalette.accent,
+        "--conn-color-hover": connPalette.accentHover,
         "--conn-color-tint": connPalette.accentTint,
+        "--conn-color-tint-text": connPalette.accentTintText,
+        "--conn-color-glow": connPalette.accentGlow,
+        "--conn-color-glow-soft": connPalette.accentGlowSoft,
       } as React.CSSProperties)
     : undefined;
+  const selectionConnColor = useStore((s) => s.tableSelectionConnColor);
 
   // A read-only alternate layout — columns become rows, rows become
   // columns — for eyeballing a wide row or comparing a few rows' worth of
@@ -183,7 +188,11 @@ export function ResultsPane({ tab }: { tab: QueryTab }) {
 
   return (
     <div
-      className={"results" + (connPalette ? ` results--conn-${connectionColorStyle}` : "")}
+      className={
+        "results" +
+        (connPalette ? ` results--conn-${connectionColorStyle}` : "") +
+        (connPalette && selectionConnColor ? " results--conn-selection" : "")
+      }
       style={connStyle}
     >
       <ResultsHeader

@@ -1439,6 +1439,8 @@ function TableSection() {
   const setTableCellBorders = useStore((s) => s.setTableCellBorders);
   const tableHeaderShade = useStore((s) => s.tableHeaderShade);
   const setTableHeaderShade = useStore((s) => s.setTableHeaderShade);
+  const tableSelectionConnColor = useStore((s) => s.tableSelectionConnColor);
+  const setTableSelectionConnColor = useStore((s) => s.setTableSelectionConnColor);
   const tableWrapText = useStore((s) => s.tableWrapText);
   const setTableWrapText = useStore((s) => s.setTableWrapText);
   const nullDisplay = useStore((s) => s.nullDisplay);
@@ -1575,6 +1577,24 @@ function TableSection() {
         <Toggle
           on={tableHeaderShade}
           onToggle={() => setTableHeaderShade(!tableHeaderShade)}
+        />
+      </div>
+
+      <div
+        className="settings-field settings-field--spaced settings-toggle-row"
+        data-setting-id="table.selection-conn-color"
+      >
+        <div>
+          <div className="settings-field__label">Selection in connection color</div>
+          <div className="settings-field__desc">
+            On a color-tagged connection, draw the selected cell, row, and range
+            in that connection's color instead of the accent color, so it
+            matches the connection's border or fill.
+          </div>
+        </div>
+        <Toggle
+          on={tableSelectionConnColor}
+          onToggle={() => setTableSelectionConnColor(!tableSelectionConnColor)}
         />
       </div>
 

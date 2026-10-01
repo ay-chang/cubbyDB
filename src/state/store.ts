@@ -1087,6 +1087,10 @@ interface AppStore {
   /** Whether the results-grid column-header row is shaded slightly darker,
    *  so it stands out more from the data rows below. */
   tableHeaderShade: boolean;
+  /** Whether the results grid's selection (selected cell, row, range, and
+   *  column) is drawn in a tagged connection's own color instead of the app
+   *  accent, so it matches that connection's border or fill. */
+  tableSelectionConnColor: boolean;
   /** Whether long cell text wraps instead of truncating with an ellipsis. */
   tableWrapText: boolean;
   /** How SQL NULL renders in results-grid cells. */
@@ -1492,6 +1496,7 @@ interface AppStore {
   setTableZebra: (enabled: boolean) => void;
   setTableCellBorders: (enabled: boolean) => void;
   setTableHeaderShade: (enabled: boolean) => void;
+  setTableSelectionConnColor: (enabled: boolean) => void;
   setTableWrapText: (enabled: boolean) => void;
   setNullDisplay: (display: NullDisplay) => void;
   setEditorFont: (font: TableFont) => void;
@@ -1580,6 +1585,7 @@ const SIDEBAR_ROW_HEIGHT_KEY = "cubbydb:sidebarRowHeight";
 const TABLE_ZEBRA_KEY = "cubbydb:tableZebra";
 const TABLE_CELL_BORDERS_KEY = "cubbydb:tableCellBorders";
 const TABLE_HEADER_SHADE_KEY = "cubbydb:tableHeaderShade";
+const TABLE_SELECTION_CONN_COLOR_KEY = "cubbydb:tableSelectionConnColor";
 const TABLE_WRAP_TEXT_KEY = "cubbydb:tableWrapText";
 const NULL_DISPLAY_KEY = "cubbydb:nullDisplay";
 const EDITOR_FONT_KEY = "cubbydb:editorFont";
@@ -1839,6 +1845,25 @@ function applyTableHeaderShade(enabled: boolean) {
   }
   try {
     localStorage.setItem(TABLE_HEADER_SHADE_KEY, String(enabled));
+  } catch {
+    // Storage unavailable — non-fatal.
+  }
+}
+
+/** Read the saved selection-color preference, defaulting to off (the app
+ *  accent, as before). Read straight from the store by `ResultsPane`, which
+ *  turns it into a modifier class. */
+function loadTableSelectionConnColor(): boolean {
+  try {
+    return localStorage.getItem(TABLE_SELECTION_CONN_COLOR_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function saveTableSelectionConnColor(enabled: boolean) {
+  try {
+    localStorage.setItem(TABLE_SELECTION_CONN_COLOR_KEY, String(enabled));
   } catch {
     // Storage unavailable — non-fatal.
   }
@@ -2787,6 +2812,7 @@ export const useStore = create<AppStore>((set, get) => {
     tableZebra: loadTableZebra(),
     tableCellBorders: loadTableCellBorders(),
     tableHeaderShade: loadTableHeaderShade(),
+    tableSelectionConnColor: loadTableSelectionConnColor(),
     tableWrapText: loadTableWrapText(),
     nullDisplay: loadNullDisplay(),
     editorFont: loadEditorFont(),
@@ -5298,6 +5324,11 @@ export const useStore = create<AppStore>((set, get) => {
     setTableHeaderShade(enabled) {
       applyTableHeaderShade(enabled);
       set({ tableHeaderShade: enabled });
+    },
+
+    setTableSelectionConnColor(enabled) {
+      saveTableSelectionConnColor(enabled);
+      set({ tableSelectionConnColor: enabled });
     },
 
     setTableWrapText(enabled) {

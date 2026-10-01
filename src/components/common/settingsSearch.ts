@@ -235,6 +235,16 @@ export const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
     keywords: ["columns", "grid", "heading"],
   },
   {
+    id: "table.selection-conn-color",
+    label: "Selection in connection color",
+    description: "Draw the grid selection in a tagged connection's color.",
+    path: "Appearance · Table",
+    section: "appearance",
+    appearanceSub: "table",
+    targetId: "table.selection-conn-color",
+    keywords: ["highlight", "selected", "tag", "fill", "border", "accent"],
+  },
+  {
     id: "table.wrap",
     label: "Wrap long result text",
     description: "Wrap cell values instead of truncating them.",

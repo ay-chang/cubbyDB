@@ -787,6 +787,14 @@ code comments or AGENTS.md's architecture section.
 - A newly connected database (or one being restored on launch with the
   setting off, or with nothing saved to restore) starts with **no tabs
   open** rather than a blank query tab — the main pane prompts to open a
+- A tagged connection's results pane gets either a thin colored border or a
+  full tint fill (chosen per connection in its edit form). With fill, the
+  bottom paging/Add row/Remove row bar keeps the theme's normal color —
+  the tint marks that connection's data, not the app's controls
+- **Selection in connection color** (Settings → Appearance → Table, off by
+  default): on a tagged connection, the grid draws its selected cell, row,
+  range, and column in that connection's color instead of the app accent, so
+  a red-tagged connection doesn't show a green selection
   table from the sidebar or search with Cmd/Ctrl+K instead
 - Cmd/Ctrl+T opens a new tab in the currently visible connection; Cmd/Ctrl+W
   closes the active one
@@ -899,8 +907,8 @@ Cmd/Ctrl+W closes the dialog rather than the database tab behind it.
   palette), compact top bar
 - **Appearance → Table**: font, font size, row height, zebra striping, cell
   borders, header-row shading (a subtle darkening so the column-header row
-  stands out from the data below), wrap-vs-truncate long text, NULL display
-  style
+  stands out from the data below), selection in connection color,
+  wrap-vs-truncate long text, NULL display style
 - **Appearance → Sidebar**: schema-tree row height
 - **Appearance → Editor**: font, font size, line-wrap
 - **AI Assistant**: provider, separate API-key settings, current Codex

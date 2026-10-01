@@ -1060,6 +1060,24 @@
      makes the fill read as one flat color instead of alternating stripes. */
   --table-zebra: var(--conn-color-tint);
 }
+/* Settings > Appearance > Table > "Selection in connection color": the grid
+   draws its selection (cell ring, row/column crosshair, range, selected
+   gutter) in the tagged connection's color rather than the app accent, so a
+   red-tagged connection doesn't get a green selection. */
+.results--conn-selection .grid {
+  --accent: var(--conn-color);
+  --accent-hover: var(--conn-color-hover);
+  --accent-tint: var(--conn-color-tint);
+  --accent-tint-text: var(--conn-color-tint-text);
+  --accent-glow: var(--conn-color-glow);
+  --accent-glow-soft: var(--conn-color-glow-soft);
+}
+/* The paging/row-action bar is app chrome, not data: it stays the theme's
+   own color so the fill reads as "this connection's rows". */
+.results--conn-fill .table-toolbar {
+  --surface: var(--theme-surface);
+  --surface-raised: var(--theme-surface-raised);
+}
 .results__header {
   height: var(--h-results-header);
   flex: none;

@@ -642,3 +642,11 @@
   --shadow-drawer: -12px 0 40px -20px rgba(0, 0, 0, 0.65);
   --shadow-button: 0 1px 2px rgba(0, 0, 0, 0.42);
 }
+
+/* Untinted copies of the active theme's surfaces. Resolved here on the root,
+   so they keep the theme's own values inside a `.results--conn-fill` pane,
+   which overrides the real `--surface*` tokens for everything beneath it. */
+:root {
+  --theme-surface: var(--surface);
+  --theme-surface-raised: var(--surface-raised);
+}
