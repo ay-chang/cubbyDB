@@ -782,11 +782,6 @@ code comments or AGENTS.md's architecture section.
   that connection has one set — same color used for its results-pane border/
   fill and its pill in the connection switcher, so the association reads the
   same way everywhere. Untagged connections keep the plain accent
-- Each connection has its own independent set of tabs — switching connections
-  switches the whole tab strip, not just what's shown
-- A newly connected database (or one being restored on launch with the
-  setting off, or with nothing saved to restore) starts with **no tabs
-  open** rather than a blank query tab — the main pane prompts to open a
 - A tagged connection's results pane gets either a thin colored border or a
   full tint fill (chosen per connection in its edit form). With fill, the
   bottom paging/Add row/Remove row bar keeps the theme's normal color —
@@ -795,6 +790,11 @@ code comments or AGENTS.md's architecture section.
   default): on a tagged connection, the grid draws its selected cell, row,
   range, and column in that connection's color instead of the app accent, so
   a red-tagged connection doesn't show a green selection
+- Each connection has its own independent set of tabs — switching connections
+  switches the whole tab strip, not just what's shown
+- A newly connected database (or one being restored on launch with the
+  setting off, or with nothing saved to restore) starts with **no tabs
+  open** rather than a blank query tab — the main pane prompts to open a
   table from the sidebar or search with Cmd/Ctrl+K instead
 - Cmd/Ctrl+T opens a new tab in the currently visible connection; Cmd/Ctrl+W
   closes the active one
