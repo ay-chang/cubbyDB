@@ -240,8 +240,12 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
          - Lead with the answer, then the supporting detail.\n\
          - Be concise. This is a narrow side panel, not a document.\n\
          - State any assumption you had to make about an ambiguous request.\n\
-         - The user already sees every query you ran and its row count in the interface, so do not \
-         repeat the SQL back to them in prose unless they asked to see it.\n\n",
+         - When your answer describes rows in the database (a count, a total, \"there are 4 \
+         recipes with beef\"), end the reply with a query that lists those rows themselves, in a \
+         fenced ```sql block introduced by a short line such as \"Here's the query to see all 4:\". \
+         If you counted or aggregated, write the matching SELECT that returns the rows, keeping the \
+         same tables, joins, and filters, so it shows exactly what your answer counted. The user \
+         opens it in the editor to look at them.\n\n",
     );
 
     // The panel renders GitHub-flavored Markdown, so this is about matching
@@ -520,6 +524,16 @@ mod tests {
         assert!(prompt.contains("You cannot execute a change, and you must not try."));
         assert!(prompt.contains("You should still write the statement out"));
         assert!(prompt.contains("```sql block"));
+    }
+
+    /// "There are 4" alone leaves the user to write their own query to see
+    /// which 4; the answer has to hand them one that lists those rows.
+    #[test]
+    fn counted_answers_end_with_a_query_listing_the_rows() {
+        let schemas = vec![schema("public", vec![table("orders", 2)])];
+        let prompt = build_system_prompt(&base_ctx(&schemas));
+        assert!(prompt.contains("end the reply with a query that lists those rows themselves"));
+        assert!(!prompt.contains("do not repeat the SQL"));
     }
 
     /// Attaching code widens what the assistant is for. Without this the role

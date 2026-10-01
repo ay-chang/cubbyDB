@@ -765,6 +765,11 @@ code comments or AGENTS.md's architecture section.
   is still an explicit action. Steps that record a table name or search term
   rather than a statement (`describe_table`, `sample_rows`, `search_schema`)
   show no buttons
+- An answer that describes rows ("there are **4** recipes with beef") ends
+  with a query that lists those rows — "Here's the query to see all 4" — so
+  seeing which 4 is one **Open in editor** away. When the assistant only
+  counted, that query is the matching `SELECT` with the same filters, not
+  the `COUNT` it ran
 
 ## Tabs & session persistence
 
