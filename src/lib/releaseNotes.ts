@@ -34,7 +34,7 @@ export interface ReleaseNotesEntry {
 export const RELEASE_NOTES: ReleaseNotesEntry[] = [
   {
     version: "0.1.21",
-    date: "2026-09-30",
+    date: "2026-10-01",
     sections: [
       {
         heading: "Help & Feedback",
@@ -48,6 +48,15 @@ export const RELEASE_NOTES: ReleaseNotesEntry[] = [
           "Remove deletes the row of the cell you've selected, with no need to click its row number first.",
           "The foreign-key jump menu marks its selected row the same way the command palette does, and moving the mouse over a row selects it.",
           "Row numbers no longer show through the grid's top-left corner when you scroll.",
+          "Switching to another tab and back keeps the grid where you left it: the same scroll position and the same selected cell, rows, or range.",
+          "New setting, Selection in connection color (Settings → Appearance → Table): on a color-tagged connection, the selection is drawn in that connection's color instead of the accent color.",
+          "On a connection with a color fill, the bottom bar with paging and Add row/Remove row keeps the normal theme color.",
+        ],
+      },
+      {
+        heading: "Ask AI",
+        items: [
+          "When an answer counts or describes rows, like \"there are 4 recipes with beef\", it now ends with a query that lists those rows, ready to open in the editor.",
         ],
       },
       {
