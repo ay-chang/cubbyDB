@@ -24,7 +24,22 @@ permissions:
   contents: write
 
 jobs:
+  # Re-pushing a tag reuses its existing draft, and tauri-action merges into
+  # the draft's `latest.json` instead of replacing it — which once left the
+  # macOS entries signed for the previous build, so the updater rejected the
+  # new one. Starting from no manifest makes every run write a fresh one.
+  clear-manifest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remove a previous run's updater manifest
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          gh release delete-asset "${{ github.ref_name }}" latest.json \
+            -R ay-chang/cubbyDB-releases -y || true
+
   build:
+    needs: clear-manifest
     strategy:
       fail-fast: false
       matrix:
