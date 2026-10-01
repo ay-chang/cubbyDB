@@ -797,6 +797,10 @@ code comments or AGENTS.md's architecture section.
   a red-tagged connection doesn't show a green selection
 - Each connection has its own independent set of tabs — switching connections
   switches the whole tab strip, not just what's shown
+- Switching away from a tab and back returns its results grid exactly where
+  you left it — the same vertical and horizontal scroll position, and the
+  same selected cell, rows, or dragged range. Re-running or refreshing that
+  tab's query starts it fresh, since the rows underneath may have changed
 - A newly connected database (or one being restored on launch with the
   setting off, or with nothing saved to restore) starts with **no tabs
   open** rather than a blank query tab — the main pane prompts to open a

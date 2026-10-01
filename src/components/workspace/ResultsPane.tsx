@@ -418,6 +418,22 @@ let rowClipboard: Array<Array<string | null>> | null = null;
 /** A selected whole row: an existing result row or a pending draft row. */
 type RowSelection = { kind: "existing" | "new"; index: number };
 
+/** A grid's scroll position and selection, as it was when its tab was left. */
+interface GridView {
+  scrollTop: number;
+  scrollLeft: number;
+  selected: { r: number; col: number } | null;
+  rowSel: RowSelection[];
+  range: { rows: number[]; cols: number[] } | null;
+}
+
+/** Each tab's grid view, saved when the grid unmounts (`ResultsPane` remounts
+ *  per tab) and restored when the tab is shown again. Keyed by the result
+ *  object first: a re-run or refresh replaces it, so a view never lands on
+ *  rows it wasn't taken from, and closed tabs' entries are collected with
+ *  their results. Then by tab, since a branched tab can share its result. */
+const gridViews = new WeakMap<QueryResult, Map<string, GridView>>();
+
 /** Width of the left row-number / selection gutter. */
 const GUTTER_W = 48;
 
@@ -690,6 +706,7 @@ function ResultsGrid({
     setOrder(order);
     setWidths(widths);
   }
+  const [restoredView] = useState(() => gridViews.get(result)?.get(tab.id) ?? null);
   // Pointer-drag reorder state: dragged display position, live pointer delta,
   // and the position it would drop into.
   const [drag, setDrag] = useState<{
@@ -699,11 +716,11 @@ function ResultsGrid({
   } | null>(null);
   // Selected cell, for highlighting and copy.
   const [selected, setSelected] = useState<{ r: number; col: number } | null>(
-    null,
+    restoredView?.selected ?? null,
   );
   // Selected whole rows (via the gutter), for row copy/paste and remove. Holds
   // one or more rows; `rowAnchorRef` is the pivot for shift-click ranges.
-  const [rowSel, setRowSel] = useState<RowSelection[]>([]);
+  const [rowSel, setRowSel] = useState<RowSelection[]>(restoredView?.rowSel ?? []);
   const rowAnchorRef = useRef<RowSelection | null>(null);
   // A rectangle of existing-row cells selected either by dragging across
   // them or Shift+clicking a second cell (see `onCellMouseDown` and
@@ -727,7 +744,7 @@ function ResultsGrid({
   // rare enough in bulk that the existing per-cell draft menu already covers
   // it.
   const [range, setRange] = useState<{ rows: number[]; cols: number[] } | null>(
-    null,
+    restoredView?.range ?? null,
   );
   const rangeDragRef = useRef<{
     anchorR: number;
@@ -1189,7 +1206,12 @@ function ResultsGrid({
   // not at all), so clearing it one render late is harmless. `order`/`widths`
   // are deliberately not here — see the render-time derivation above for why
   // they can't wait for an effect.
+  // Skips mount: a selection restored from this tab's saved view (see
+  // `gridViews`) belongs to this very result and must survive it.
+  const clearedForResultRef = useRef(result);
   useEffect(() => {
+    if (clearedForResultRef.current === result) return;
+    clearedForResultRef.current = result;
     setSelected(null);
     setRowSel([]);
     rowAnchorRef.current = null;
@@ -1729,6 +1751,41 @@ function ResultsGrid({
     const committed = committedWinRef.current;
     return first >= committed.startIdx && last <= committed.endIdx;
   }, [virtualizeRows, rowH, totalRows]);
+
+  // Coming back to a tab puts its grid where it was left. Declared before
+  // the window sync below so that, on mount, the sync already reads the
+  // restored offsets — the spacer tracks give the scroller its full size
+  // before any rows are windowed in, so these assignments aren't clamped.
+  const viewRef = useRef({ result, selected, rowSel, range });
+  viewRef.current = { result, selected, rowSel, range };
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (restoredView) {
+      el.scrollTop = restoredView.scrollTop;
+      el.scrollLeft = restoredView.scrollLeft;
+      lastTopRef.current = el.scrollTop;
+    }
+    return () => {
+      // The latest result, not the mount-time one: re-running a query
+      // swaps the result under a grid that stays mounted.
+      const { result: current, selected, rowSel, range } = viewRef.current;
+      let views = gridViews.get(current);
+      if (!views) {
+        views = new Map();
+        gridViews.set(current, views);
+      }
+      views.set(tab.id, {
+        scrollTop: el.scrollTop,
+        scrollLeft: el.scrollLeft,
+        selected,
+        rowSel,
+        range,
+      });
+    };
+    // Mount/unmount only; the pane remounts per tab, so `tab.id` is fixed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Recompute before paint whenever a geometry input changes — mount, a new
   // result, the row-height/wrap settings, a column resize or reorder, a pane
