@@ -14,7 +14,7 @@ import { copyToClipboard, errorMessage, readClipboard } from "../../api/backend"
 import { parseCsv, saveCsv } from "../../lib/csv";
 import { bestMatch } from "../../lib/fuzzyMatch";
 import { matchesKeybinding, useKeybindingStore } from "../../lib/keybindings";
-import { isUuidCapableType } from "../../lib/sqlTypes";
+import { isUuidCapableType, shortTypeName } from "../../lib/sqlTypes";
 import type { Delimiter, QueryTab } from "../../state/store";
 import { useActiveSchema, useStore } from "../../state/store";
 import {
@@ -146,6 +146,20 @@ export function ResultsPane({ tab }: { tab: QueryTab }) {
     );
   }, [result, schemaTable]);
 
+  // Each column's type for the header, or null where it's hidden or unknown.
+  // A table tab takes it from the schema, so it shows without a re-run; a
+  // query tab only has the types reported when it ran with the setting on.
+  const showColumnTypes = useStore((s) => s.tableShowColumnTypes);
+  const headerTypes = useMemo(() => {
+    if (!result) return [];
+    if (!showColumnTypes) return result.columns.map(() => null);
+    const schemaTypes = new Map(schemaTable?.columns.map((c) => [c.name, c.dataType]));
+    return result.columns.map((c) => {
+      const schemaType = schemaTypes.get(c.name);
+      return schemaType ? shortTypeName(schemaType) : c.dataType;
+    });
+  }, [result, schemaTable, showColumnTypes]);
+
   // A tagged connection (set in its own edit form) tints this whole pane —
   // a thin border by default, or a flatter full-tint fill if that
   // connection was set up to use the louder style instead.
@@ -203,6 +217,7 @@ export function ResultsPane({ tab }: { tab: QueryTab }) {
         transposed ? (
           <TransposedGrid
             result={result}
+            headerTypes={headerTypes}
             numericCols={numericCols}
             nullText={nullText}
           />
@@ -210,6 +225,7 @@ export function ResultsPane({ tab }: { tab: QueryTab }) {
           <ResultsGrid
             tab={tab}
             result={result}
+            headerTypes={headerTypes}
             numericCols={numericCols}
             navByColumn={navByColumn}
             editable={editability?.editable ?? false}
@@ -562,14 +578,15 @@ function colAt(starts: number[], x: number): number {
  */
 function TransposedGrid({
   result,
+  headerTypes,
   numericCols,
   nullText,
 }: {
   result: QueryResult;
+  headerTypes: (string | null)[];
   numericCols: boolean[];
   nullText: string;
 }) {
-  const showColumnTypes = useStore((s) => s.tableShowColumnTypes);
   return (
     <div className="transpose-scroll">
       <table className="transpose-table">
@@ -588,8 +605,8 @@ function TransposedGrid({
             <tr key={col.name}>
               <th className="transpose-table__colname mono">
                 {col.name}
-                {showColumnTypes && col.dataType && (
-                  <span className="grid__htype">{col.dataType}</span>
+                {headerTypes[colIndex] && (
+                  <span className="grid__htype">{headerTypes[colIndex]}</span>
                 )}
               </th>
               {result.rows.map((row, r) => {
@@ -619,6 +636,7 @@ function TransposedGrid({
 function ResultsGrid({
   tab,
   result,
+  headerTypes,
   numericCols,
   navByColumn,
   editable,
@@ -628,6 +646,7 @@ function ResultsGrid({
 }: {
   tab: QueryTab;
   result: QueryResult;
+  headerTypes: (string | null)[];
   numericCols: boolean[];
   navByColumn: ColNav[] | null;
   editable: boolean;
@@ -637,7 +656,6 @@ function ResultsGrid({
 }) {
   const openTableWithFilter = useStore((s) => s.openTableWithFilter);
   const nullDisplay = useStore((s) => s.nullDisplay);
-  const showColumnTypes = useStore((s) => s.tableShowColumnTypes);
   const paletteSelectionStyle = useStore((s) => s.paletteSelectionStyle);
   const nullText = NULL_DISPLAY_LABELS[nullDisplay];
   const rowCopyDelimiter = useStore((s) => s.rowCopyDelimiter);
@@ -669,7 +687,7 @@ function ResultsGrid({
     loadOrder(signature, result.columns),
   );
   const [widthsState, setWidths] = useState<number[]>(() =>
-    loadWidths(signature, result, numericCols),
+    loadWidths(signature, result, numericCols, headerTypes),
   );
   // The signature `orderState`/`widthsState` were last derived for.
   const [layoutSig, setLayoutSig] = useState(signature);
@@ -690,7 +708,7 @@ function ResultsGrid({
   let widths = widthsState;
   if (layoutSig !== signature) {
     order = loadOrder(signature, result.columns);
-    widths = loadWidths(signature, result, numericCols);
+    widths = loadWidths(signature, result, numericCols, headerTypes);
     setLayoutSig(signature);
     setOrder(order);
     setWidths(widths);
@@ -775,6 +793,9 @@ function ResultsGrid({
     x: number;
     y: number;
   } | null>(null);
+  // Right-click menu on an existing row's number: insert a draft row, or
+  // delete this row (or the selection it's part of).
+  const [gutterMenu, setGutterMenu] = useState<{ r: number; x: number; y: number } | null>(null);
   // The cell "Expand" opened from the same right-click menu, shown in
   // `CellInspectorDialog` below — a full-size, read-only, JSON-aware view
   // for a value too long to read in a 32px-tall grid cell.
@@ -1054,6 +1075,33 @@ function ResultsGrid({
     (e: React.MouseEvent, ni: number) => selectRowFromGutter(e, "new", ni),
     [selectRowFromGutter],
   );
+  // Read through a ref so the handler below stays stable for `GridRow`'s
+  // memo instead of changing with every selection.
+  const rowSelectionRef = useRef({ rowSel, rangeRowSet });
+  useLayoutEffect(() => {
+    rowSelectionRef.current = { rowSel, rangeRowSet };
+  });
+  const onGutterContextMenu = useCallback(
+    (e: React.MouseEvent, r: number) => {
+      if (!editable) return;
+      e.preventDefault();
+      const { rowSel: sel, rangeRowSet: rangeRows } = rowSelectionRef.current;
+      const covered =
+        rangeRows?.has(r) || sel.some((s) => s.kind === "existing" && s.index === r);
+      // Like a file list: right-clicking outside the selection retargets it.
+      if (!covered) {
+        const only: RowSelection = { kind: "existing", index: r };
+        setRowSel([only]);
+        rowAnchorRef.current = only;
+        setSelected(null);
+        setRange(null);
+      }
+      setFkMenu(null);
+      setNewCellMenu(null);
+      setGutterMenu({ r, x: e.clientX, y: e.clientY });
+    },
+    [editable],
+  );
 
   // Cell selection/editing/context-menu handlers, likewise stable — each
   // takes the row/col as arguments rather than closing over them, so one
@@ -1137,6 +1185,7 @@ function ResultsGrid({
         hasRangeAction &&
         (rangeColSet?.has(col) ?? false) &&
         (rangeRowSet?.size ?? 0) > 1;
+      setGutterMenu(null);
       setFkMenu({ r, col, x: e.clientX, y: e.clientY });
       setFkQuery("");
       if (isMultiColRange) return;
@@ -1152,6 +1201,7 @@ function ResultsGrid({
   const onNewCellContextMenu = useCallback(
     (e: React.MouseEvent, ni: number, col: number) => {
       e.preventDefault();
+      setGutterMenu(null);
       setNewCellMenu({ ni, col, x: e.clientX, y: e.clientY });
     },
     [],
@@ -1375,9 +1425,13 @@ function ResultsGrid({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [fkMenuData, fkMenuSelected, openFkRef]);
+  const simpleMenuOpen = newCellMenu !== null || gutterMenu !== null;
   useEffect(() => {
-    if (!newCellMenu) return;
-    const close = () => setNewCellMenu(null);
+    if (!simpleMenuOpen) return;
+    const close = () => {
+      setNewCellMenu(null);
+      setGutterMenu(null);
+    };
     window.addEventListener("click", close);
     window.addEventListener("scroll", close, true);
     window.addEventListener("resize", close);
@@ -1386,7 +1440,7 @@ function ResultsGrid({
       window.removeEventListener("scroll", close, true);
       window.removeEventListener("resize", close);
     };
-  }, [newCellMenu]);
+  }, [simpleMenuOpen]);
 
   // Keyboard copy/paste. With a whole row selected (gutter), Cmd/Ctrl+C copies
   // the row and Cmd/Ctrl+V pastes it over the selected row; with a single cell
@@ -1994,7 +2048,7 @@ function ResultsGrid({
     e.preventDefault();
     e.stopPropagation();
     const next = [...widths];
-    next[colIndex] = measuredWidths(result, numericCols, MAX_AUTOFIT_WIDTH)[colIndex];
+    next[colIndex] = measuredWidths(result, numericCols, headerTypes, MAX_AUTOFIT_WIDTH)[colIndex];
     setWidths(next);
     persistLayout(signature, result.columns, order, next);
   };
@@ -2354,22 +2408,21 @@ function ResultsGrid({
       if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
     });
   };
+  // Leaves the selection alone, so the confirm dialog doesn't hide which
+  // rows it's about. A confirmed delete changes `result`, which clears the
+  // selection anyway (the `[result]` effect above); a cancelled one keeps it.
   const handleRemoveRow = () => {
     // A drag-range stands in for a row selection here too — every row it
     // spans, regardless of which columns were dragged across, same as
     // clicking those rows' gutters would have selected.
     if (range && rangeRowSet && rangeRowSet.size > 0) {
       void deleteExistingRows(tab.id, Array.from(rangeRowSet));
-      setRange(null);
       return;
     }
     if (rowSel.length === 0) {
       // A single clicked cell stands in for its row, so there's no need to
       // go back and click the row number first.
-      if (selected) {
-        void deleteExistingRows(tab.id, [selected.r]);
-        setSelected(null);
-      }
+      if (selected) void deleteExistingRows(tab.id, [selected.r]);
       return;
     }
     // Discard any selected draft rows locally (highest index first so earlier
@@ -2385,8 +2438,12 @@ function ResultsGrid({
       .map((s) => s.index);
     if (existingIdxs.length > 0) void deleteExistingRows(tab.id, existingIdxs);
 
-    setRowSel([]);
-    rowAnchorRef.current = null;
+    // Draft rows go immediately and shift the indices of those after them,
+    // so their selection can't be kept; the existing rows' stays.
+    if (newIdxs.length > 0) {
+      setRowSel(rowSel.filter((s) => s.kind === "existing"));
+      rowAnchorRef.current = null;
+    }
   };
 
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -2612,8 +2669,8 @@ function ResultsGrid({
             >
               <span className="grid__hlabel">
                 {result.columns[colIndex].name}
-                {showColumnTypes && result.columns[colIndex].dataType && (
-                  <span className="grid__htype">{result.columns[colIndex].dataType}</span>
+                {headerTypes[colIndex] && (
+                  <span className="grid__htype">{headerTypes[colIndex]}</span>
                 )}
               </span>
               {sort?.col === colIndex && (
@@ -2674,6 +2731,7 @@ function ResultsGrid({
               findQuery={findQuery}
               activeMatchCol={activeMatch?.r === r ? activeMatch.col : null}
               onGutterClick={onExistingGutterClick}
+              onGutterContextMenu={onGutterContextMenu}
               onCellClick={onCellClick}
               onCellMouseDown={onCellMouseDown}
               onCellDoubleClick={onCellDoubleClick}
@@ -2989,6 +3047,37 @@ function ResultsGrid({
             </div>
           );
         })()}
+
+      {gutterMenu && (
+        <div
+          className="context-menu"
+          style={fkMenuStyle(gutterMenu.x, gutterMenu.y)}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            className="context-menu__item"
+            onClick={() => {
+              setGutterMenu(null);
+              handleAddRow();
+            }}
+          >
+            Insert row
+          </button>
+          <div className="context-menu__sep" />
+          <button
+            className="context-menu__item"
+            onClick={() => {
+              setGutterMenu(null);
+              handleRemoveRow();
+            }}
+          >
+            {(() => {
+              const n = rangeRowSet?.has(gutterMenu.r) ? rangeRowSet.size : rowSel.length;
+              return n > 1 ? `Delete ${n} rows` : "Delete row";
+            })()}
+          </button>
+        </div>
+      )}
 
       {newCellMenu &&
         (() => {
@@ -3415,6 +3504,7 @@ interface GridRowProps {
   findQuery: string;
   activeMatchCol: number | null;
   onGutterClick: (e: React.MouseEvent, r: number) => void;
+  onGutterContextMenu: (e: React.MouseEvent, r: number) => void;
   onCellClick: (e: React.MouseEvent, r: number, col: number) => void;
   onCellMouseDown: (e: React.MouseEvent, r: number, col: number) => void;
   onCellDoubleClick: (r: number, col: number, currentValue: string | null) => void;
@@ -3461,6 +3551,7 @@ const GridRow = memo(function GridRow({
   findQuery,
   activeMatchCol,
   onGutterClick,
+  onGutterContextMenu,
   onCellClick,
   onCellMouseDown,
   onCellDoubleClick,
@@ -3493,8 +3584,9 @@ const GridRow = memo(function GridRow({
     >
       <div
         className="grid__gutter"
-        title="Click to select the row · Shift-click for a range · ⌘/Ctrl-click to add · ⌘C copies, ⌘V pastes/duplicates · drag across cells to select a block"
+        title="Click to select the row · Shift-click for a range · ⌘/Ctrl-click to add · ⌘C copies, ⌘V pastes/duplicates · drag across cells to select a block · right-click to insert or delete"
         onClick={(e) => onGutterClick(e, r)}
+        onContextMenu={(e) => onGutterContextMenu(e, r)}
       >
         {displayPos + 1}
       </div>
@@ -3811,14 +3903,13 @@ function gridFonts(): { value: string; head: string } {
 function measuredWidths(
   result: QueryResult,
   numericCols: boolean[],
+  headerTypes: (string | null)[],
   maxWidth: number,
 ): number[] {
   const fonts = gridFonts();
   const sample = result.rows.slice(0, WIDTH_SAMPLE_ROWS);
   return result.columns.map((col, i) => {
-    // Includes the type whenever the result carries one — it only does if
-    // the header showed types when the query ran.
-    const head = col.dataType ? `${col.name} ${col.dataType}` : col.name;
+    const head = headerTypes[i] ? `${col.name} ${headerTypes[i]}` : col.name;
     let maxPx =
       textWidth(head, fonts.head) +
       head.length * HEAD_LETTER_SPACING * HEAD_FONT_SIZE +
@@ -3837,8 +3928,12 @@ function measuredWidths(
 }
 
 /** Starting width per column when a result first lands. */
-function initialWidths(result: QueryResult, numericCols: boolean[]): number[] {
-  return measuredWidths(result, numericCols, MAX_INITIAL_WIDTH);
+function initialWidths(
+  result: QueryResult,
+  numericCols: boolean[],
+  headerTypes: (string | null)[],
+): number[] {
+  return measuredWidths(result, numericCols, headerTypes, MAX_INITIAL_WIDTH);
 }
 
 // --- persisted column layout (order + widths), keyed by the column-name set ---
@@ -3895,8 +3990,9 @@ function loadWidths(
   signature: string,
   result: QueryResult,
   numericCols: boolean[],
+  headerTypes: (string | null)[],
 ): number[] {
-  const def = initialWidths(result, numericCols);
+  const def = initialWidths(result, numericCols, headerTypes);
   const saved = readLayouts()[signature];
   if (!saved || !saved.widths) return def;
   return result.columns.map((c, i) => saved.widths[c.name] ?? def[i]);

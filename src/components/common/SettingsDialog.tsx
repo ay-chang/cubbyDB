@@ -1589,8 +1589,8 @@ function TableSection() {
         <div>
           <div className="settings-field__label">Show column types</div>
           <div className="settings-field__desc">
-            Show each column's data type next to its name in the header, for
-            results of queries run after this is turned on.
+            Show each column's data type next to its name in the header. A
+            query's results show types once it's re-run with this on.
           </div>
         </div>
         <Toggle

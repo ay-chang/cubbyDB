@@ -392,7 +392,8 @@ code comments or AGENTS.md's architecture section.
   text / dash / blank) are all configurable (Settings → Appearance → Table)
 - **Show column types** (Settings → Appearance → Table, off by default): each
   column header shows its Postgres data type (`int4`, `timestamptz`,
-  `text[]`, ...) after its name, for queries run while it's on
+  `text[]`, ...) after its name. Table tabs show types right away; a query
+  tab's results show them once the query is re-run with the setting on
 - Booleans always read `true`/`false` — in the grid, the cell editor, copy,
   export, and the transposed view — never Postgres's terse `t`/`f`, so what
   you see is also what you'd type back
@@ -547,13 +548,21 @@ code comments or AGENTS.md's architecture section.
   `DELETE` — selected via the gutter, by drag-selecting a block of cells
   (see **Drag-select a range** below), or just by clicking any one cell,
   which targets that cell's row; either way, every row the selection touches
-  is removed regardless of which columns were involved
+  is removed regardless of which columns were involved. The rows stay
+  selected while the confirmation is open, and still are if you cancel
+- **Row-number menu**: right-clicking a row's number offers **Insert row**
+  (a new draft row, same as Add row) and **Delete row** — or **Delete N
+  rows** when that row is part of a selection. Right-clicking a row outside
+  the selection selects just that row first
 - **Cascading delete preview**: if other rows reference the one(s) you're
   deleting via a foreign key, deleting shows exactly what else would go
   instead of just failing with a raw constraint error — every dependent row,
   grouped by table, walked transitively (dependents of dependents, e.g.
   deleting a customer also shows their orders *and* those orders' line
-  items) — the same pattern Django's admin panel uses for this. Confirming
+  items) — the same pattern Django's admin panel uses for this. The
+  confirmation opens the moment you delete; if finding related rows takes
+  more than a moment, it shows a "Checking for related rows…" spinner, and
+  Delete stays disabled until the check finishes. Confirming
   deletes everything shown in one transaction: fully atomic, and either it
   all goes or none of it does. Capped at 5 levels deep / 500 total rows for
   safety — if a delete would exceed that, it's refused outright rather than
@@ -798,10 +807,11 @@ code comments or AGENTS.md's architecture section.
   same way everywhere. Untagged connections keep the plain accent
 - A tagged connection's results pane gets either a thin colored border or a
   full tint fill (chosen per connection in its edit form). With fill, the
-  WHERE bar and the bottom paging/Add row/Remove row bar keep the theme's
+  WHERE bar, the bottom paging/Add row/Remove row bar, and the grid's popups
+  (right-click menu, find bar, column jump, expanded cell) keep the theme's
   normal color — the tint marks that connection's data, not the app's
   controls
-- **Selection in connection color** (Settings → Appearance → Table, off by
+- **Selection in connection color** (Settings → Appearance → Table, on by
   default): on a tagged connection, the grid draws its selected cell, row,
   range, and column in that connection's color instead of the app accent, so
   a red-tagged connection doesn't show a green selection

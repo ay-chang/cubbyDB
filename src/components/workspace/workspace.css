@@ -1104,10 +1104,15 @@
   --accent-glow: var(--conn-color-glow);
   --accent-glow-soft: var(--conn-color-glow-soft);
 }
-/* The WHERE bar and the paging/row-action bar are app chrome, not data: they
+/* The WHERE bar, the paging/row-action bar, and the pane's popups (context
+   menu, find bar, column jump, expanded cell) are app chrome, not data: they
    stay the theme's own color so the fill reads as "this connection's rows". */
 .results--conn-fill .results__header,
-.results--conn-fill .table-toolbar {
+.results--conn-fill .table-toolbar,
+.results--conn-fill .context-menu,
+.results--conn-fill .grid-find,
+.results--conn-fill .colgo-overlay,
+.results--conn-fill .settings-overlay {
   --surface: var(--theme-surface);
   --surface-raised: var(--theme-surface-raised);
 }
@@ -1913,6 +1918,12 @@
 .grid__scroll {
   height: 100%;
   overflow: auto;
+  /* Its own stacking context. Otherwise the absolutely positioned rows and
+     sticky gutters/header stack in the workspace's context: WebKit then
+     paints them over this pane's overlay scrollbar (every zebra row hid the
+     thumb) and over the sidebar resizer's hover strip. */
+  position: relative;
+  z-index: 0;
   /* No `scrollbar-gutter` and no `::-webkit-scrollbar` rules here on purpose:
      either one opts this pane out of the platform's overlay scrollbars and
      into permanently visible legacy ones, which is what the rest of the app
@@ -1934,6 +1945,9 @@
    simpler and plenty fast for one page's worth of rows. */
 .transpose-scroll {
   position: relative;
+  /* Same reason as `.grid__scroll`: keeps the sticky headers under the
+     scrollbar and the sidebar resizer. */
+  z-index: 0;
   flex: 1;
   min-height: 0;
   overflow: auto;

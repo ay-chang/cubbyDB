@@ -31,3 +31,32 @@ const UUID_CAPABLE_TEXT_PREFIXES = [
   "text",
   "citext",
 ];
+
+/** Shorten a `format_type()` string to Postgres's internal type name — the
+ *  form a query result reports (`int4`, `timestamptz`, `text[]`) — so the
+ *  grid header reads the same whether its types came from the schema or the
+ *  query. Keeps any modifier: `character varying(255)` → `varchar(255)`. */
+export function shortTypeName(dataType: string): string {
+  const array = dataType.endsWith("[]");
+  let base = (array ? dataType.slice(0, -2) : dataType).replace(/"/g, "");
+  const zone = base.match(/^(timestamp|time)(\(\d+\))? with(out)? time zone$/);
+  if (zone) {
+    base = zone[1] + (zone[3] ? "" : "tz") + (zone[2] ?? "");
+  } else {
+    const m = base.match(/^([a-z ]+?)(\(.*\))?$/);
+    if (m) base = (SHORT_TYPE_NAMES[m[1]] ?? m[1]) + (m[2] ?? "");
+  }
+  return array ? `${base}[]` : base;
+}
+
+const SHORT_TYPE_NAMES: Record<string, string> = {
+  smallint: "int2",
+  integer: "int4",
+  bigint: "int8",
+  real: "float4",
+  "double precision": "float8",
+  boolean: "bool",
+  "character varying": "varchar",
+  character: "bpchar",
+  "bit varying": "varbit",
+};

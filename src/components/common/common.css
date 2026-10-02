@@ -180,6 +180,32 @@
   border-radius: var(--radius-card);
   box-shadow: 0 24px 60px -16px rgba(20, 24, 40, 0.4);
 }
+/* Most impact checks finish in a blink, so the "checking" state only shows
+   once one has run past 300ms — otherwise the spinner and the dimmed Delete
+   button would flash on every ordinary delete. It sits in the actions row,
+   so it leaves no gap behind when it goes. */
+.delete-impact-card__checking {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: auto;
+  font-size: 12.5px;
+  color: var(--text-faint);
+  animation: delete-impact-checking-in 120ms ease 300ms both;
+}
+@keyframes delete-impact-checking-in {
+  from {
+    opacity: 0;
+  }
+}
+.delete-impact-card__confirm:disabled {
+  animation: delete-impact-confirm-dim 120ms ease 300ms both;
+}
+@keyframes delete-impact-confirm-dim {
+  from {
+    opacity: 1;
+  }
+}
 .delete-impact-card__head {
   display: flex;
   flex-direction: column;

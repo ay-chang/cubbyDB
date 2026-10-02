@@ -966,12 +966,13 @@ interface ConfirmDialogState {
   onCancel: () => void;
 }
 
-/** Shown instead of the plain `ConfirmDialogState` when a delete would
- *  cascade into other tables — same "decision, not an error, worth
- *  blocking on" precedent, just with a structured impact to render rather
- *  than a single message string. */
+/** Confirms deleting rows from the grid — same "decision, not an error,
+ *  worth blocking on" precedent as `ConfirmDialogState`, but it opens before
+ *  the delete's impact is known (walking foreign keys can take a second or
+ *  two) and lists what would cascade once it is. */
 interface DeleteImpactDialogState {
-  impact: DeleteImpact;
+  /** `null` while the impact is still being checked; confirming waits on it. */
+  impact: DeleteImpact | null;
   /** How many rows were directly requested to be deleted (before cascading) —
    *  carried alongside `impact` so the dialog can say "deleting N rows will
    *  also delete M related rows" instead of just the dependent count. */
@@ -979,6 +980,8 @@ interface DeleteImpactDialogState {
   onConfirm: () => void;
   onCancel: () => void;
 }
+
+const NO_DELETE_IMPACT: DeleteImpact = { dependents: [], incomplete: false };
 
 interface AppStore {
   view: View;
@@ -1855,14 +1858,14 @@ function applyTableHeaderShade(enabled: boolean) {
   }
 }
 
-/** Read the saved selection-color preference, defaulting to off (the app
- *  accent, as before). Read straight from the store by `ResultsPane`, which
- *  turns it into a modifier class. */
+/** Read the saved selection-color preference, defaulting to on. Read
+ *  straight from the store by `ResultsPane`, which turns it into a modifier
+ *  class. */
 function loadTableSelectionConnColor(): boolean {
   try {
-    return localStorage.getItem(TABLE_SELECTION_CONN_COLOR_KEY) === "true";
+    return localStorage.getItem(TABLE_SELECTION_CONN_COLOR_KEY) !== "false";
   } catch {
-    return false;
+    return true;
   }
 }
 
@@ -2530,24 +2533,31 @@ export const useStore = create<AppStore>((set, get) => {
     return true;
   }
 
-  /** Same shape as `requestConfirm`, but for a delete that would cascade
-   *  into other tables — shows the structured `DeleteImpactDialog` instead
-   *  of a plain message. */
-  function requestDeleteImpactConfirm(impact: DeleteImpact, rootCount: number): Promise<boolean> {
+  /** Like `requestConfirm`, for deleting rows: opens `DeleteImpactDialog`
+   *  right away, fills in `impact` when it arrives, and resolves with whether
+   *  the user confirmed and the impact they confirmed against. */
+  function requestDeleteConfirm(
+    rootCount: number,
+    impactPromise: Promise<DeleteImpact>,
+  ): Promise<{ ok: boolean; impact: DeleteImpact }> {
     return new Promise((resolve) => {
-      set({
-        deleteImpactDialog: {
-          impact,
-          rootCount,
-          onConfirm: () => {
-            set({ deleteImpactDialog: null });
-            resolve(true);
-          },
-          onCancel: () => {
-            set({ deleteImpactDialog: null });
-            resolve(false);
-          },
-        },
+      let impact: DeleteImpact | null = null;
+      const close = (ok: boolean) => {
+        set({ deleteImpactDialog: null });
+        resolve({ ok: ok && impact !== null, impact: impact ?? NO_DELETE_IMPACT });
+      };
+      const dialog: DeleteImpactDialogState = {
+        impact: null,
+        rootCount,
+        onConfirm: () => close(true),
+        onCancel: () => close(false),
+      };
+      set({ deleteImpactDialog: dialog });
+      void impactPromise.then((loaded) => {
+        impact = loaded;
+        if (get().deleteImpactDialog === dialog) {
+          set({ deleteImpactDialog: { ...dialog, impact: loaded } });
+        }
       });
     });
   }
@@ -2592,28 +2602,15 @@ export const useStore = create<AppStore>((set, get) => {
     }
     if (primaryKeys.length === 0) return;
 
-    let impact: DeleteImpact;
-    try {
-      impact = await api.getDeleteImpact(sessionId, schema, table, primaryKeys);
-    } catch {
-      // Preview failed (e.g. a transient hiccup) — fall back to the plain
-      // confirm rather than blocking the delete outright; a real FK
-      // violation still surfaces normally from the delete itself if there
-      // turns out to be one.
-      impact = { dependents: [], incomplete: false };
-    }
-
-    const n = resolvedIndices.length;
-    const hasImpact = impact.dependents.length > 0;
-    const ok = hasImpact
-      ? await requestDeleteImpactConfirm(impact, n)
-      : await requestConfirm(
-          n === 1
-            ? "Delete this row? This permanently removes it from the database."
-            : `Delete ${n} rows? This permanently removes them from the database.`,
-          "Delete",
-        );
+    const { ok, impact } = await requestDeleteConfirm(
+      resolvedIndices.length,
+      // A failed preview (e.g. a transient hiccup) falls back to a plain
+      // delete rather than blocking it outright; a real FK violation still
+      // surfaces normally from the delete itself if there turns out to be one.
+      api.getDeleteImpact(sessionId, schema, table, primaryKeys).catch(() => NO_DELETE_IMPACT),
+    );
     if (!ok) return;
+    const hasImpact = impact.dependents.length > 0;
 
     const toDbError = (err: unknown): DbError =>
       isDbError(err)
@@ -3412,7 +3409,8 @@ export const useStore = create<AppStore>((set, get) => {
           slot.sessionId,
           sqlToRun,
           page,
-          get().tableShowColumnTypes,
+          // A table tab's header takes its types from the schema instead.
+          get().tableShowColumnTypes && tab.kind !== "table",
         );
         set((s) => ({
           connections: mapSlotTabs(s.connections, connectionId, (tabs) =>

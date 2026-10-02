@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isUuidCapableType } from "./sqlTypes";
+import { isUuidCapableType, shortTypeName } from "./sqlTypes";
 
 describe("isUuidCapableType", () => {
   it("accepts the native uuid type", () => {
@@ -25,5 +25,32 @@ describe("isUuidCapableType", () => {
     expect(isUuidCapableType("jsonb")).toBe(false);
     expect(isUuidCapableType("timestamptz")).toBe(false);
     expect(isUuidCapableType("bytea")).toBe(false);
+  });
+});
+
+describe("shortTypeName", () => {
+  it("maps SQL-standard spellings to Postgres's internal names", () => {
+    expect(shortTypeName("integer")).toBe("int4");
+    expect(shortTypeName("double precision")).toBe("float8");
+    expect(shortTypeName("boolean")).toBe("bool");
+  });
+
+  it("keeps modifiers and array suffixes", () => {
+    expect(shortTypeName("character varying(255)")).toBe("varchar(255)");
+    expect(shortTypeName("numeric(10,2)")).toBe("numeric(10,2)");
+    expect(shortTypeName("bigint[]")).toBe("int8[]");
+  });
+
+  it("folds the time-zone forms into timestamp/timestamptz", () => {
+    expect(shortTypeName("timestamp without time zone")).toBe("timestamp");
+    expect(shortTypeName("timestamp(3) without time zone")).toBe("timestamp(3)");
+    expect(shortTypeName("timestamp with time zone")).toBe("timestamptz");
+    expect(shortTypeName("time with time zone")).toBe("timetz");
+  });
+
+  it("leaves other names alone, minus identifier quotes", () => {
+    expect(shortTypeName("text")).toBe("text");
+    expect(shortTypeName("jsonb")).toBe("jsonb");
+    expect(shortTypeName('"UserRole"')).toBe("UserRole");
   });
 });
