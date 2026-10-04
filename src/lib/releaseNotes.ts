@@ -33,6 +33,29 @@ export interface ReleaseNotesEntry {
 
 export const RELEASE_NOTES: ReleaseNotesEntry[] = [
   {
+    version: "0.1.22",
+    date: "2026-10-03",
+    sections: [
+      {
+        heading: "Deleting rows",
+        items: [
+          "The delete confirmation opens the moment you click, instead of after a pause while CubbyDB looks for related rows. If that check takes a moment, the dialog says so and fills in when it's done.",
+          "The rows you're deleting stay selected while you confirm, and stay selected if you cancel.",
+          "Right-click a row number to insert a new row or delete that row, or every selected row at once.",
+        ],
+      },
+      {
+        heading: "Results grid",
+        items: [
+          "Show column types now works on tables that are already open, without re-running them.",
+          "Selection in connection color is now on by default.",
+          "On a connection with a color fill, the right-click menu, find bar, and other popups in the grid keep the normal theme color.",
+          "Fixed the scrollbar hiding behind every other row, and the grid covering the sidebar's resize handle.",
+        ],
+      },
+    ],
+  },
+  {
     version: "0.1.21",
     date: "2026-10-01",
     sections: [
