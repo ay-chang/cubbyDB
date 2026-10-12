@@ -155,6 +155,16 @@ export const SETTINGS_SEARCH_ITEMS: SettingsSearchItem[] = [
     keywords: ["header", "connection", "version"],
   },
   {
+    id: "appearance.button-size",
+    label: "Button size",
+    description: "Make the top bar, connection tabs, and WHERE bar small, medium, or large.",
+    path: "Appearance · Interface",
+    section: "appearance",
+    appearanceSub: "interface",
+    targetId: "appearance.button-size",
+    keywords: ["icons", "bigger", "larger", "top bar", "toolbar", "accessibility"],
+  },
+  {
     id: "appearance.tab-icons",
     label: "Tab icons",
     description: "Show a kind icon (table, query, function, …) on each open tab.",

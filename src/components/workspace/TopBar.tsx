@@ -8,6 +8,7 @@ import {
 } from "../../lib/keybindings";
 import { BrandMark } from "../common/BrandMark";
 import { Spinner } from "../common/Spinner";
+import { isWindows } from "../common/WindowControls";
 import {
   CheckIcon,
   CubbyIcon,
@@ -30,8 +31,9 @@ import {
  *  bar needs to leave them room on the left, *except* in true fullscreen,
  *  where macOS removes the traffic lights entirely (there's no windowed
  *  chrome to draw them over) and the reserved space would just be a dead
- *  gap. Windows/Linux keep their normal native title bar above this bar
- *  entirely, so no reservation is ever needed there. `@tauri-apps/plugin-os`
+ *  gap. Windows has no native frame either — `WindowControls` draws its
+ *  buttons over this bar's right end instead (`topbar--window-controls`).
+ *  Linux keeps its normal native title bar above this bar. `@tauri-apps/plugin-os`
  *  would be the "proper" way to check the OS, but pulling in a whole plugin
  *  (Rust dependency + capability grant) isn't worth it for one CSS class —
  *  the webview's own UA string already says so. */
@@ -174,7 +176,11 @@ export function TopBar() {
 
   return (
     <div
-      className={"topbar" + (isMacOs && !isFullscreen ? " topbar--inset-traffic-lights" : "")}
+      className={
+        "topbar" +
+        (isMacOs && !isFullscreen ? " topbar--inset-traffic-lights" : "") +
+        (isWindows ? " topbar--window-controls" : "")
+      }
       data-tauri-drag-region
     >
       <div className="topbar__left">

@@ -236,6 +236,13 @@ clearly and get sign-off before breaking it.
   `appUpdate.ts`'s `relaunch()`) transparent instead of dropping whatever was
   open. Explicit Disconnect removes just that one connection's entry (opts
   it out); the others stay targeted for next launch.
+- **Frameless on Windows**: `src-tauri/tauri.windows.conf.json` (merged
+  over `tauri.conf.json` on Windows only — its `windows` array *replaces*
+  the base one, so keep the shared size fields in sync) sets
+  `decorations: false`, and `WindowControls` (rendered by `App` above every
+  screen) draws minimize/maximize/close. macOS uses the overlay title bar
+  instead; Linux keeps native decorations. New full-screen views need a
+  `data-tauri-drag-region` somewhere, or the window can't be moved there.
 - **TLS**: native-tls with sslmode=prefer — TLS when the server offers it,
   plaintext otherwise. No extra system deps.
 - **SSH tunneling**: `russh` (pure Rust, tokio-native — chosen to match the

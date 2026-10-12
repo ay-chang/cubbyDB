@@ -6,6 +6,7 @@ import { ErrorBoundary } from "./components/common/ErrorBoundary";
 import { LicenseGate } from "./components/common/LicenseGate";
 import { SettingsDialog } from "./components/common/SettingsDialog";
 import { Spinner } from "./components/common/Spinner";
+import { WindowControls } from "./components/common/WindowControls";
 import { ConnectionDialogs } from "./components/connection/ConnectionDialogs";
 import { ConnectionScreen } from "./components/connection/ConnectionScreen";
 import { Workspace } from "./components/workspace/Workspace";
@@ -13,6 +14,17 @@ import { matchesKeybinding, useKeybindingStore } from "./lib/keybindings";
 import { useStore } from "./state/store";
 
 export function App() {
+  // Every screen gets the Windows window controls (a no-op elsewhere): the
+  // window there has no native frame, so it couldn't otherwise be closed.
+  return (
+    <>
+      <AppScreens />
+      <WindowControls />
+    </>
+  );
+}
+
+function AppScreens() {
   const view = useStore((s) => s.view);
   const reconnecting = useStore((s) => s.reconnecting);
   const openConnections = useStore((s) => s.openConnections);

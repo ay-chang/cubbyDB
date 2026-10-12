@@ -394,6 +394,26 @@ code comments or AGENTS.md's architecture section.
   column header shows its Postgres data type (`int4`, `timestamptz`,
   `text[]`, ...) after its name. Table tabs show types right away; a query
   tab's results show them once the query is re-run with the setting on
+- **Columns checklist** (results header ⋯ menu → **Columns…**): every
+  column starts checked; uncheck one to hide it from the grid (and the
+  transposed view), or **Show all** to bring them back. While any are hidden
+  the header stats say "N hidden" (hover for which). A filter box
+  appears for tables with many columns, and the last shown column can't be
+  unchecked. Hiding is per tab and lasts only as long as the tab: closing a
+  table and opening it again, or opening it fresh in a new tab, shows every
+  column. Hidden columns drop out of find and column jump; copying a whole
+  row still copies every column
+- **Expand cell → Structured**: for a JSON object or array, the expanded
+  cell has a **JSON / Structured** switch. Structured lays the value out as
+  a readable document instead of formatted text: keys become plain labels
+  (`policyStartDate` → "Policy start date", raw key on hover), each group
+  lists its plain fields first as a label/value sheet, top-level groups are
+  titled cards and deeper ones get smaller headings (click either to
+  collapse), and chains of one-field wrapper objects merge into one heading
+  ("Quote contact › Person"). Lists of objects show as a table, lists of
+  plain values as chips; true/false read Yes/No, null reads "Not set". The
+  choice sticks for the rest of the session; Copy always copies the
+  formatted JSON text
 - Booleans always read `true`/`false` — in the grid, the cell editor, copy,
   export, and the transposed view — never Postgres's terse `t`/`f`, so what
   you see is also what you'd type back
@@ -933,7 +953,11 @@ Cmd/Ctrl+W closes the dialog rather than the database tab behind it.
   Blue, Sky, Cyan, Teal, Emerald, Lime, Yellow, Amber, Orange, Red, Rose,
   Pink, Fuchsia, Purple, Violet, Brown, Stone, Zinc; drives buttons, active
   states, and SQL keyword highlighting, and doubles as the connection-tag
-  palette), compact top bar
+  palette), compact top bar, button size (Small by default, or Medium or
+  Large — scales the top bar's buttons and icons (Ask AI, Cubbies, Saved
+  queries, History, Refresh, Settings), the connection tabs, and the results
+  header: the WHERE bar's text, input, and Apply button, the row-count
+  stats, and the ⋯ menu button)
 - **Appearance → Table**: font, font size, row height, zebra striping, cell
   borders, header-row shading (a subtle darkening so the column-header row
   stands out from the data below), selection in connection color, column
@@ -978,5 +1002,10 @@ Cmd/Ctrl+W closes the dialog rather than the database tab behind it.
 - Every theme's faintest text tiers (NULL cells, placeholders) stay legible —
   One Dark and Dracula initially inherited too little contrast from their
   first pass and were retuned to match the other themes' readability
+- **Windows title bar**: no native white title bar — like macOS, the app's
+  own top bar runs to the window's top edge, with Windows-style minimize,
+  maximize/restore, and close buttons at its right end (on every screen,
+  including the connection screen). Drag the top bar to move the window,
+  double-click it to maximize. Linux keeps its native title bar
 - A single token-driven design system (hairline borders, 4px base unit) — see
   AGENTS.md's Design System section for exact values

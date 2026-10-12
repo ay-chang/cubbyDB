@@ -29,6 +29,7 @@ import {
   ACCENT_COLOR_LABELS,
   ACCENT_COLOR_OPTIONS,
   ACCENT_COLOR_SWATCH,
+  BUTTON_SIZE_LABELS,
   DEFAULT_EDITOR_FONT_SIZE,
   DEFAULT_HISTORY_LIMIT,
   DEFAULT_SIDEBAR_ROW_HEIGHT,
@@ -45,7 +46,7 @@ import {
   TABLE_FONT_STACKS,
   TABLE_ROW_HEIGHT_OPTIONS,
 } from "../../state/store";
-import type { NullDisplay, PaletteSelectionStyle } from "../../state/store";
+import type { ButtonSize, NullDisplay, PaletteSelectionStyle } from "../../state/store";
 import {
   SETTINGS_SEARCH_ITEMS,
   SETTINGS_SECTIONS,
@@ -1286,6 +1287,8 @@ function InterfaceSection() {
   const setShowTabIcons = useStore((s) => s.setShowTabIcons);
   const paletteSelectionStyle = useStore((s) => s.paletteSelectionStyle);
   const setPaletteSelectionStyle = useStore((s) => s.setPaletteSelectionStyle);
+  const buttonSize = useStore((s) => s.buttonSize);
+  const setButtonSize = useStore((s) => s.setButtonSize);
 
   return (
     <div className="settings-section">
@@ -1360,6 +1363,27 @@ function InterfaceSection() {
           </div>
         </div>
         <Toggle on={compactTopBar} onToggle={() => setCompactTopBar(!compactTopBar)} />
+      </div>
+
+      <div className="settings-field settings-field--spaced" data-setting-id="appearance.button-size">
+        <div className="settings-field__label">Button size</div>
+        <div className="settings-field__desc">
+          How large the top bar's buttons and connection tabs are, and the bar
+          above a table with the WHERE filter.
+        </div>
+        <div className="settings-select-row">
+          <select
+            className="settings-select"
+            value={buttonSize}
+            onChange={(e) => setButtonSize(e.target.value as ButtonSize)}
+          >
+            {(Object.keys(BUTTON_SIZE_LABELS) as ButtonSize[]).map((size) => (
+              <option key={size} value={size}>
+                {BUTTON_SIZE_LABELS[size]}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       <div

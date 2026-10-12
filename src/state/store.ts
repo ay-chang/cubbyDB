@@ -132,6 +132,11 @@ export interface QueryTab {
    * other tab kind and for a table's own main tab.
    */
   isBranch?: boolean;
+  /** Result columns unchecked in the grid's Columns checklist, by name.
+   *  Deliberately not persisted (see `persistableTabFields`): it lasts as
+   *  long as the tab, so closing a table and opening it again shows every
+   *  column. */
+  hiddenColumns?: string[];
 }
 
 /** How many rows one page shows, in both the table browser and the SQL
@@ -936,6 +941,17 @@ export const PALETTE_SELECTION_STYLE_LABELS: Record<PaletteSelectionStyle, strin
   fill: "Fill — solid connection color",
 };
 
+/** Size of the top bar's buttons (Settings > Appearance > Interface). */
+export type ButtonSize = "small" | "medium" | "large";
+
+/** Display label for each `ButtonSize` option in the Settings dropdown.
+ *  Doubles as the `loadButtonSize` validity check. */
+export const BUTTON_SIZE_LABELS: Record<ButtonSize, string> = {
+  small: "Small (default)",
+  medium: "Medium",
+  large: "Large",
+};
+
 /** A single-character field/value separator, used for CSV export and for
  *  copying rows to the clipboard. Persisted across launches. */
 export type Delimiter = "," | "\t" | ";";
@@ -1113,6 +1129,8 @@ interface AppStore {
   showTabIcons: boolean;
   /** How the command palette marks its selected row. */
   paletteSelectionStyle: PaletteSelectionStyle;
+  /** How large the top bar's buttons are. */
+  buttonSize: ButtonSize;
   /** Whether the table filter bar is in AI mode — you describe the rows you
    *  want instead of typing the predicate. App-wide rather than per-tab
    *  because `FilterBar` is keyed by tab id, so per-tab state would drop the
@@ -1284,6 +1302,8 @@ interface AppStore {
   navigateForward: () => void;
   reorderTab: (fromIndex: number, toIndex: number) => void;
   setTabSql: (id: string, sql: string) => void;
+  /** Replace which result columns a tab's grid hides, by name. */
+  setHiddenColumns: (id: string, names: string[]) => void;
   /** Run a tab's query. `sqlOverride`, if given, is sent to the backend
    *  instead of the tab's own `sql` (e.g. just the statement under the
    *  cursor, or a selection) — the tab's editor buffer is never changed by
@@ -1512,6 +1532,7 @@ interface AppStore {
   setCompactTopBar: (enabled: boolean) => void;
   setShowTabIcons: (enabled: boolean) => void;
   setPaletteSelectionStyle: (style: PaletteSelectionStyle) => void;
+  setButtonSize: (size: ButtonSize) => void;
   setFilterAiMode: (enabled: boolean) => void;
   setRestoreTabsOnLaunch: (enabled: boolean) => void;
   setCloseTabsOnCubbyOpen: (enabled: boolean) => void;
@@ -1602,6 +1623,7 @@ const EDITOR_LINE_WRAP_KEY = "cubbydb:editorLineWrap";
 const COMPACT_TOP_BAR_KEY = "cubbydb:compactTopBar";
 const SHOW_TAB_ICONS_KEY = "cubbydb:showTabIcons";
 const PALETTE_SELECTION_STYLE_KEY = "cubbydb:paletteSelectionStyle";
+const BUTTON_SIZE_KEY = "cubbydb:buttonSize";
 const RESTORE_TABS_KEY = "cubbydb:restoreTabsOnLaunch";
 const CLOSE_TABS_ON_CUBBY_OPEN_KEY = "cubbydb:closeTabsOnCubbyOpen";
 const STARTER_SQL_KEY = "cubbydb:starterSql";
@@ -1946,6 +1968,31 @@ function saveNullDisplay(display: NullDisplay) {
   }
 }
 
+/** Read the saved top-bar button size, defaulting to small. */
+function loadButtonSize(): ButtonSize {
+  try {
+    const saved = localStorage.getItem(BUTTON_SIZE_KEY);
+    return saved && saved in BUTTON_SIZE_LABELS ? (saved as ButtonSize) : "small";
+  } catch {
+    return "small";
+  }
+}
+
+/** Reflect the button size onto `<html data-button-size>` (the top bar's
+ *  CSS scales from it) and persist it. */
+function applyButtonSize(size: ButtonSize) {
+  try {
+    document.documentElement.dataset.buttonSize = size;
+  } catch {
+    // No document (e.g. non-DOM context) — non-fatal.
+  }
+  try {
+    localStorage.setItem(BUTTON_SIZE_KEY, size);
+  } catch {
+    // Storage unavailable — non-fatal.
+  }
+}
+
 /** Read the saved command-palette selection style, defaulting to the lighter
  *  `outline` treatment. */
 function loadPaletteSelectionStyle(): PaletteSelectionStyle {
@@ -2216,6 +2263,7 @@ applyTableFontSize(loadTableFontSize());
 applyTableRowHeight(loadTableRowHeight());
 applySidebarRowHeight(loadSidebarRowHeight());
 applyTableZebra(loadTableZebra());
+applyButtonSize(loadButtonSize());
 applyTableCellBorders(loadTableCellBorders());
 applyTableHeaderShade(loadTableHeaderShade());
 applyTableWrapText(loadTableWrapText());
@@ -2841,6 +2889,7 @@ export const useStore = create<AppStore>((set, get) => {
     compactTopBar: loadCompactTopBar(),
     showTabIcons: loadShowTabIcons(),
     paletteSelectionStyle: loadPaletteSelectionStyle(),
+    buttonSize: loadButtonSize(),
     filterAiMode: false,
     restoreTabsOnLaunch: loadRestoreTabsOnLaunch(),
     closeTabsOnCubbyOpen: loadCloseTabsOnCubbyOpen(),
@@ -3338,6 +3387,18 @@ export const useStore = create<AppStore>((set, get) => {
         return {
           connections: mapSlotTabs(s.connections, owner.connectionId, (tabs) =>
             tabs.map((t) => (t.id === id ? { ...t, sql } : t)),
+          ),
+        };
+      });
+    },
+
+    setHiddenColumns(id, names) {
+      set((s) => {
+        const owner = findTabOwner(s.connections, id);
+        if (!owner) return s;
+        return {
+          connections: mapSlotTabs(s.connections, owner.connectionId, (tabs) =>
+            tabs.map((t) => (t.id === id ? { ...t, hiddenColumns: names } : t)),
           ),
         };
       });
@@ -5400,6 +5461,11 @@ export const useStore = create<AppStore>((set, get) => {
     setPaletteSelectionStyle(style) {
       savePaletteSelectionStyle(style);
       set({ paletteSelectionStyle: style });
+    },
+
+    setButtonSize(size) {
+      applyButtonSize(size);
+      set({ buttonSize: size });
     },
 
     setFilterAiMode(enabled) {

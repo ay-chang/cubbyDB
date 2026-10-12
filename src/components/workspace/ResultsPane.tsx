@@ -26,6 +26,7 @@ import {
 } from "../../state/store";
 import type { ForeignKeyRef, QueryResult } from "../../types";
 import { FilterBar } from "./FilterBar";
+import { JsonView } from "./JsonView";
 import { PendingEditsBar } from "./PendingEditsBar";
 
 /**
@@ -217,6 +218,7 @@ export function ResultsPane({ tab }: { tab: QueryTab }) {
         transposed ? (
           <TransposedGrid
             result={result}
+            hiddenColumns={tab.hiddenColumns}
             headerTypes={headerTypes}
             numericCols={numericCols}
             nullText={nullText}
@@ -322,7 +324,20 @@ function ResultsHeader({
               </span>
               <span>·</span>
               <span>{result.elapsedMs} ms</span>
+              {(tab.hiddenColumns?.length ?? 0) > 0 && (
+                <>
+                  <span>·</span>
+                  <span
+                    className="results__hidden-cols"
+                    title={`Hidden: ${tab.hiddenColumns!.join(", ")} — show them again from ⋯ › Columns`}
+                  >
+                    {tab.hiddenColumns!.length} hidden
+                  </span>
+                </>
+              )}
               <ResultsMenu
+                tab={tab}
+                result={result}
                 onExportCsv={() => exportCsv(result, tab.title, csvDelimiter)}
                 transposed={transposed}
                 onToggleTranspose={onToggleTranspose}
@@ -335,17 +350,96 @@ function ResultsHeader({
   );
 }
 
+/** The ⋯ menu's Columns panel: uncheck a column to hide it from the grid.
+ *  Kept on the tab (`QueryTab.hiddenColumns`), so it holds while the tab is
+ *  open and starts over with every column when it's reopened. */
+function ColumnsChecklist({
+  tab,
+  result,
+  onBack,
+}: {
+  tab: QueryTab;
+  result: QueryResult;
+  onBack: () => void;
+}) {
+  const setHiddenColumns = useStore((s) => s.setHiddenColumns);
+  const [query, setQuery] = useState("");
+
+  const hidden = tab.hiddenColumns ?? [];
+  const names = result.columns.map((c) => c.name);
+  const shownCount = names.filter((n) => !hidden.includes(n)).length;
+  const q = query.trim().toLowerCase();
+  const listed = q ? names.filter((n) => n.toLowerCase().includes(q)) : names;
+  const toggle = (name: string) =>
+    setHiddenColumns(
+      tab.id,
+      hidden.includes(name) ? hidden.filter((n) => n !== name) : [...hidden, name],
+    );
+
+  return (
+    <div className="columns-menu">
+      <div className="columns-menu__head">
+        <button className="columns-menu__back" onClick={onBack} aria-label="Back">
+          ‹
+        </button>
+        <span className="columns-menu__count">
+          {shownCount} of {names.length} shown
+        </span>
+        {hidden.length > 0 && (
+          <button className="columns-menu__show-all" onClick={() => setHiddenColumns(tab.id, [])}>
+            Show all
+          </button>
+        )}
+      </div>
+      {names.length > 8 && (
+        <input
+          className="columns-menu__search"
+          placeholder="Filter columns…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          autoFocus
+        />
+      )}
+      <div className="columns-menu__list">
+        {listed.map((name) => {
+          const checked = !hidden.includes(name);
+          return (
+            <label key={name} className="columns-menu__item">
+              <input
+                type="checkbox"
+                checked={checked}
+                // Keep at least one column, or the grid has nothing to show.
+                disabled={checked && shownCount === 1}
+                onChange={() => toggle(name)}
+              />
+              <span className="columns-menu__name">{name}</span>
+            </label>
+          );
+        })}
+        {listed.length === 0 && <div className="columns-menu__empty">No matching columns</div>}
+      </div>
+    </div>
+  );
+}
+
 /** The "more actions" (three-dots) menu in the results header. */
 function ResultsMenu({
+  tab,
+  result,
   onExportCsv,
   transposed,
   onToggleTranspose,
 }: {
+  tab: QueryTab;
+  result: QueryResult;
   onExportCsv: () => void;
   transposed: boolean;
   onToggleTranspose: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  // Which page of the dropdown is showing: the actions, or the Columns panel.
+  const [panel, setPanel] = useState<"actions" | "columns">("actions");
+  const hiddenCount = tab.hiddenColumns?.length ?? 0;
 
   useEffect(() => {
     if (!open) return;
@@ -365,16 +459,32 @@ function ResultsMenu({
         title="More actions"
         onClick={(e) => {
           e.stopPropagation();
+          setPanel("actions");
           setOpen((o) => !o);
         }}
       >
         ⋯
       </button>
-      {open && (
+      {open && panel === "columns" && (
+        <div className="results__menu-dropdown" onClick={(e) => e.stopPropagation()}>
+          <ColumnsChecklist tab={tab} result={result} onBack={() => setPanel("actions")} />
+        </div>
+      )}
+      {open && panel === "actions" && (
         <div
           className="results__menu-dropdown"
           onClick={(e) => e.stopPropagation()}
         >
+          <button
+            className="results__menu-item results__menu-item--check"
+            title="Choose which columns the grid shows"
+            onClick={() => setPanel("columns")}
+          >
+            Columns…
+            {hiddenCount > 0 && (
+              <span className="results__menu-check">{hiddenCount} hidden</span>
+            )}
+          </button>
           <button
             className="results__menu-item"
             onClick={() => {
@@ -578,11 +688,13 @@ function colAt(starts: number[], x: number): number {
  */
 function TransposedGrid({
   result,
+  hiddenColumns,
   headerTypes,
   numericCols,
   nullText,
 }: {
   result: QueryResult;
+  hiddenColumns: string[] | undefined;
   headerTypes: (string | null)[];
   numericCols: boolean[];
   nullText: string;
@@ -601,7 +713,8 @@ function TransposedGrid({
           </tr>
         </thead>
         <tbody>
-          {result.columns.map((col, colIndex) => (
+          {result.columns.map((col, colIndex) =>
+            hiddenColumns?.includes(col.name) ? null : (
             <tr key={col.name}>
               <th className="transpose-table__colname mono">
                 {col.name}
@@ -626,7 +739,8 @@ function TransposedGrid({
                 );
               })}
             </tr>
-          ))}
+            ),
+          )}
         </tbody>
       </table>
     </div>
@@ -704,15 +818,26 @@ function ResultsGrid({
   // that matches `result`; the `setState` calls just persist it for the next
   // one (React re-runs the component immediately, before committing, rather
   // than scheduling a second visible pass).
-  let order = orderState;
+  let layoutOrder = orderState;
   let widths = widthsState;
   if (layoutSig !== signature) {
-    order = loadOrder(signature, result.columns);
+    layoutOrder = loadOrder(signature, result.columns);
     widths = loadWidths(signature, result, numericCols, headerTypes);
     setLayoutSig(signature);
-    setOrder(order);
+    setOrder(layoutOrder);
     setWidths(widths);
   }
+  // `layoutOrder` is every column, the order that's saved and reordered;
+  // `order` drops the ones unchecked in the Columns checklist and is what
+  // the grid actually shows, navigates, and selects across.
+  const hiddenColumns = tab.hiddenColumns;
+  const order = useMemo(
+    () =>
+      hiddenColumns?.length
+        ? layoutOrder.filter((ci) => !hiddenColumns.includes(result.columns[ci].name))
+        : layoutOrder,
+    [layoutOrder, hiddenColumns, result],
+  );
   const [restoredView] = useState(() => gridViews.get(result)?.get(tab.id) ?? null);
   // Pointer-drag reorder state: dragged display position, live pointer delta,
   // and the position it would drop into.
@@ -1262,6 +1387,13 @@ function ResultsGrid({
     setFindOpen(false);
     setFindQuery("");
   }, [result]);
+
+  // Hiding a column drops a cell selection or range that's on it, rather
+  // than leave a selection nobody can see.
+  useEffect(() => {
+    setSelected((sel) => (sel && !order.includes(sel.col) ? null : sel));
+    setRange((r) => (r && r.cols.some((c) => !order.includes(c)) ? null : r));
+  }, [order]);
 
   // Dismiss the FK menu on any outside interaction. Cell/menu clicks stop
   // propagation, so this only fires for clicks elsewhere.
@@ -1953,15 +2085,19 @@ function ResultsGrid({
 
   const colJumpMatches = useMemo(() => {
     const q = colJumpQuery.trim();
-    if (!q) return result.columns.map((c, i) => ({ index: i, name: c.name }));
+    // Hidden columns can't be jumped to — there's nothing on screen to land on.
+    const shown = result.columns
+      .map((c, i) => ({ index: i, name: c.name }))
+      .filter((c) => !hiddenColumns?.includes(c.name));
+    if (!q) return shown;
     const scored: Array<{ index: number; name: string; score: number }> = [];
-    result.columns.forEach((c, i) => {
+    shown.forEach((c) => {
       const m = bestMatch(q, [c.name]);
-      if (m) scored.push({ index: i, name: c.name, score: m.score });
+      if (m) scored.push({ ...c, score: m.score });
     });
     scored.sort((a, b) => b.score - a.score);
     return scored;
-  }, [result.columns, colJumpQuery]);
+  }, [result.columns, hiddenColumns, colJumpQuery]);
 
   useEffect(() => {
     setColJumpSelected(0);
@@ -2031,7 +2167,7 @@ function ResultsGrid({
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
       setWidths((w) => {
-        persistLayout(signature, result.columns, order, w);
+        persistLayout(signature, result.columns, layoutOrder, w);
         return w;
       });
     };
@@ -2050,7 +2186,7 @@ function ResultsGrid({
     const next = [...widths];
     next[colIndex] = measuredWidths(result, numericCols, headerTypes, MAX_AUTOFIT_WIDTH)[colIndex];
     setWidths(next);
-    persistLayout(signature, result.columns, order, next);
+    persistLayout(signature, result.columns, layoutOrder, next);
   };
 
   // Cycle a column's sort: default -> ascending -> descending -> default.
@@ -2197,10 +2333,14 @@ function ResultsGrid({
       document.body.style.userSelect = "";
       setDrag((d) => {
         if (d && d.fromPos !== d.targetPos) {
+          // Positions are in the shown `order`; hidden columns keep their
+          // place in the full layout, so move by column rather than index.
+          const moved = order[d.fromPos];
+          const target = order[d.targetPos];
           setOrder((prev) => {
-            const next = [...prev];
-            const [moved] = next.splice(d.fromPos, 1);
-            next.splice(d.targetPos, 0, moved);
+            const next = prev.filter((ci) => ci !== moved);
+            const at = next.indexOf(target) + (d.targetPos > d.fromPos ? 1 : 0);
+            next.splice(at, 0, moved);
             persistLayout(signature, result.columns, next, widths);
             return next;
           });
@@ -3232,11 +3372,15 @@ function ResultsGrid({
   );
 }
 
+/** Which way the cell inspector last showed JSON — remembered for the
+ *  session, so opening one cell after another keeps the chosen view. */
+let lastJsonView: "text" | "structured" = "text";
+
 /** Read-only "view full cell value" dialog, opened from a cell's right-click
  *  menu — for a value too long to read in a 32px-tall grid cell (a long
- *  string, a JSON blob). Objects/arrays are pretty-printed; this is purely a
- *  display transform, the cell's stored value is untouched, and Copy copies
- *  exactly what's shown here (formatted, if it was reformatted). */
+ *  string, a JSON blob). Objects/arrays are pretty-printed, or shown as UI in
+ *  the Structured view (`JsonView`); either way a display transform only —
+ *  the cell's stored value is untouched, and Copy copies the formatted text. */
 function CellInspectorDialog({
   cell,
   onClose,
@@ -3245,22 +3389,28 @@ function CellInspectorDialog({
   onClose: () => void;
 }) {
   const [copied, setCopied] = useState(false);
+  const [jsonView, setJsonView] = useState(lastJsonView);
+  const chooseJsonView = (view: "text" | "structured") => {
+    lastJsonView = view;
+    setJsonView(view);
+  };
 
-  const { text, isJson } = useMemo(() => {
-    if (cell.value === null) return { text: null as string | null, isJson: false };
+  const { text, json } = useMemo(() => {
+    if (cell.value === null) return { text: null as string | null, json: undefined as unknown };
     try {
       const parsed: unknown = JSON.parse(cell.value);
       // Only objects/arrays are worth reformatting — a bare JSON number or
       // string ('42', '"hi"') parses fine but pretty-printing it wouldn't
       // show anything the plain value doesn't already.
       if (parsed !== null && typeof parsed === "object") {
-        return { text: JSON.stringify(parsed, null, 2), isJson: true };
+        return { text: JSON.stringify(parsed, null, 2), json: parsed };
       }
     } catch {
       // Not JSON — falls through to the plain value below.
     }
-    return { text: cell.value, isJson: false };
+    return { text: cell.value, json: undefined };
   }, [cell.value]);
+  const isJson = json !== undefined;
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -3290,7 +3440,30 @@ function CellInspectorDialog({
         <div className="settings-panel__head">
           <span className="settings-panel__title mono">{cell.columnName}</span>
           <div className="cell-inspector__head-actions">
-            {isJson && <span className="cell-inspector__badge">JSON</span>}
+            {isJson && (
+              <div className="cell-inspector__views" role="group" aria-label="JSON view">
+                <button
+                  className={
+                    "cell-inspector__view" +
+                    (jsonView === "text" ? " cell-inspector__view--active" : "")
+                  }
+                  onClick={() => chooseJsonView("text")}
+                  title="Formatted JSON text"
+                >
+                  JSON
+                </button>
+                <button
+                  className={
+                    "cell-inspector__view" +
+                    (jsonView === "structured" ? " cell-inspector__view--active" : "")
+                  }
+                  onClick={() => chooseJsonView("structured")}
+                  title="Lay the JSON out as fields, sections, and tables"
+                >
+                  Structured
+                </button>
+              </div>
+            )}
             <button
               className="snippet-actions__btn"
               onClick={copy}
@@ -3309,9 +3482,15 @@ function CellInspectorDialog({
             </button>
           </div>
         </div>
-        <div className="cell-inspector__body mono">
-          {text === null ? <span className="cell-inspector__null">NULL</span> : text}
-        </div>
+        {isJson && jsonView === "structured" ? (
+          <div className="cell-inspector__body cell-inspector__body--structured">
+            <JsonView value={json} />
+          </div>
+        ) : (
+          <div className="cell-inspector__body mono">
+            {text === null ? <span className="cell-inspector__null">NULL</span> : text}
+          </div>
+        )}
       </div>
     </div>
   );

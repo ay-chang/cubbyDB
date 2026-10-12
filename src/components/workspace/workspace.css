@@ -40,6 +40,11 @@
 .topbar--inset-traffic-lights {
   padding-left: 92px;
 }
+/* Windows: the window has no native frame, and `WindowControls` sits over
+   this bar's right end — three 46px buttons, plus breathing room. */
+.topbar--window-controls {
+  padding-right: 152px;
+}
 .topbar__left,
 .topbar__right {
   display: flex;
@@ -70,7 +75,7 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 3px 9px;
+  padding: var(--pill-pad);
   border-radius: var(--radius-sm);
   background: var(--pill-bg);
   /* Right-clicking (for `ConnectionPillMenu`) otherwise left behind a native
@@ -92,7 +97,7 @@
   flex: none;
 }
 .conn-pill__name {
-  font-size: 12.5px;
+  font-size: var(--pill-font);
   font-weight: 500;
   min-width: 0;
   white-space: nowrap;
@@ -100,7 +105,7 @@
   text-overflow: ellipsis;
 }
 .conn-pill__meta {
-  font-size: 11px;
+  font-size: var(--pill-meta-font);
   color: var(--text-faint);
   min-width: 0;
   white-space: nowrap;
@@ -166,7 +171,7 @@
 .conn-pill__close {
   flex: none;
   color: var(--text-ghost);
-  font-size: 13px;
+  font-size: calc(var(--pill-font) + 0.5px);
   line-height: 1;
   opacity: 0;
   cursor: pointer;
@@ -245,11 +250,54 @@
   color: var(--text);
 }
 
+/* Settings > Appearance > Interface > Button size scales these, via
+   `<html data-button-size>` (see `applyButtonSize` in store.ts): the top
+   bar's buttons and connection pills, and the results header (WHERE bar,
+   stats, ⋯ menu). */
+:root {
+  --topbar-btn-size: 28px;
+  --topbar-btn-font: 12px;
+  --topbar-icon-size: 15px;
+  --pill-font: 12.5px;
+  --pill-meta-font: 11px;
+  --pill-pad: 3px 9px;
+  --results-header-h: 48px;
+  --results-control-h: 28px;
+  --results-text: 12.5px;
+  --results-small-text: 11px;
+  --results-menu-btn: 22px;
+}
+:root[data-button-size="medium"] {
+  --topbar-btn-size: 32px;
+  --topbar-btn-font: 13px;
+  --topbar-icon-size: 17px;
+  --pill-font: 13.5px;
+  --pill-meta-font: 12px;
+  --pill-pad: 5px 11px;
+  --results-header-h: 54px;
+  --results-control-h: 32px;
+  --results-text: 13.5px;
+  --results-small-text: 12px;
+  --results-menu-btn: 26px;
+}
+:root[data-button-size="large"] {
+  --topbar-btn-size: 36px;
+  --topbar-btn-font: 14px;
+  --topbar-icon-size: 20px;
+  --pill-font: 14.5px;
+  --pill-meta-font: 13px;
+  --pill-pad: 7px 13px;
+  --results-header-h: 60px;
+  --results-control-h: 36px;
+  --results-text: 14.5px;
+  --results-small-text: 13px;
+  --results-menu-btn: 30px;
+}
 .topbar__btn {
-  height: 28px;
+  height: var(--topbar-btn-size);
   padding: 0 11px;
   border-radius: var(--radius-sm);
-  font-size: 12px;
+  font-size: var(--topbar-btn-font);
   color: var(--text-muted);
   border: 1px solid transparent;
   transition: background var(--transition), color var(--transition);
@@ -257,6 +305,10 @@
 .topbar__btn:hover {
   background: var(--border-faint);
   color: var(--text);
+}
+.topbar__btn svg {
+  width: var(--topbar-icon-size);
+  height: var(--topbar-icon-size);
 }
 .topbar__btn--active {
   background: var(--accent-tint);
@@ -292,7 +344,7 @@
    group). Each of these is labelled only by its `title`, so every one of them
    spells out its keyboard shortcut there too. */
 .topbar__btn--icon {
-  width: 28px;
+  width: var(--topbar-btn-size);
   padding: 0;
   display: inline-flex;
   align-items: center;
@@ -1130,7 +1182,7 @@
 }
 /* When it hosts the WHERE filter it needs a little more height + room. */
 .results__header--filter {
-  height: 48px;
+  height: var(--results-header-h);
   padding: 0 16px;
 }
 .results__header-left {
@@ -1159,7 +1211,7 @@
   align-items: center;
   gap: 12px;
   flex: none;
-  font-size: 11px;
+  font-size: var(--results-small-text);
   color: var(--text-faint);
 }
 .results__readonly {
@@ -1213,13 +1265,13 @@
   align-items: center;
 }
 .results__menu-btn {
-  width: 22px;
-  height: 22px;
+  width: var(--results-menu-btn);
+  height: var(--results-menu-btn);
   border-radius: 5px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 15px;
+  font-size: calc(var(--results-menu-btn) * 0.68);
   line-height: 1;
   color: var(--text-faint);
   transition: background var(--transition), color var(--transition);
@@ -1227,6 +1279,11 @@
 .results__menu-btn:hover {
   background: var(--border-faint);
   color: var(--text);
+}
+/* "N hidden" in the header stats while the Columns panel hides any. */
+.results__hidden-cols {
+  color: var(--accent);
+  cursor: default;
 }
 .results__menu-dropdown {
   position: absolute;
@@ -1267,6 +1324,87 @@
   color: #fff;
 }
 
+/* --- Columns checklist (results header) --- */
+.columns-menu {
+  width: 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-family: var(--font-sans);
+}
+.columns-menu__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 4px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+.columns-menu__back {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-muted);
+}
+.columns-menu__back:hover {
+  background: var(--border-faint);
+  color: var(--text);
+}
+.columns-menu__count {
+  flex: 1;
+}
+.columns-menu__show-all {
+  font-size: 11.5px;
+  color: var(--accent);
+}
+.columns-menu__show-all:hover {
+  text-decoration: underline;
+}
+.columns-menu__search {
+  margin: 0 4px 2px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+}
+.columns-menu__list {
+  max-height: 320px;
+  overflow-y: auto;
+}
+.columns-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  font-size: 12.5px;
+  color: var(--text);
+  cursor: pointer;
+}
+.columns-menu__item:hover {
+  background: var(--border-faint);
+}
+.columns-menu__item input {
+  accent-color: var(--accent);
+  margin: 0;
+}
+.columns-menu__name {
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.columns-menu__empty {
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
 /* --- Cell inspector ("Expand cell" from a cell's right-click menu) ---
    Overlay/head classes (`.settings-overlay`, `.settings-panel__*`) are
    shared with the other dialogs in common.css; only the card body is
@@ -1287,15 +1425,28 @@
   align-items: center;
   gap: 10px;
 }
-.cell-inspector__badge {
-  padding: 1px 6px;
-  border-radius: 999px;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.03em;
-  color: var(--accent-tint-text);
-  background: var(--accent-tint);
+/* JSON / Structured switch, shown only for a JSON value. */
+.cell-inspector__views {
+  display: flex;
+  padding: 2px;
+  gap: 2px;
+  border-radius: 7px;
+  background: var(--border-faint);
+}
+.cell-inspector__view {
+  padding: 2px 9px;
+  border-radius: 5px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  transition: background var(--transition), color var(--transition);
+}
+.cell-inspector__view:hover {
+  color: var(--text);
+}
+.cell-inspector__view--active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-button);
 }
 .cell-inspector__body {
   flex: 1;
@@ -1308,10 +1459,172 @@
   white-space: pre-wrap;
   word-break: break-word;
 }
+.cell-inspector__body--structured {
+  white-space: normal;
+}
 .cell-inspector__null {
   color: var(--text-ghost);
   font-style: italic;
 }
+/* --- Structured JSON view (JsonView.tsx) --- */
+.json-view {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+}
+/* Label/value sheet: labels sized to the longest one (up to 40%), so a
+   readable label never breaks mid-word. */
+.json-view__sheet {
+  display: grid;
+  grid-template-columns: minmax(120px, max-content) 1fr;
+  margin: 0;
+}
+.json-view__row {
+  display: contents;
+}
+.json-view__label,
+.json-view__value {
+  margin: 0;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border-faint);
+}
+.json-view__row:last-child > .json-view__label,
+.json-view__row:last-child > .json-view__value {
+  border-bottom: none;
+}
+.json-view__label {
+  max-width: 40ch;
+  padding-right: 20px;
+  color: var(--text-muted);
+}
+.json-view__value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+/* Top-level groups: a card with a titled header. */
+.json-view__card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.json-view__card-head,
+.json-view__group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+}
+.json-view__card-head {
+  padding: 9px 14px;
+  background: var(--surface-raised);
+  border-bottom: 1px solid var(--border-faint);
+}
+.json-view__card-head .json-view__title {
+  font-weight: 600;
+}
+.json-view__card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 6px 14px 12px;
+}
+/* Deeper groups: a smaller heading inside the card. */
+.json-view__group {
+  padding-top: 4px;
+}
+.json-view__group-head {
+  padding: 4px 0;
+}
+.json-view__group-head .json-view__title {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+}
+.json-view__group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-left: 18px;
+}
+.json-view__chevron {
+  width: 10px;
+  font-size: 10px;
+  color: var(--text-faint);
+  transition: transform var(--transition);
+}
+.json-view__chevron--open {
+  transform: rotate(90deg);
+}
+.json-view__card-head:hover .json-view__chevron,
+.json-view__group-head:hover .json-view__chevron {
+  color: var(--text);
+}
+.json-view__summary {
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+.json-view__number {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+.json-view__bool {
+  display: inline-block;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: var(--border-faint);
+}
+.json-view__bool--yes {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 14%, transparent);
+}
+.json-view__muted,
+.json-view__empty {
+  font-style: italic;
+  color: var(--text-ghost);
+}
+.json-view__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 0;
+}
+.json-view__chip {
+  padding: 1px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-raised);
+}
+.json-view__table-wrap {
+  overflow-x: auto;
+  padding: 4px 0;
+}
+.json-view__table {
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.json-view__table th,
+.json-view__table td {
+  padding: 6px 12px;
+  text-align: left;
+  border: 1px solid var(--border-faint);
+  vertical-align: top;
+}
+.json-view__table th {
+  font-weight: 500;
+  color: var(--text-muted);
+  background: var(--surface-raised);
+}
+
 .results__note {
   padding: 16px;
   font-size: 12.5px;
@@ -1335,7 +1648,7 @@
   min-width: 0;
 }
 .filter-bar__kw {
-  font-size: 11px;
+  font-size: var(--results-small-text);
   font-weight: 500;
   color: var(--accent);
   letter-spacing: 0.06em;
@@ -1354,7 +1667,7 @@
 .filter-bar__input {
   width: 100%;
   min-width: 0;
-  height: 28px;
+  height: var(--results-control-h);
   display: flex;
   align-items: center;
   border: 1px solid var(--border);
@@ -1407,12 +1720,12 @@
   background: var(--border-faint);
 }
 .filter-bar__apply {
-  height: 28px;
+  height: var(--results-control-h);
   padding: 0 11px;
   border-radius: var(--radius-control);
   background: var(--accent);
   color: #fff;
-  font-size: 12px;
+  font-size: var(--topbar-btn-font);
   font-weight: 500;
   display: flex;
   align-items: center;
@@ -1468,7 +1781,7 @@
   border: none;
   background: transparent;
   color: var(--text);
-  font-size: 12.5px;
+  font-size: var(--results-text);
   /* The wrapper `.filter-bar__input` already draws a focus ring for whatever
      is inside it. Without this, the UA's own default ring (blue, square,
      ignoring the accent entirely) draws on top of it — CodeMirror's theme

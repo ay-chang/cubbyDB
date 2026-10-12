@@ -22,7 +22,8 @@ import { singleQuoteKeymap } from "./smartQuotes";
  *  comes from the `.filter-bar__input` wrapper div; this just makes
  *  CodeMirror's own chrome disappear into it. */
 const filterEditorTheme = EditorView.theme({
-  "&": { fontSize: "12.5px", backgroundColor: "transparent" },
+  // Scales with Settings > Appearance > Interface > Button size.
+  "&": { fontSize: "var(--results-text)", backgroundColor: "transparent" },
   ".cm-scroller": { fontFamily: "var(--font-mono)", overflow: "hidden" },
   // A couple px of padding on *both* sides, not just the right — with
   // `overflow: hidden` above, a cursor sitting exactly at the start or end
