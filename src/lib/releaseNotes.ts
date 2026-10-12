@@ -33,6 +33,31 @@ export interface ReleaseNotesEntry {
 
 export const RELEASE_NOTES: ReleaseNotesEntry[] = [
   {
+    version: "0.1.23",
+    date: "2026-10-11",
+    sections: [
+      {
+        heading: "Results grid",
+        items: [
+          "Hide columns you don't need: open the ⋯ menu above a table and choose Columns…, then uncheck any column. Hidden columns come back when you close and reopen the table, and the header shows how many are hidden.",
+          "Expand cell has a new Structured view for JSON. Instead of formatted text, it lays the value out as a readable document, with plain-language labels, grouped sections, tables for lists, and Yes/No for true and false.",
+        ],
+      },
+      {
+        heading: "Appearance",
+        items: [
+          "New setting, Button size (Settings → Appearance → Interface): make the top bar's buttons, the connection tabs, and the WHERE bar medium or large.",
+        ],
+      },
+      {
+        heading: "Windows",
+        items: [
+          "No more white title bar. CubbyDB's own top bar now reaches the top of the window, with minimize, maximize, and close buttons at its right end.",
+        ],
+      },
+    ],
+  },
+  {
     version: "0.1.22",
     date: "2026-10-03",
     sections: [
